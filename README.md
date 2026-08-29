@@ -2,6 +2,8 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![build](https://github.com/sfuhrm/gocryptfs4j/actions/workflows/build.yml/badge.svg)](https://github.com/sfuhrm/gocryptfs4j/actions/workflows/build.yml)
+![Java](https://img.shields.io/badge/Java-17-blue.svg)
+[![Coverage](https://raw.githubusercontent.com/sfuhrm/gocryptfs4j/gh-pages/jacoco.svg)]() 
 [![ReleaseDate](https://img.shields.io/github/release-date/sfuhrm/gocryptfs4j)](https://github.com/sfuhrm/gocryptfs4j/releases)
 ![Maven Central](https://img.shields.io/maven-central/v/de.sfuhrm/gocryptfs4j)
 
