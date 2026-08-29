@@ -11,7 +11,8 @@ jobs:
   call-workflow-passing-data:
     uses: sfuhrm/github_workflows/.github/workflows/jacoco-badge.yml@main
     with:
-      java_version: 25
+      java_version: 17
+      maven_target: verify
       artifact_name: jacoco-report
       artifact_path: ./target/site/jacoco/
       jacoco_csv_path: >
