@@ -33,7 +33,7 @@ jobs:
         run: mvn -B clean verify
 
       - name: Upload jar artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gocryptfs4j
           path: target/*.jar
