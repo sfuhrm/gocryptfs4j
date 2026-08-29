@@ -2,6 +2,8 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![build](https://github.com/sfuhrm/gocryptfs4j/actions/workflows/build.yml/badge.svg)](https://github.com/sfuhrm/gocryptfs4j/actions/workflows/build.yml)
+[![ReleaseDate](https://img.shields.io/github/release-date/sfuhrm/gocryptfs4j)](https://github.com/sfuhrm/gocryptfs4j/releases)
+![Maven Central](https://img.shields.io/maven-central/v/de.sfuhrm/gocryptfs4j)
 
 A pure Java implementation of the [gocryptfs](https://github.com/rfjakob/gocryptfs)
 forward-mode on-disk format. It lets Java applications create, read and write
