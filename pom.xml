@@ -4,7 +4,7 @@
 
     <groupId>de.sfuhrm</groupId>
     <artifactId>gocryptfs4j</artifactId>
-    <version>0.1.0</version>
+    <version>0.1.1-SNAPSHOT</version>
     <packaging>jar</packaging>
 
     <name>gocryptfs4j</name>
@@ -34,7 +34,7 @@
     <scm>
         <url>git@github.com:sfuhrm/gocryptfs4j.git</url>
         <connection>scm:git:git@github.com:sfuhrm/gocryptfs4j.git</connection>
-        <tag>gocryptfs4j-0.1.0</tag>
+        <tag>HEAD</tag>
     </scm>
 
     <properties>
