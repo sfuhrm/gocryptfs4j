@@ -23,6 +23,11 @@ public final class Hkdf {
     /**
      * Derives {@code outLen} bytes from {@code ikm} using HKDF-SHA256 with an
      * empty salt and the given {@code info}.
+     *
+     * @param ikm    the input keying material
+     * @param info   the context and application-specific information
+     * @param outLen the desired output length in bytes
+     * @return the derived key
      */
     public static byte[] derive(byte[] ikm, String info, int outLen) {
         try {

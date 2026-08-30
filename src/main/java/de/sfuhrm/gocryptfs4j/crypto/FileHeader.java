@@ -11,6 +11,12 @@ public final class FileHeader {
     private final int version;
     private final byte[] id;
 
+    /**
+     * Creates a file header.
+     *
+     * @param version the on-disk format version
+     * @param id      the 16-byte random file id
+     */
     public FileHeader(int version, byte[] id) {
         if (id.length != Constants.HEADER_ID_LEN) {
             throw new IllegalArgumentException("file id must be " + Constants.HEADER_ID_LEN + " bytes");
@@ -19,12 +25,20 @@ public final class FileHeader {
         this.id = id;
     }
 
-    /** Creates a new header with a random 128-bit file id. */
+    /**
+     * Creates a new header with a random 128-bit file id.
+     *
+     * @return the new header
+     */
     public static FileHeader random() {
         return new FileHeader(Constants.CURRENT_VERSION, Keys.randomBytes(Constants.HEADER_ID_LEN));
     }
 
-    /** Serializes the header. */
+    /**
+     * Serializes the header.
+     *
+     * @return the serialized header
+     */
     public byte[] pack() {
         byte[] buf = new byte[Constants.HEADER_LEN];
         buf[0] = (byte) (version >>> 8);
@@ -36,7 +50,9 @@ public final class FileHeader {
     /**
      * Parses a header.
      *
-     * @throws IllegalArgumentException if the header is malformed.
+     * @param buf the serialized header
+     * @return the parsed header
+     * @throws IllegalArgumentException if the header is malformed
      */
     public static FileHeader parse(byte[] buf) {
         if (buf.length != Constants.HEADER_LEN) {
@@ -72,10 +88,20 @@ public final class FileHeader {
         return new FileHeader(version, id);
     }
 
+    /**
+     * Returns the on-disk format version.
+     *
+     * @return the version
+     */
     public int version() {
         return version;
     }
 
+    /**
+     * Returns the file id.
+     *
+     * @return the 16-byte file id
+     */
     public byte[] id() {
         return id;
     }

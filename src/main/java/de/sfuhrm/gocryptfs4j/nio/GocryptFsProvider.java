@@ -43,11 +43,23 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class GocryptFsProvider extends FileSystemProvider {
 
+    /** The URI scheme handled by this provider. */
     public static final String SCHEME = "gocryptfs";
 
     private final Map<String, GocryptFsFileSystem> filesystems = new ConcurrentHashMap<>();
 
-    /** Opens a filesystem directly, without a URI. */
+    /** Creates a gocryptfs filesystem provider. */
+    public GocryptFsProvider() {
+    }
+
+    /**
+     * Opens a filesystem directly, without a URI.
+     *
+     * @param cipherDir the ciphertext directory
+     * @param password  the password to unlock the master key with
+     * @return the opened filesystem
+     * @throws IOException on filesystem errors
+     */
     public FileSystem newFileSystem(Path cipherDir, char[] password) throws IOException {
         GocryptFs core = GocryptFs.open(cipherDir, password);
         String key = cipherDir.toAbsolutePath().normalize().toString();

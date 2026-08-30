@@ -12,6 +12,11 @@ public final class AesBlockCipher implements BlockCipher {
     private final AESEngine encrypt = new AESEngine();
     private final AESEngine decrypt = new AESEngine();
 
+    /**
+     * Creates an AES-256 block cipher.
+     *
+     * @param key the 32-byte AES key
+     */
     public AesBlockCipher(byte[] key) {
         if (key.length != Constants.KEY_LEN) {
             throw new IllegalArgumentException("AES key must be " + Constants.KEY_LEN + " bytes");

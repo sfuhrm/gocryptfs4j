@@ -24,19 +24,29 @@ public final class Keys {
      * @param r        block size parameter
      * @param p        parallelization parameter
      * @param keyLen   desired output length in bytes
+     * @return the derived key
      */
     public static byte[] scrypt(byte[] password, byte[] salt, int n, int r, int p, int keyLen) {
         return SCrypt.generate(password, salt, n, r, p, keyLen);
     }
 
-    /** Fills {@code buf} with cryptographically secure random bytes. */
+    /**
+     * Returns a buffer of cryptographically secure random bytes.
+     *
+     * @param len the number of random bytes
+     * @return the random bytes
+     */
     public static byte[] randomBytes(int len) {
         byte[] buf = new byte[len];
         RANDOM.nextBytes(buf);
         return buf;
     }
 
-    /** Wipes the contents of a sensitive buffer. */
+    /**
+     * Wipes the contents of a sensitive buffer.
+     *
+     * @param buf the buffer to wipe, or {@code null}
+     */
     public static void wipe(byte[] buf) {
         if (buf != null) {
             java.util.Arrays.fill(buf, (byte) 0);

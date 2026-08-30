@@ -17,6 +17,11 @@ public final class Gcm implements ContentCipher {
 
     private final SecretKeySpec key;
 
+    /**
+     * Creates an AES-256-GCM instance.
+     *
+     * @param key the 32-byte AES key
+     */
     public Gcm(byte[] key) {
         if (key.length != Constants.KEY_LEN) {
             throw new IllegalArgumentException("GCM key must be " + Constants.KEY_LEN + " bytes");
@@ -24,7 +29,14 @@ public final class Gcm implements ContentCipher {
         this.key = new SecretKeySpec(key, "AES");
     }
 
-    /** Encrypts {@code plaintext}, returning ciphertext || 16-byte tag. */
+    /**
+     * Encrypts {@code plaintext}, returning ciphertext followed by a 16-byte tag.
+     *
+     * @param plaintext the plaintext to encrypt
+     * @param nonce     the nonce (12 or 16 bytes)
+     * @param aad       additional authenticated data, or {@code null}
+     * @return the ciphertext followed by the 16-byte tag
+     */
     @Override
     public byte[] encrypt(byte[] plaintext, byte[] nonce, byte[] aad) {
         try {
@@ -40,12 +52,17 @@ public final class Gcm implements ContentCipher {
     }
 
     /**
-     * Decrypts {@code ciphertext} (which must include the 16-byte tag), verifying
-     * the tag and {@code aad}.
+     * Decrypts {@code ciphertext} (which must include the trailing 16-byte tag),
+     * verifying the tag and {@code aad}.
      *
+     * @param ciphertext the ciphertext including the 16-byte tag
+     * @param nonce      the nonce used during encryption
+     * @param aad        additional authenticated data, or {@code null}
+     * @return the decrypted plaintext
      * @throws javax.crypto.AEADBadTagException (a GeneralSecurityException) on
-     *         authentication failure.
+     *         authentication failure
      */
+    @Override
     public byte[] decrypt(byte[] ciphertext, byte[] nonce, byte[] aad) throws GeneralSecurityException {
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
         cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8, nonce));

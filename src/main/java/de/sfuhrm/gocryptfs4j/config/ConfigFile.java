@@ -32,6 +32,7 @@ public final class ConfigFile {
 
     private static final Gson GSON = new GsonBuilder().create();
 
+    /** The creator string written by gocryptfs. */
     @SerializedName("Creator")
     public String creator;
 
@@ -39,23 +40,39 @@ public final class ConfigFile {
     @SerializedName("EncryptedKey")
     public String encryptedKey;
 
+    /** The scrypt key-derivation parameters. */
     @SerializedName("ScryptObject")
     public ScryptKdf scryptObject;
 
+    /** The on-disk format version. */
     @SerializedName("Version")
     public int version;
 
+    /** The feature flags enabled for this filesystem. */
     @SerializedName("FeatureFlags")
     public List<String> featureFlags;
 
+    /** The configured long-name limit, or {@code null} for the default. */
     @SerializedName("LongNameMax")
     public Integer longNameMax;
 
+    /** FIDO2 key-protection data, or {@code null} if unused. */
     @SerializedName("FIDO2")
     public Object fido2;
 
     private transient byte[] masterKey;
 
+    /** Creates an empty config file (used by Gson and {@link #create}). */
+    public ConfigFile() {
+    }
+
+    /**
+     * Loads and validates a {@code gocryptfs.conf} file.
+     *
+     * @param path the path to the config file
+     * @return the parsed config file
+     * @throws IOException if the file is missing, malformed or unsupported
+     */
     public static ConfigFile load(Path path) throws IOException {
         String json = Files.readString(path, StandardCharsets.UTF_8);
         ConfigFile cf = GSON.fromJson(json, ConfigFile.class);
@@ -97,12 +114,22 @@ public final class ConfigFile {
                 || flag.equals(Constants.FLAG_XCHACHA);
     }
 
+    /**
+     * Returns true if the given feature flag is set.
+     *
+     * @param flag the feature flag name
+     * @return true if the flag is set
+     */
     public boolean isFeatureFlagSet(String flag) {
         return featureFlags != null && featureFlags.contains(flag);
     }
 
     /**
      * Derives the scrypt key from the password and decrypts the master key.
+     *
+     * @param password the password to unlock the master key with
+     * @return the 32-byte master key
+     * @throws IOException if the password is wrong or the config is malformed
      */
     public byte[] decryptMasterKey(char[] password) throws IOException {
         if (masterKey != null) {
@@ -149,22 +176,38 @@ public final class ConfigFile {
         return Base64.getDecoder().decode(b64);
     }
 
-    /** Returns true if file names are stored unencrypted. */
+    /**
+     * Returns true if file names are stored unencrypted.
+     *
+     * @return true if names are stored unencrypted
+     */
     public boolean plaintextNames() {
         return isFeatureFlagSet(Constants.FLAG_PLAINTEXT_NAMES);
     }
 
-    /** Returns true if per-directory IVs are used for name encryption. */
+    /**
+     * Returns true if per-directory IVs are used for name encryption.
+     *
+     * @return true if per-directory IVs are used
+     */
     public boolean dirIv() {
         return isFeatureFlagSet(Constants.FLAG_DIR_IV);
     }
 
-    /** Returns true if long file names may be hashed to {@code gocryptfs.longname.*}. */
+    /**
+     * Returns true if long file names may be hashed to {@code gocryptfs.longname.*}.
+     *
+     * @return true if long names are supported
+     */
     public boolean longNames() {
         return isFeatureFlagSet(Constants.FLAG_LONG_NAMES);
     }
 
-    /** Returns the effective long-name limit (255 unless overridden). */
+    /**
+     * Returns the effective long-name limit (255 unless overridden).
+     *
+     * @return the effective long-name limit in bytes
+     */
     public int longNameMax() {
         if (longNames() && longNameMax != null) {
             return longNameMax;
@@ -172,32 +215,58 @@ public final class ConfigFile {
         return Constants.NAME_MAX;
     }
 
-    /** Returns true if file names use raw (unpadded) base64url. */
+    /**
+     * Returns true if file names use raw (unpadded) base64url.
+     *
+     * @return true if raw base64url is used
+     */
     public boolean raw64() {
         return isFeatureFlagSet(Constants.FLAG_RAW64);
     }
 
-    /** Returns true if sub-keys are derived from the master key via HKDF. */
+    /**
+     * Returns true if sub-keys are derived from the master key via HKDF.
+     *
+     * @return true if HKDF is used
+     */
     public boolean hkdf() {
         return isFeatureFlagSet(Constants.FLAG_HKDF);
     }
 
-    /** Returns true if content is encrypted with XChaCha20-Poly1305. */
+    /**
+     * Returns true if content is encrypted with XChaCha20-Poly1305.
+     *
+     * @return true if XChaCha20-Poly1305 is used
+     */
     public boolean xchacha() {
         return isFeatureFlagSet(Constants.FLAG_XCHACHA);
     }
 
-    /** Returns true if content is encrypted with AES-SIV. */
+    /**
+     * Returns true if content is encrypted with AES-SIV.
+     *
+     * @return true if AES-SIV is used
+     */
     public boolean aessiv() {
         return isFeatureFlagSet(Constants.FLAG_AES_SIV);
     }
 
-    /** Returns the content-encryption cipher for the given key. */
+    /**
+     * Returns the content-encryption cipher for the given key.
+     *
+     * @param key     the cipher key
+     * @param xchacha whether to use XChaCha20-Poly1305 instead of AES-GCM
+     * @return the content-encryption cipher
+     */
     private static ContentCipher contentCipher(byte[] key, boolean xchacha) {
         return xchacha ? new XChaCha20Poly1305(key) : new Gcm(key);
     }
 
-    /** Returns the nonce/IV length in bytes for the content cipher. */
+    /**
+     * Returns the nonce/IV length in bytes for the content cipher.
+     *
+     * @return the nonce length in bytes
+     */
     private int contentIvLen() {
         if (xchacha()) {
             return Constants.XCHACHA_NONCE_LEN;
@@ -205,6 +274,12 @@ public final class ConfigFile {
         return isFeatureFlagSet(Constants.FLAG_GCM_IV128) ? Constants.DEFAULT_IV_BITS / 8 : 96 / 8;
     }
 
+    /**
+     * Returns the HKDF info string for the given content cipher.
+     *
+     * @param xchacha whether the content cipher is XChaCha20-Poly1305
+     * @return the HKDF info string
+     */
     private static String contentHkdfInfo(boolean xchacha) {
         return xchacha ? Constants.HKDF_INFO_XCHACHA_CONTENT : Constants.HKDF_INFO_GCM_CONTENT;
     }
@@ -212,6 +287,9 @@ public final class ConfigFile {
     /**
      * Builds the {@link ContentEnc} used for file-content crypto. The returned
      * instance shares no state with the config file.
+     *
+     * @param masterKey the 32-byte master key
+     * @return the content-encryption helper
      */
     public ContentEnc contentEnc(byte[] masterKey) {
         boolean useHkdf = hkdf();
@@ -228,6 +306,13 @@ public final class ConfigFile {
         return new ContentEnc(contentCipher(contentKey, xchacha), contentIvLen());
     }
 
+    /**
+     * Computes the SHA-512 digest of {@code data}, used as the AES-SIV key for
+     * legacy (non-HKDF) filesystems.
+     *
+     * @param data the input data
+     * @return the 64-byte SHA-512 digest
+     */
     private static byte[] sha512(byte[] data) {
         try {
             return MessageDigest.getInstance("SHA-512").digest(data);
@@ -241,6 +326,11 @@ public final class ConfigFile {
      * resulting config uses HKDF, 128-bit GCM IVs, per-directory IVs, EME names,
      * long names and raw base64 (the modern gocryptfs defaults), or plaintext
      * names if {@code plaintextNames} is set.
+     *
+     * @param masterKey      the 32-byte master key
+     * @param password       the password to protect the master key with
+     * @param plaintextNames whether to store file names unencrypted
+     * @return the created config file
      */
     public static ConfigFile create(byte[] masterKey, char[] password, boolean plaintextNames) {
         return create(masterKey, password, plaintextNames, ContentCipherType.AES_GCM);
@@ -251,6 +341,12 @@ public final class ConfigFile {
      * resulting config uses HKDF, per-directory IVs, EME names, long names and
      * raw base64 (the modern gocryptfs defaults), or plaintext names if
      * {@code plaintextNames} is set. Content encryption uses {@code cipherType}.
+     *
+     * @param masterKey      the 32-byte master key
+     * @param password       the password to protect the master key with
+     * @param plaintextNames whether to store file names unencrypted
+     * @param cipherType     the content-encryption cipher
+     * @return the created config file
      */
     public static ConfigFile create(byte[] masterKey, char[] password, boolean plaintextNames,
                                     ContentCipherType cipherType) {
@@ -312,7 +408,12 @@ public final class ConfigFile {
         return cf;
     }
 
-    /** Writes the config as JSON (with a trailing newline) to {@code path}. */
+    /**
+     * Writes the config as JSON (with a trailing newline) to {@code path}.
+     *
+     * @param path the path to write to
+     * @throws IOException on filesystem errors
+     */
     public void writeTo(Path path) throws IOException {
         String json = GSON.toJson(this) + "\n";
         Files.writeString(path, json, StandardCharsets.UTF_8,

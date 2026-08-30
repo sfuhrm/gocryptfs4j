@@ -12,6 +12,11 @@ public final class Eme {
 
     private final BlockCipher bc;
 
+    /**
+     * Creates an EME instance over the given block cipher.
+     *
+     * @param bc the underlying block cipher (must have a 16-byte block size)
+     */
     public Eme(BlockCipher bc) {
         if (bc.blockSize() != Constants.AES_BLOCK_SIZE) {
             throw new IllegalArgumentException("EME requires a 16-byte block cipher");
@@ -19,12 +24,24 @@ public final class Eme {
         this.bc = bc;
     }
 
-    /** EME-encrypts {@code input} under {@code tweak} (both lengths validated). */
+    /**
+     * EME-encrypts {@code input} under {@code tweak}.
+     *
+     * @param tweak the 16-byte tweak
+     * @param input the plaintext (a positive multiple of 16 bytes)
+     * @return the ciphertext
+     */
     public byte[] encrypt(byte[] tweak, byte[] input) {
         return transform(tweak, input, true);
     }
 
-    /** EME-decrypts {@code input} under {@code tweak}. */
+    /**
+     * EME-decrypts {@code input} under {@code tweak}.
+     *
+     * @param tweak the 16-byte tweak
+     * @param input the ciphertext (a positive multiple of 16 bytes)
+     * @return the plaintext
+     */
     public byte[] decrypt(byte[] tweak, byte[] input) {
         return transform(tweak, input, false);
     }

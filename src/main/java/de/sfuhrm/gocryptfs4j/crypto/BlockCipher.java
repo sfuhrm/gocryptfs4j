@@ -5,12 +5,30 @@ package de.sfuhrm.gocryptfs4j.crypto;
  */
 public interface BlockCipher {
 
-    /** Block size in bytes (must be 16). */
+    /**
+     * Returns the block size in bytes.
+     *
+     * @return the block size in bytes (must be 16)
+     */
     int blockSize();
 
-    /** Encrypts one block. */
+    /**
+     * Encrypts one block.
+     *
+     * @param in     the input block
+     * @param inOff  the offset into {@code in}
+     * @param out    the output buffer
+     * @param outOff the offset into {@code out}
+     */
     void encrypt(byte[] in, int inOff, byte[] out, int outOff);
 
-    /** Decrypts one block. */
+    /**
+     * Decrypts one block.
+     *
+     * @param in     the input block
+     * @param inOff  the offset into {@code in}
+     * @param out    the output buffer
+     * @param outOff the offset into {@code out}
+     */
     void decrypt(byte[] in, int inOff, byte[] out, int outOff);
 }

@@ -32,6 +32,15 @@ public final class CipherFile implements AutoCloseable {
         this.enc = enc;
     }
 
+    /**
+     * Opens a cipher-side file for random access.
+     *
+     * @param cipherPath the ciphertext-side file path
+     * @param enc        the content-encryption helper
+     * @param writable   whether the file should be opened for writing
+     * @return the opened cipher file
+     * @throws IOException on filesystem errors
+     */
     public static CipherFile open(Path cipherPath, ContentEnc enc, boolean writable) throws IOException {
         FileChannel ch;
         if (writable) {
@@ -42,7 +51,12 @@ public final class CipherFile implements AutoCloseable {
         return new CipherFile(ch, enc);
     }
 
-    /** Returns the file id from the header, creating a header if the file is empty and writable. */
+    /**
+     * Returns the file id from the header, or {@code null} if the file is empty.
+     *
+     * @return the 16-byte file id, or {@code null}
+     * @throws IOException if the file header is corrupt
+     */
     public byte[] fileId() throws IOException {
         if (!fileIdLoaded) {
             long size = channel.size();
@@ -60,7 +74,12 @@ public final class CipherFile implements AutoCloseable {
         return fileId;
     }
 
-    /** Returns the plaintext size of the file. */
+    /**
+     * Returns the plaintext size of the file.
+     *
+     * @return the plaintext size in bytes
+     * @throws IOException on filesystem errors
+     */
     public long plainSize() throws IOException {
         long cipherSize = channel.size();
         if (cipherSize == 0) {
@@ -72,7 +91,10 @@ public final class CipherFile implements AutoCloseable {
     /**
      * Reads up to {@code dst.remaining()} plaintext bytes at {@code plainOffset}.
      *
-     * @return number of bytes read, or -1 if at or past end of file.
+     * @param dst         the destination buffer
+     * @param plainOffset the plaintext offset to read from
+     * @return number of bytes read, or -1 if at or past end of file
+     * @throws IOException on filesystem or decryption errors
      */
     public int read(ByteBuffer dst, long plainOffset) throws IOException {
         long size = plainSize();
@@ -120,7 +142,10 @@ public final class CipherFile implements AutoCloseable {
      * Writes {@code src.remaining()} plaintext bytes at {@code plainOffset},
      * performing read-modify-write for partial blocks.
      *
-     * @return number of bytes written.
+     * @param src         the source buffer
+     * @param plainOffset the plaintext offset to write at
+     * @return number of bytes written
+     * @throws IOException on filesystem or encryption errors
      */
     public int write(ByteBuffer src, long plainOffset) throws IOException {
         int length = src.remaining();
@@ -174,7 +199,12 @@ public final class CipherFile implements AutoCloseable {
         return length;
     }
 
-    /** Truncates the file to {@code newPlainSize} plaintext bytes. */
+    /**
+     * Truncates the file to {@code newPlainSize} plaintext bytes.
+     *
+     * @param newPlainSize the new plaintext size in bytes
+     * @throws IOException on filesystem or encryption errors
+     */
     public void truncate(long newPlainSize) throws IOException {
         long oldSize = plainSize();
         if (newPlainSize == oldSize) {

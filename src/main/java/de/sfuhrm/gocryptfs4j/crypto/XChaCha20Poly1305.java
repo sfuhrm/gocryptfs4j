@@ -17,6 +17,11 @@ public final class XChaCha20Poly1305 implements ContentCipher {
 
     private final KeyParameter key;
 
+    /**
+     * Creates an XChaCha20-Poly1305 instance.
+     *
+     * @param key the 32-byte key
+     */
     public XChaCha20Poly1305(byte[] key) {
         if (key.length != Constants.KEY_LEN) {
             throw new IllegalArgumentException("XChaCha20-Poly1305 key must be "
@@ -25,7 +30,14 @@ public final class XChaCha20Poly1305 implements ContentCipher {
         this.key = new KeyParameter(key);
     }
 
-    /** Encrypts {@code plaintext}, returning ciphertext || 16-byte tag. */
+    /**
+     * Encrypts {@code plaintext}, returning ciphertext followed by a 16-byte tag.
+     *
+     * @param plaintext the plaintext to encrypt
+     * @param nonce     the 24-byte nonce
+     * @param aad       additional authenticated data, or {@code null}
+     * @return the ciphertext followed by the 16-byte tag
+     */
     @Override
     public byte[] encrypt(byte[] plaintext, byte[] nonce, byte[] aad) {
         if (nonce.length != Constants.XCHACHA_NONCE_LEN) {
@@ -44,7 +56,16 @@ public final class XChaCha20Poly1305 implements ContentCipher {
         return out;
     }
 
-    /** Decrypts {@code ciphertext} (including the 16-byte tag), verifying tag and {@code aad}. */
+    /**
+     * Decrypts {@code ciphertext} (which must include the trailing 16-byte tag),
+     * verifying the tag and {@code aad}.
+     *
+     * @param ciphertext the ciphertext including the 16-byte tag
+     * @param nonce      the 24-byte nonce used during encryption
+     * @param aad        additional authenticated data, or {@code null}
+     * @return the decrypted plaintext
+     * @throws AEADBadTagException on authentication failure
+     */
     @Override
     public byte[] decrypt(byte[] ciphertext, byte[] nonce, byte[] aad) throws GeneralSecurityException {
         if (nonce.length != Constants.XCHACHA_NONCE_LEN) {

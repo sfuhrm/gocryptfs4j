@@ -27,6 +27,15 @@ public final class NameTransform {
     private final Base64.Decoder b64Decoder;
     private final boolean deterministicNames;
 
+    /**
+     * Creates a name-transform helper.
+     *
+     * @param eme                the EME cipher
+     * @param longNames          whether long names are hashed
+     * @param longNameMax        the long-name limit in bytes
+     * @param raw64              whether to use raw (unpadded) base64url
+     * @param deterministicNames whether to use a deterministic (all-zero) diriv
+     */
     public NameTransform(Eme eme, boolean longNames, int longNameMax, boolean raw64,
                          boolean deterministicNames) {
         this.eme = eme;
@@ -43,12 +52,21 @@ public final class NameTransform {
         }
     }
 
+    /**
+     * Returns the long-name limit in bytes.
+     *
+     * @return the long-name limit in bytes
+     */
     public int longNameMax() {
         return longNameMax;
     }
 
     /**
      * Encrypts {@code plainName} (EME under {@code iv}) and base64url-encodes it.
+     *
+     * @param plainName the plaintext name
+     * @param iv        the 16-byte directory IV
+     * @return the encrypted, base64url-encoded name
      */
     public String encryptName(String plainName, byte[] iv) {
         byte[] bin = plainName.getBytes(StandardCharsets.UTF_8);
@@ -60,7 +78,10 @@ public final class NameTransform {
     /**
      * Decrypts a base64-encoded cipher name.
      *
-     * @throws IllegalArgumentException if the name is not valid ciphertext.
+     * @param cipherName the ciphertext name
+     * @param iv         the 16-byte directory IV
+     * @return the plaintext name
+     * @throws IllegalArgumentException if the name is not valid ciphertext
      */
     public String decryptName(String cipherName, byte[] iv) {
         byte[] bin;
@@ -81,8 +102,12 @@ public final class NameTransform {
     }
 
     /**
-     * Encrypts {@code name} and, if the encrypted form exceeds {@code longNameMax},
-     * hashes it to a {@code gocryptfs.longname.*} name.
+     * Encrypts {@code name} and, if the encrypted form exceeds the long-name
+     * limit, hashes it to a {@code gocryptfs.longname.*} name.
+     *
+     * @param name the plaintext name
+     * @param iv   the 16-byte directory IV
+     * @return the ciphertext name, possibly hashed
      */
     public String encryptAndHashName(String name, byte[] iv) {
         String cName = encryptName(name, iv);
@@ -92,12 +117,24 @@ public final class NameTransform {
         return cName;
     }
 
-    /** Returns {@code gocryptfs.longname.[sha256-base64]}. */
+    /**
+     * Returns {@code gocryptfs.longname.[sha256-base64]} for the given cipher name.
+     *
+     * @param cName the ciphertext name
+     * @return the long-name hash
+     */
     public String hashLongName(String cName) {
         byte[] hash = sha256(cName.getBytes(StandardCharsets.UTF_8));
         return Constants.LONG_NAME_PREFIX + b64Encoder.encodeToString(hash);
     }
 
+    /**
+     * Returns the name type of {@code cName}.
+     *
+     * @param cName the ciphertext name
+     * @return one of {@link #LONG_NAME_CONTENT}, {@link #LONG_NAME_FILENAME} or
+     *         {@link #LONG_NAME_NONE}
+     */
     public int nameType(String cName) {
         if (!cName.startsWith(Constants.LONG_NAME_PREFIX)) {
             return LONG_NAME_NONE;
@@ -108,28 +145,60 @@ public final class NameTransform {
         return LONG_NAME_CONTENT;
     }
 
+    /**
+     * Returns whether {@code cName} is a long-name content store.
+     *
+     * @param cName the ciphertext name
+     * @return true if {@code cName} is a long-name content store
+     */
     public boolean isLongContent(String cName) {
         return nameType(cName) == LONG_NAME_CONTENT;
     }
 
-    /** Returns the content-file name for a ".name" support file. */
+    /**
+     * Returns the content-file name for a ".name" support file.
+     *
+     * @param cName the ".name" support file name
+     * @return the content-file name without the suffix
+     */
     public static String removeLongNameSuffix(String cName) {
         return cName.substring(0, cName.length() - Constants.LONG_NAME_SUFFIX.length());
     }
 
+    /**
+     * Base64url-encodes {@code data}.
+     *
+     * @param data the data to encode
+     * @return the base64url encoding
+     */
     public String b64Encode(byte[] data) {
         return b64Encoder.encodeToString(data);
     }
 
+    /**
+     * Base64url-decodes {@code s}.
+     *
+     * @param s the base64url string
+     * @return the decoded bytes
+     */
     public byte[] b64Decode(String s) {
         return b64Decoder.decode(s);
     }
 
-    /** The IV to use for name encryption in a directory without a diriv file. */
+    /**
+     * Returns the IV to use for name encryption in a directory without a diriv file.
+     *
+     * @return a 16-byte all-zero IV
+     */
     public byte[] zeroDirIV() {
         return new byte[Constants.DIR_IV_LEN];
     }
 
+    /**
+     * Returns whether deterministic (all-zero) dirivs are used.
+     *
+     * @return true if deterministic dirivs are used
+     */
     public boolean deterministicNames() {
         return deterministicNames;
     }
