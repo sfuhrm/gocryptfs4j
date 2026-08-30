@@ -3,6 +3,7 @@ package de.sfuhrm.gocryptfs4j.fs;
 import de.sfuhrm.gocryptfs4j.config.ConfigFile;
 import de.sfuhrm.gocryptfs4j.crypto.AesBlockCipher;
 import de.sfuhrm.gocryptfs4j.crypto.Constants;
+import de.sfuhrm.gocryptfs4j.crypto.ContentCipherType;
 import de.sfuhrm.gocryptfs4j.crypto.ContentEnc;
 import de.sfuhrm.gocryptfs4j.crypto.Eme;
 import de.sfuhrm.gocryptfs4j.crypto.Hkdf;
@@ -95,21 +96,21 @@ public final class GocryptFs implements AutoCloseable {
 
     /** Creates a new filesystem, optionally with plaintext (unencrypted) names. */
     public static GocryptFs create(Path cipherDir, char[] password, boolean plaintextNames) throws IOException {
-        return create(cipherDir, password, plaintextNames, false);
+        return create(cipherDir, password, plaintextNames, ContentCipherType.AES_GCM);
     }
 
     /**
-     * Creates a new filesystem, optionally with plaintext (unencrypted) names and
-     * optionally with XChaCha20-Poly1305 content encryption instead of AES-256-GCM.
+     * Creates a new filesystem, optionally with plaintext (unencrypted) names
+     * and a custom content cipher.
      */
     public static GocryptFs create(Path cipherDir, char[] password, boolean plaintextNames,
-                                   boolean xchacha) throws IOException {
+                                   ContentCipherType cipherType) throws IOException {
         Path dir = cipherDir.toAbsolutePath().normalize();
         if (!Files.isDirectory(dir)) {
             throw new IOException("cipher dir does not exist: " + dir);
         }
         byte[] masterKey = Keys.randomBytes(Constants.KEY_LEN);
-        ConfigFile config = ConfigFile.create(masterKey, password, plaintextNames, xchacha);
+        ConfigFile config = ConfigFile.create(masterKey, password, plaintextNames, cipherType);
         config.writeTo(dir.resolve(Constants.CONF_DEFAULT_NAME));
         GocryptFs fs = new GocryptFs(dir, config, masterKey);
         try {

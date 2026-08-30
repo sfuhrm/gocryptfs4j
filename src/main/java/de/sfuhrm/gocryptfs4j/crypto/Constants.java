@@ -28,6 +28,9 @@ public final class Constants {
     /** XChaCha20-Poly1305 nonce length in bytes (192-bit extended nonce). */
     public static final int XCHACHA_NONCE_LEN = 24;
 
+    /** AES-SIV key length in bytes (two 256-bit sub-keys). */
+    public static final int SIV_KEY_LEN = 64;
+
     /** Length of a per-directory IV. */
     public static final int DIR_IV_LEN = 16;
 

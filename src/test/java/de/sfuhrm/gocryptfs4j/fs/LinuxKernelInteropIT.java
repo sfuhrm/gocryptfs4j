@@ -1,5 +1,6 @@
 package de.sfuhrm.gocryptfs4j.fs;
 
+import de.sfuhrm.gocryptfs4j.crypto.ContentCipherType;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -87,16 +88,29 @@ class LinuxKernelInteropIT {
 
     static Stream<Arguments> variations() {
         return Stream.of(
-                Arguments.of(false, false),
-                Arguments.of(false, true),
-                Arguments.of(true, false),
-                Arguments.of(true, true)
+                Arguments.of(false, ContentCipherType.AES_GCM),
+                Arguments.of(false, ContentCipherType.XCHACHA20_POLY1305),
+                Arguments.of(false, ContentCipherType.AES_SIV),
+                Arguments.of(true, ContentCipherType.AES_GCM),
+                Arguments.of(true, ContentCipherType.XCHACHA20_POLY1305),
+                Arguments.of(true, ContentCipherType.AES_SIV)
         );
     }
 
-    @ParameterizedTest(name = "plaintextNames={0}, xchacha={1}")
+    private static String cipherFlag(ContentCipherType cipherType) {
+        switch (cipherType) {
+            case XCHACHA20_POLY1305:
+                return "-xchacha";
+            case AES_SIV:
+                return "-aessiv";
+            default:
+                return null;
+        }
+    }
+
+    @ParameterizedTest(name = "plaintextNames={0}, cipher={1}")
     @MethodSource("variations")
-    void gocryptfsWritesJavaReads(boolean plaintextNames, boolean xchacha) throws Exception {
+    void gocryptfsWritesJavaReads(boolean plaintextNames, ContentCipherType cipherType) throws Exception {
         assumeGocryptfs();
         assumeTrue(sourceAvailable, "kernel source could not be downloaded/extracted");
 
@@ -109,8 +123,9 @@ class LinuxKernelInteropIT {
         if (plaintextNames) {
             init.add("-plaintextnames");
         }
-        if (xchacha) {
-            init.add("-xchacha");
+        String flag = cipherFlag(cipherType);
+        if (flag != null) {
+            init.add(flag);
         }
         init.add(cipherDir.toString());
         run(init.toArray(new String[0]));
@@ -133,15 +148,15 @@ class LinuxKernelInteropIT {
         }
     }
 
-    @ParameterizedTest(name = "plaintextNames={0}, xchacha={1}")
+    @ParameterizedTest(name = "plaintextNames={0}, cipher={1}")
     @MethodSource("variations")
-    void javaWritesGocryptfsReads(boolean plaintextNames, boolean xchacha) throws Exception {
+    void javaWritesGocryptfsReads(boolean plaintextNames, ContentCipherType cipherType) throws Exception {
         assumeGocryptfs();
         assumeTrue(sourceAvailable, "kernel source could not be downloaded/extracted");
 
         Path cipherDir = Files.createDirectory(tmp.resolve("cipher-java"));
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, PASSWORD.toCharArray(), plaintextNames, xchacha)) {
+        try (GocryptFs fs = GocryptFs.create(cipherDir, PASSWORD.toCharArray(), plaintextNames, cipherType)) {
             fs.mkdir("/linux");
             copyInto(fs, "/linux", linuxSource);
         }

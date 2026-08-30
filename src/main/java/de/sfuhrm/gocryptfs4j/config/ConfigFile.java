@@ -3,8 +3,10 @@ package de.sfuhrm.gocryptfs4j.config;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.annotations.SerializedName;
+import de.sfuhrm.gocryptfs4j.crypto.AesSiv;
 import de.sfuhrm.gocryptfs4j.crypto.Constants;
 import de.sfuhrm.gocryptfs4j.crypto.ContentCipher;
+import de.sfuhrm.gocryptfs4j.crypto.ContentCipherType;
 import de.sfuhrm.gocryptfs4j.crypto.ContentEnc;
 import de.sfuhrm.gocryptfs4j.crypto.Gcm;
 import de.sfuhrm.gocryptfs4j.crypto.Hkdf;
@@ -17,6 +19,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.security.GeneralSecurityException;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
@@ -74,9 +77,6 @@ public final class ConfigFile {
                     throw new IOException("unknown feature flag: " + flag);
                 }
             }
-        }
-        if (isFeatureFlagSet(Constants.FLAG_AES_SIV)) {
-            throw new UnsupportedOperationException("AES-SIV content encryption is not supported");
         }
         if (isFeatureFlagSet(Constants.FLAG_FIDO2)) {
             throw new UnsupportedOperationException("FIDO2-based key protection is not supported");
@@ -187,6 +187,11 @@ public final class ConfigFile {
         return isFeatureFlagSet(Constants.FLAG_XCHACHA);
     }
 
+    /** Returns true if content is encrypted with AES-SIV. */
+    public boolean aessiv() {
+        return isFeatureFlagSet(Constants.FLAG_AES_SIV);
+    }
+
     /** Returns the content-encryption cipher for the given key. */
     private static ContentCipher contentCipher(byte[] key, boolean xchacha) {
         return xchacha ? new XChaCha20Poly1305(key) : new Gcm(key);
@@ -205,16 +210,30 @@ public final class ConfigFile {
     }
 
     /**
-     * Builds the {@link ContentEnc} used for file-content and master-key crypto.
-     * The returned instance shares no state with the config file.
+     * Builds the {@link ContentEnc} used for file-content crypto. The returned
+     * instance shares no state with the config file.
      */
     public ContentEnc contentEnc(byte[] masterKey) {
         boolean useHkdf = hkdf();
+        if (aessiv()) {
+            byte[] sivKey = useHkdf
+                    ? Hkdf.derive(masterKey, Constants.HKDF_INFO_SIV_CONTENT, Constants.SIV_KEY_LEN)
+                    : sha512(masterKey);
+            return new ContentEnc(new AesSiv(sivKey), Constants.AES_BLOCK_SIZE);
+        }
         boolean xchacha = xchacha();
         byte[] contentKey = useHkdf
                 ? Hkdf.derive(masterKey, contentHkdfInfo(xchacha), Constants.KEY_LEN)
                 : Arrays.copyOf(masterKey, masterKey.length);
         return new ContentEnc(contentCipher(contentKey, xchacha), contentIvLen());
+    }
+
+    private static byte[] sha512(byte[] data) {
+        try {
+            return MessageDigest.getInstance("SHA-512").digest(data);
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException("SHA-512 unavailable", e);
+        }
     }
 
     /**
@@ -224,28 +243,37 @@ public final class ConfigFile {
      * names if {@code plaintextNames} is set.
      */
     public static ConfigFile create(byte[] masterKey, char[] password, boolean plaintextNames) {
-        return create(masterKey, password, plaintextNames, false);
+        return create(masterKey, password, plaintextNames, ContentCipherType.AES_GCM);
     }
 
     /**
      * Creates a fresh config file with the given master key and password. The
      * resulting config uses HKDF, per-directory IVs, EME names, long names and
      * raw base64 (the modern gocryptfs defaults), or plaintext names if
-     * {@code plaintextNames} is set. Content encryption uses XChaCha20-Poly1305
-     * when {@code xchacha} is set, AES-256-GCM otherwise.
+     * {@code plaintextNames} is set. Content encryption uses {@code cipherType}.
      */
     public static ConfigFile create(byte[] masterKey, char[] password, boolean plaintextNames,
-                                    boolean xchacha) {
+                                    ContentCipherType cipherType) {
         ConfigFile cf = new ConfigFile();
         cf.creator = "gocryptfs4j 0.1";
         cf.version = Constants.CURRENT_VERSION;
 
         List<String> flags = new ArrayList<>();
         flags.add(Constants.FLAG_HKDF);
-        if (xchacha) {
-            flags.add(Constants.FLAG_XCHACHA);
-        } else {
-            flags.add(Constants.FLAG_GCM_IV128);
+        switch (cipherType) {
+            case XCHACHA20_POLY1305:
+                flags.add(Constants.FLAG_XCHACHA);
+                break;
+            case AES_SIV:
+                // gocryptfs rejects AESSIV configs without GCMIV128: AES-SIV uses
+                // 128-bit IVs (the SIV), so both flags are required.
+                flags.add(Constants.FLAG_AES_SIV);
+                flags.add(Constants.FLAG_GCM_IV128);
+                break;
+            case AES_GCM:
+            default:
+                flags.add(Constants.FLAG_GCM_IV128);
+                break;
         }
         if (plaintextNames) {
             flags.add(Constants.FLAG_PLAINTEXT_NAMES);
@@ -268,8 +296,8 @@ public final class ConfigFile {
         byte[] scryptHash = Keys.scrypt(
                 charsToBytes(password), decode(sk.salt), sk.n, sk.r, sk.p, sk.keyLen);
         try {
-            // The master key is always protected with AES-256-GCM; xchacha only
-            // changes the file-content cipher.
+            // The master key is always protected with AES-256-GCM; the content
+            // cipher selection only affects file content.
             byte[] contentKey = Hkdf.derive(scryptHash, Constants.HKDF_INFO_GCM_CONTENT, Constants.KEY_LEN);
             byte[] nonce = Keys.randomBytes(Constants.DEFAULT_IV_BITS / 8);
             byte[] aad = new byte[8];
