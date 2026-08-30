@@ -2,8 +2,9 @@ package de.sfuhrm.gocryptfs4j.nio;
 
 import de.sfuhrm.gocryptfs4j.fs.GocryptFs;
 import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -30,6 +31,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -86,8 +88,13 @@ class LinuxKernelNioInteropIT {
         }
     }
 
-    @Test
-    void gocryptfsWritesNioReads() throws Exception {
+    static Stream<Boolean> plaintextNames() {
+        return Stream.of(false, true);
+    }
+
+    @ParameterizedTest(name = "plaintextNames={0}")
+    @MethodSource("plaintextNames")
+    void gocryptfsWritesNioReads(boolean plaintextNames) throws Exception {
         assumeGocryptfs();
         assumeTrue(sourceAvailable, "kernel source could not be downloaded/extracted");
 
@@ -95,7 +102,12 @@ class LinuxKernelNioInteropIT {
         Path mount = Files.createDirectory(tmp.resolve("mount"));
         Path passfile = writePassfile();
 
-        run("gocryptfs", "-init", "-passfile", passfile.toString(), cipherDir.toString());
+        if (plaintextNames) {
+            run("gocryptfs", "-init", "-plaintextnames",
+                    "-passfile", passfile.toString(), cipherDir.toString());
+        } else {
+            run("gocryptfs", "-init", "-passfile", passfile.toString(), cipherDir.toString());
+        }
 
         Process mountProc = start("gocryptfs", "-passfile", passfile.toString(),
                 cipherDir.toString(), mount.toString());
@@ -116,14 +128,15 @@ class LinuxKernelNioInteropIT {
         }
     }
 
-    @Test
-    void nioWritesGocryptfsReads() throws Exception {
+    @ParameterizedTest(name = "plaintextNames={0}")
+    @MethodSource("plaintextNames")
+    void nioWritesGocryptfsReads(boolean plaintextNames) throws Exception {
         assumeGocryptfs();
         assumeTrue(sourceAvailable, "kernel source could not be downloaded/extracted");
 
         Path cipherDir = Files.createDirectory(tmp.resolve("cipher-java"));
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, PASSWORD.toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(cipherDir, PASSWORD.toCharArray(), plaintextNames)) {
             // Only the configuration is created here; the tree is written below
             // through the java.nio.file view.
         }

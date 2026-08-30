@@ -1,7 +1,8 @@
 package de.sfuhrm.gocryptfs4j.fs;
 
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -11,6 +12,7 @@ import java.util.Arrays;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -36,15 +38,25 @@ class GocryptfsInteropIT {
     @TempDir
     Path tmp;
 
-    @Test
-    void gocryptfsWritesJavaReads() throws Exception {
+    static Stream<Boolean> plaintextNames() {
+        return Stream.of(false, true);
+    }
+
+    @ParameterizedTest(name = "plaintextNames={0}")
+    @MethodSource("plaintextNames")
+    void gocryptfsWritesJavaReads(boolean plaintextNames) throws Exception {
         assumeGocryptfs();
 
         Path cipherDir = Files.createDirectory(tmp.resolve("cipher-gocryptfs"));
         Path mount = Files.createDirectory(tmp.resolve("mount"));
         Path passfile = writePassfile();
 
-        run("gocryptfs", "-init", "-passfile", passfile.toString(), cipherDir.toString());
+        if (plaintextNames) {
+            run("gocryptfs", "-init", "-plaintextnames",
+                    "-passfile", passfile.toString(), cipherDir.toString());
+        } else {
+            run("gocryptfs", "-init", "-passfile", passfile.toString(), cipherDir.toString());
+        }
 
         Process mountProc = start("gocryptfs", "-passfile", passfile.toString(),
                 cipherDir.toString(), mount.toString());
@@ -75,14 +87,15 @@ class GocryptfsInteropIT {
         }
     }
 
-    @Test
-    void javaWritesGocryptfsReads() throws Exception {
+    @ParameterizedTest(name = "plaintextNames={0}")
+    @MethodSource("plaintextNames")
+    void javaWritesGocryptfsReads(boolean plaintextNames) throws Exception {
         assumeGocryptfs();
 
         Path cipherDir = Files.createDirectory(tmp.resolve("cipher-java"));
         Path passfile = writePassfile();
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, PASSWORD.toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(cipherDir, PASSWORD.toCharArray(), plaintextNames)) {
             fs.mkdir("/sub");
             fs.createFile("/hello.txt");
             fs.write("/hello.txt", 0, "hello world".getBytes(StandardCharsets.UTF_8));
