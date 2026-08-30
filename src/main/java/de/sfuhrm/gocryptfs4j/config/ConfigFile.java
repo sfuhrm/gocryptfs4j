@@ -6,12 +6,12 @@ import com.google.gson.annotations.SerializedName;
 import de.sfuhrm.gocryptfs4j.crypto.AesSiv;
 import de.sfuhrm.gocryptfs4j.crypto.Constants;
 import de.sfuhrm.gocryptfs4j.crypto.ContentCipher;
-import de.sfuhrm.gocryptfs4j.crypto.ContentCipherType;
 import de.sfuhrm.gocryptfs4j.crypto.ContentEnc;
 import de.sfuhrm.gocryptfs4j.crypto.Gcm;
 import de.sfuhrm.gocryptfs4j.crypto.Hkdf;
 import de.sfuhrm.gocryptfs4j.crypto.Keys;
 import de.sfuhrm.gocryptfs4j.crypto.XChaCha20Poly1305;
+import de.sfuhrm.gocryptfs4j.fs.ContentCipherType;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;

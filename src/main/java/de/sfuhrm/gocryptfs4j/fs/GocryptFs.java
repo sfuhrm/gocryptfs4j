@@ -3,7 +3,6 @@ package de.sfuhrm.gocryptfs4j.fs;
 import de.sfuhrm.gocryptfs4j.config.ConfigFile;
 import de.sfuhrm.gocryptfs4j.crypto.AesBlockCipher;
 import de.sfuhrm.gocryptfs4j.crypto.Constants;
-import de.sfuhrm.gocryptfs4j.crypto.ContentCipherType;
 import de.sfuhrm.gocryptfs4j.crypto.ContentEnc;
 import de.sfuhrm.gocryptfs4j.crypto.Eme;
 import de.sfuhrm.gocryptfs4j.crypto.Hkdf;

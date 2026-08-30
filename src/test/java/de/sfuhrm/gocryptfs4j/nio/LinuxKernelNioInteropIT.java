@@ -1,6 +1,6 @@
 package de.sfuhrm.gocryptfs4j.nio;
 
-import de.sfuhrm.gocryptfs4j.crypto.ContentCipherType;
+import de.sfuhrm.gocryptfs4j.fs.ContentCipherType;
 import de.sfuhrm.gocryptfs4j.fs.GocryptFs;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.io.TempDir;

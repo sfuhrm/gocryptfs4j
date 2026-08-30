@@ -1,9 +1,9 @@
 package de.sfuhrm.gocryptfs4j.config;
 
 import de.sfuhrm.gocryptfs4j.crypto.Constants;
-import de.sfuhrm.gocryptfs4j.crypto.ContentCipherType;
 import de.sfuhrm.gocryptfs4j.crypto.ContentEnc;
 import de.sfuhrm.gocryptfs4j.crypto.Keys;
+import de.sfuhrm.gocryptfs4j.fs.ContentCipherType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;

@@ -1,4 +1,4 @@
-package de.sfuhrm.gocryptfs4j.crypto;
+package de.sfuhrm.gocryptfs4j.fs;
 
 /**
  * Content encryption cipher selection, matching gocryptfs' {@code -init}

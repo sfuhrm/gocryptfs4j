@@ -1,6 +1,5 @@
 package de.sfuhrm.gocryptfs4j.fs;
 
-import de.sfuhrm.gocryptfs4j.crypto.ContentCipherType;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
