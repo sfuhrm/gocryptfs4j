@@ -65,7 +65,7 @@ mvn clean verify   # build, run unit tests and integration tests
 mvn package        # build the jar only (skips integration tests)
 ```
 
-The build produces `target/gocryptfs4j-0.1.0.jar`.
+The build produces `target/gocryptfs4j-X.Y.Z.jar`.
 
 ### Tests
 
@@ -183,7 +183,7 @@ automatically with the correct cipher, since it is stored in `gocryptfs.conf`.
 <dependency>
     <groupId>de.sfuhrm</groupId>
     <artifactId>gocryptfs4j</artifactId>
-    <version>0.1.0</version>
+    <version>0.2.0</version>
 </dependency>
 ```
 
