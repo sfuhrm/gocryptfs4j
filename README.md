@@ -31,8 +31,11 @@ Java implementation of the [gocryptfs forward-mode on-disk format](https://githu
 Files written by gocryptfs4j use the same layout, encryption and key derivation
 as gocryptfs, so both tools operate on the same data:
 
-* **Content encryption:** AES-256-GCM per 4 KiB block, authenticated with a
-  per-file random file ID stored in a header.
+* **Content encryption:** per 4 KiB block, authenticated with a per-file random
+  file ID stored in a header. Three ciphers are supported:
+  * AES-256-GCM (the default, matching gocryptfs `-init`),
+  * XChaCha20-Poly1305 (gocryptfs `-xchacha`),
+  * AES-SIV (RFC 5297, gocryptfs `-aessiv`).
 * **Key derivation:** scrypt (RFC 7914) from the password, via Bouncy Castle.
 * **Filename encryption:** AES-EME, including gocryptfs long-name handling
   (`> 175` character names) and directory IVs (`gocryptfs.diriv`).
@@ -42,6 +45,7 @@ as gocryptfs, so both tools operate on the same data:
 ### Features
 
 * Read **and** write gocryptfs forward-mode ciphertext (not read-only).
+* Selectable content cipher: AES-256-GCM, XChaCha20-Poly1305 or AES-SIV.
 * Random access reads and writes, including partial-block and sparse writes.
 * Symlink support.
 * Plaintext-names mode for compatibility with setups that disable name encryption.
@@ -145,6 +149,33 @@ try (FileSystem fs = new GocryptFsProvider()
 
 > Note: the NIO view currently exposes basic attributes (type, size, times).
 > POSIX permissions and ownership are not yet mapped.
+
+### 3. Options: content cipher and plaintext names
+
+The content cipher and name-encryption mode are chosen at creation time via the
+`ContentCipherType` enum (`de.sfuhrm.gocryptfs4j.fs.ContentCipherType`):
+
+```java
+import de.sfuhrm.gocryptfs4j.fs.ContentCipherType;
+import de.sfuhrm.gocryptfs4j.fs.GocryptFs;
+
+// AES-256-GCM (default), XChaCha20-Poly1305 or AES-SIV:
+try (GocryptFs fs = GocryptFs.create(
+        cipherDir, "pw".toCharArray(), false, ContentCipherType.AES_SIV)) {
+    // ...
+}
+```
+
+| `ContentCipherType`      | gocryptfs flag    | Description                                   |
+|--------------------------|-------------------|-----------------------------------------------|
+| `AES_GCM`                | (default)         | AES-256-GCM, 128-bit IVs                      |
+| `XCHACHA20_POLY1305`     | `-xchacha`        | XChaCha20-Poly1305, 24-byte nonces            |
+| `AES_SIV`                | `-aessiv`         | AES-SIV (RFC 5297), nonce-misuse resistant    |
+
+The third `create` argument controls plaintext (unencrypted) names: pass
+`true` to disable filename encryption (gocryptfs `-plaintextnames`), or `false`
+for the default EME-encrypted names. Filesystems are always opened
+automatically with the correct cipher, since it is stored in `gocryptfs.conf`.
 
 ## Maven coordinates
 
