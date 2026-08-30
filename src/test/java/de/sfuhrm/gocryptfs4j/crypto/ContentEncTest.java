@@ -36,6 +36,23 @@ class ContentEncTest {
     }
 
     @Test
+    void xchachaBlockRoundTrip() throws GeneralSecurityException {
+        ContentEnc enc = new ContentEnc(
+                new XChaCha20Poly1305(Keys.randomBytes(Constants.KEY_LEN)),
+                Constants.XCHACHA_NONCE_LEN);
+        assertEquals(Constants.XCHACHA_NONCE_LEN, enc.ivLen);
+        assertEquals(Constants.XCHACHA_NONCE_LEN + Constants.AUTH_TAG_LEN, enc.blockOverhead());
+
+        byte[] fileId = Keys.randomBytes(Constants.HEADER_ID_LEN);
+        byte[] data = new byte[1000];
+        Arrays.fill(data, (byte) 0x6b);
+
+        byte[] ct = enc.encryptBlock(data, 0, fileId);
+        assertEquals(data.length + enc.ivLen + Constants.AUTH_TAG_LEN, ct.length);
+        assertArrayEquals(data, enc.decryptBlock(ct, 0, fileId));
+    }
+
+    @Test
     void emptyBlockIsPassedThrough() throws GeneralSecurityException {
         ContentEnc enc = newEnc();
         assertArrayEquals(new byte[0], enc.encryptBlock(new byte[0], 0, null));

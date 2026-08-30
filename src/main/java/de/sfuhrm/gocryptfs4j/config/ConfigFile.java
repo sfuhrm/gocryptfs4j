@@ -4,10 +4,12 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.annotations.SerializedName;
 import de.sfuhrm.gocryptfs4j.crypto.Constants;
+import de.sfuhrm.gocryptfs4j.crypto.ContentCipher;
 import de.sfuhrm.gocryptfs4j.crypto.ContentEnc;
 import de.sfuhrm.gocryptfs4j.crypto.Gcm;
 import de.sfuhrm.gocryptfs4j.crypto.Hkdf;
 import de.sfuhrm.gocryptfs4j.crypto.Keys;
+import de.sfuhrm.gocryptfs4j.crypto.XChaCha20Poly1305;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -76,9 +78,6 @@ public final class ConfigFile {
         if (isFeatureFlagSet(Constants.FLAG_AES_SIV)) {
             throw new UnsupportedOperationException("AES-SIV content encryption is not supported");
         }
-        if (isFeatureFlagSet(Constants.FLAG_XCHACHA)) {
-            throw new UnsupportedOperationException("XChaCha20-Poly1305 content encryption is not supported");
-        }
         if (isFeatureFlagSet(Constants.FLAG_FIDO2)) {
             throw new UnsupportedOperationException("FIDO2-based key protection is not supported");
         }
@@ -113,9 +112,11 @@ public final class ConfigFile {
         byte[] scryptHash = Keys.scrypt(
                 charsToBytes(password), decode(s.salt), s.n, s.r, s.p, s.keyLen);
         try {
+            // gocryptfs always protects the master key with AES-256-GCM, even
+            // when the content cipher is XChaCha20-Poly1305.
             boolean useHkdf = isFeatureFlagSet(Constants.FLAG_HKDF);
             int ivLen = useHkdf ? Constants.DEFAULT_IV_BITS / 8 : 96 / 8;
-            byte[] gcmKey = useHkdf
+            byte[] contentKey = useHkdf
                     ? Hkdf.derive(scryptHash, Constants.HKDF_INFO_GCM_CONTENT, Constants.KEY_LEN)
                     : scryptHash;
 
@@ -124,8 +125,7 @@ public final class ConfigFile {
             byte[] ct = Arrays.copyOfRange(encryptedKeyBytes, ivLen, encryptedKeyBytes.length);
             // blockNo = 0, fileID = nil -> AAD is eight zero bytes
             byte[] aad = new byte[8];
-            Gcm gcm = new Gcm(gcmKey);
-            masterKey = gcm.decrypt(ct, nonce, aad);
+            masterKey = new Gcm(contentKey).decrypt(ct, nonce, aad);
             if (masterKey.length != Constants.KEY_LEN) {
                 throw new IOException("unexpected master key length " + masterKey.length);
             }
@@ -182,17 +182,39 @@ public final class ConfigFile {
         return isFeatureFlagSet(Constants.FLAG_HKDF);
     }
 
+    /** Returns true if content is encrypted with XChaCha20-Poly1305. */
+    public boolean xchacha() {
+        return isFeatureFlagSet(Constants.FLAG_XCHACHA);
+    }
+
+    /** Returns the content-encryption cipher for the given key. */
+    private static ContentCipher contentCipher(byte[] key, boolean xchacha) {
+        return xchacha ? new XChaCha20Poly1305(key) : new Gcm(key);
+    }
+
+    /** Returns the nonce/IV length in bytes for the content cipher. */
+    private int contentIvLen() {
+        if (xchacha()) {
+            return Constants.XCHACHA_NONCE_LEN;
+        }
+        return isFeatureFlagSet(Constants.FLAG_GCM_IV128) ? Constants.DEFAULT_IV_BITS / 8 : 96 / 8;
+    }
+
+    private static String contentHkdfInfo(boolean xchacha) {
+        return xchacha ? Constants.HKDF_INFO_XCHACHA_CONTENT : Constants.HKDF_INFO_GCM_CONTENT;
+    }
+
     /**
      * Builds the {@link ContentEnc} used for file-content and master-key crypto.
      * The returned instance shares no state with the config file.
      */
     public ContentEnc contentEnc(byte[] masterKey) {
         boolean useHkdf = hkdf();
-        int ivLen = useHkdf ? Constants.DEFAULT_IV_BITS / 8 : 96 / 8;
-        byte[] gcmKey = useHkdf
-                ? Hkdf.derive(masterKey, Constants.HKDF_INFO_GCM_CONTENT, Constants.KEY_LEN)
+        boolean xchacha = xchacha();
+        byte[] contentKey = useHkdf
+                ? Hkdf.derive(masterKey, contentHkdfInfo(xchacha), Constants.KEY_LEN)
                 : Arrays.copyOf(masterKey, masterKey.length);
-        return new ContentEnc(gcmKey, ivLen);
+        return new ContentEnc(contentCipher(contentKey, xchacha), contentIvLen());
     }
 
     /**
@@ -202,13 +224,29 @@ public final class ConfigFile {
      * names if {@code plaintextNames} is set.
      */
     public static ConfigFile create(byte[] masterKey, char[] password, boolean plaintextNames) {
+        return create(masterKey, password, plaintextNames, false);
+    }
+
+    /**
+     * Creates a fresh config file with the given master key and password. The
+     * resulting config uses HKDF, per-directory IVs, EME names, long names and
+     * raw base64 (the modern gocryptfs defaults), or plaintext names if
+     * {@code plaintextNames} is set. Content encryption uses XChaCha20-Poly1305
+     * when {@code xchacha} is set, AES-256-GCM otherwise.
+     */
+    public static ConfigFile create(byte[] masterKey, char[] password, boolean plaintextNames,
+                                    boolean xchacha) {
         ConfigFile cf = new ConfigFile();
         cf.creator = "gocryptfs4j 0.1";
         cf.version = Constants.CURRENT_VERSION;
 
         List<String> flags = new ArrayList<>();
         flags.add(Constants.FLAG_HKDF);
-        flags.add(Constants.FLAG_GCM_IV128);
+        if (xchacha) {
+            flags.add(Constants.FLAG_XCHACHA);
+        } else {
+            flags.add(Constants.FLAG_GCM_IV128);
+        }
         if (plaintextNames) {
             flags.add(Constants.FLAG_PLAINTEXT_NAMES);
         } else {
@@ -230,10 +268,12 @@ public final class ConfigFile {
         byte[] scryptHash = Keys.scrypt(
                 charsToBytes(password), decode(sk.salt), sk.n, sk.r, sk.p, sk.keyLen);
         try {
-            byte[] gcmKey = Hkdf.derive(scryptHash, Constants.HKDF_INFO_GCM_CONTENT, Constants.KEY_LEN);
+            // The master key is always protected with AES-256-GCM; xchacha only
+            // changes the file-content cipher.
+            byte[] contentKey = Hkdf.derive(scryptHash, Constants.HKDF_INFO_GCM_CONTENT, Constants.KEY_LEN);
             byte[] nonce = Keys.randomBytes(Constants.DEFAULT_IV_BITS / 8);
             byte[] aad = new byte[8];
-            byte[] ct = new Gcm(gcmKey).encrypt(masterKey, nonce, aad);
+            byte[] ct = new Gcm(contentKey).encrypt(masterKey, nonce, aad);
             byte[] encrypted = new byte[nonce.length + ct.length];
             System.arraycopy(nonce, 0, encrypted, 0, nonce.length);
             System.arraycopy(ct, 0, encrypted, nonce.length, ct.length);

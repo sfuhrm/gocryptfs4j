@@ -13,7 +13,7 @@ import java.security.GeneralSecurityException;
  * by gocryptfs &ge; v1.3) 128-bit IVs for the master key; pre-v1.3 config files
  * use 96-bit IVs. Both are supported by passing the nonce explicitly.</p>
  */
-public final class Gcm {
+public final class Gcm implements ContentCipher {
 
     private final SecretKeySpec key;
 
@@ -25,6 +25,7 @@ public final class Gcm {
     }
 
     /** Encrypts {@code plaintext}, returning ciphertext || 16-byte tag. */
+    @Override
     public byte[] encrypt(byte[] plaintext, byte[] nonce, byte[] aad) {
         try {
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");

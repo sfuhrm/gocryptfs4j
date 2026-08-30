@@ -25,6 +25,9 @@ public final class Constants {
     /** Default IV length in bits (128-bit IVs). */
     public static final int DEFAULT_IV_BITS = 128;
 
+    /** XChaCha20-Poly1305 nonce length in bytes (192-bit extended nonce). */
+    public static final int XCHACHA_NONCE_LEN = 24;
+
     /** Length of a per-directory IV. */
     public static final int DIR_IV_LEN = 16;
 

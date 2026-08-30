@@ -20,18 +20,26 @@ public final class ContentEnc {
     /** Nonce length in bytes. */
     public final int ivLen;
 
-    private final Gcm gcm;
+    private final ContentCipher cipher;
     private final byte[] allZeroBlock;
 
     public ContentEnc(byte[] gcmKey, int ivLen) {
-        this(gcmKey, ivLen, Constants.DEFAULT_PLAIN_BS);
+        this(new Gcm(gcmKey), ivLen, Constants.DEFAULT_PLAIN_BS);
     }
 
     public ContentEnc(byte[] gcmKey, int ivLen, long plainBS) {
+        this(new Gcm(gcmKey), ivLen, plainBS);
+    }
+
+    public ContentEnc(ContentCipher cipher, int ivLen) {
+        this(cipher, ivLen, Constants.DEFAULT_PLAIN_BS);
+    }
+
+    public ContentEnc(ContentCipher cipher, int ivLen, long plainBS) {
         this.ivLen = ivLen;
         this.plainBS = plainBS;
         this.cipherBS = plainBS + ivLen + Constants.AUTH_TAG_LEN;
-        this.gcm = new Gcm(gcmKey);
+        this.cipher = cipher;
         this.allZeroBlock = new byte[(int) cipherBS];
     }
 
@@ -67,7 +75,7 @@ public final class ContentEnc {
             throw new IllegalArgumentException("wrong nonce length");
         }
         byte[] aad = concatAD(blockNo, fileId);
-        byte[] ct = gcm.encrypt(plaintext, nonce, aad);
+        byte[] ct = cipher.encrypt(plaintext, nonce, aad);
         byte[] out = new byte[nonce.length + ct.length];
         System.arraycopy(nonce, 0, out, 0, nonce.length);
         System.arraycopy(ct, 0, out, nonce.length, ct.length);
@@ -96,7 +104,7 @@ public final class ContentEnc {
         byte[] ct = new byte[ciphertext.length - ivLen];
         System.arraycopy(ciphertext, ivLen, ct, 0, ct.length);
         byte[] aad = concatAD(blockNo, fileId);
-        return gcm.decrypt(ct, nonce, aad);
+        return cipher.decrypt(ct, nonce, aad);
     }
 
     /** Decrypts a sequence of blocks starting at {@code firstBlockNo}. */

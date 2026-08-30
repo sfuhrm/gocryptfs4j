@@ -95,12 +95,21 @@ public final class GocryptFs implements AutoCloseable {
 
     /** Creates a new filesystem, optionally with plaintext (unencrypted) names. */
     public static GocryptFs create(Path cipherDir, char[] password, boolean plaintextNames) throws IOException {
+        return create(cipherDir, password, plaintextNames, false);
+    }
+
+    /**
+     * Creates a new filesystem, optionally with plaintext (unencrypted) names and
+     * optionally with XChaCha20-Poly1305 content encryption instead of AES-256-GCM.
+     */
+    public static GocryptFs create(Path cipherDir, char[] password, boolean plaintextNames,
+                                   boolean xchacha) throws IOException {
         Path dir = cipherDir.toAbsolutePath().normalize();
         if (!Files.isDirectory(dir)) {
             throw new IOException("cipher dir does not exist: " + dir);
         }
         byte[] masterKey = Keys.randomBytes(Constants.KEY_LEN);
-        ConfigFile config = ConfigFile.create(masterKey, password, plaintextNames);
+        ConfigFile config = ConfigFile.create(masterKey, password, plaintextNames, xchacha);
         config.writeTo(dir.resolve(Constants.CONF_DEFAULT_NAME));
         GocryptFs fs = new GocryptFs(dir, config, masterKey);
         try {
