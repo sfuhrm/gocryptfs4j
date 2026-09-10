@@ -5,6 +5,7 @@ import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.util.Arrays;
+import java.util.Objects;
 
 /**
  * HKDF-SHA256 (RFC 5869) as used by gocryptfs to derive sub-keys from the
@@ -28,8 +29,15 @@ public final class Hkdf {
      * @param info   the context and application-specific information
      * @param outLen the desired output length in bytes
      * @return the derived key
+     * @throws NullPointerException if {@code ikm} or {@code info} is {@code null}
+     * @throws IllegalArgumentException if {@code outLen} is negative
      */
     public static byte[] derive(byte[] ikm, String info, int outLen) {
+        Objects.requireNonNull(ikm, "ikm");
+        Objects.requireNonNull(info, "info");
+        if (outLen < 0) {
+            throw new IllegalArgumentException("negative output length: " + outLen);
+        }
         try {
             byte[] salt = new byte[HASH_LEN];
             byte[] prk = hmac(salt, ikm);

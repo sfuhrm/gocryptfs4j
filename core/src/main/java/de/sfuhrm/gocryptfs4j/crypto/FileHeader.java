@@ -1,6 +1,7 @@
 package de.sfuhrm.gocryptfs4j.crypto;
 
 import java.util.Arrays;
+import java.util.Objects;
 
 /**
  * The per-file header stored at the start of every non-empty file:
@@ -16,8 +17,11 @@ public final class FileHeader {
      *
      * @param version the on-disk format version
      * @param id      the 16-byte random file id
+     * @throws NullPointerException if {@code id} is {@code null}
+     * @throws IllegalArgumentException if {@code id} is not 16 bytes long
      */
     public FileHeader(int version, byte[] id) {
+        Objects.requireNonNull(id, "id");
         if (id.length != Constants.HEADER_ID_LEN) {
             throw new IllegalArgumentException("file id must be " + Constants.HEADER_ID_LEN + " bytes");
         }
@@ -52,9 +56,11 @@ public final class FileHeader {
      *
      * @param buf the serialized header
      * @return the parsed header
+     * @throws NullPointerException if {@code buf} is {@code null}
      * @throws IllegalArgumentException if the header is malformed
      */
     public static FileHeader parse(byte[] buf) {
+        Objects.requireNonNull(buf, "buf");
         if (buf.length != Constants.HEADER_LEN) {
             throw new IllegalArgumentException("invalid header length: want="
                     + Constants.HEADER_LEN + " have=" + buf.length);

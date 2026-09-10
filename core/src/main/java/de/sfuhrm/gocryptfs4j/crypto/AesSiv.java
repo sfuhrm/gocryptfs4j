@@ -10,6 +10,7 @@ import javax.crypto.AEADBadTagException;
 import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.util.Arrays;
+import java.util.Objects;
 
 /**
  * AES-SIV (RFC 5297) helper matching the {@code siv_aead} backend used by
@@ -30,8 +31,11 @@ public final class AesSiv implements ContentCipher {
      * Creates an AES-SIV instance.
      *
      * @param key the 64-byte key (split into two 32-byte halves)
+     * @throws NullPointerException if {@code key} is {@code null}
+     * @throws IllegalArgumentException if {@code key} is not 64 bytes long
      */
     public AesSiv(byte[] key) {
+        Objects.requireNonNull(key, "key");
         if (key.length != Constants.SIV_KEY_LEN) {
             throw new IllegalArgumentException("AES-SIV key must be "
                     + Constants.SIV_KEY_LEN + " bytes");
@@ -48,9 +52,13 @@ public final class AesSiv implements ContentCipher {
      * @param nonce     the 16-byte nonce
      * @param aad       additional authenticated data, or {@code null}
      * @return the SIV followed by the ciphertext
+     * @throws NullPointerException if {@code plaintext} or {@code nonce} is {@code null}
+     * @throws IllegalArgumentException if {@code nonce} is not 16 bytes long
      */
     @Override
     public byte[] encrypt(byte[] plaintext, byte[] nonce, byte[] aad) {
+        Objects.requireNonNull(plaintext, "plaintext");
+        Objects.requireNonNull(nonce, "nonce");
         checkNonce(nonce);
         byte[] siv = s2v(k1, new byte[][]{orEmpty(aad), nonce}, plaintext);
         byte[] ct = ctr(k2, siv, plaintext);
@@ -69,9 +77,13 @@ public final class AesSiv implements ContentCipher {
      * @param aad        additional authenticated data, or {@code null}
      * @return the decrypted plaintext
      * @throws AEADBadTagException on authentication failure
+     * @throws NullPointerException if {@code ciphertext} or {@code nonce} is {@code null}
+     * @throws IllegalArgumentException if {@code nonce} is not 16 bytes long
      */
     @Override
     public byte[] decrypt(byte[] ciphertext, byte[] nonce, byte[] aad) throws GeneralSecurityException {
+        Objects.requireNonNull(ciphertext, "ciphertext");
+        Objects.requireNonNull(nonce, "nonce");
         checkNonce(nonce);
         if (ciphertext.length < Constants.AES_BLOCK_SIZE) {
             throw new AEADBadTagException("AES-SIV ciphertext is too short");

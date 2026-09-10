@@ -29,6 +29,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -59,8 +60,11 @@ public final class GocryptFsProvider extends FileSystemProvider {
      * @param password  the password to unlock the master key with
      * @return the opened filesystem
      * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code cipherDir} or {@code password} is {@code null}
      */
     public FileSystem newFileSystem(Path cipherDir, char[] password) throws IOException {
+        Objects.requireNonNull(cipherDir, "cipherDir");
+        Objects.requireNonNull(password, "password");
         GocryptFs core = GocryptFs.open(cipherDir, password);
         String key = cipherDir.toAbsolutePath().normalize().toString();
         GocryptFsFileSystem fs = new GocryptFsFileSystem(this, core, key);
@@ -73,8 +77,16 @@ public final class GocryptFsProvider extends FileSystemProvider {
         return SCHEME;
     }
 
+    /**
+     * Opens a filesystem from a {@code gocryptfs} URI.
+     *
+     * @throws NullPointerException if {@code uri} is {@code null}
+     * @throws IllegalArgumentException if the scheme is not {@code gocryptfs} or
+     *                                  the environment lacks {@code cipherDir}/{@code password}
+     */
     @Override
     public FileSystem newFileSystem(URI uri, Map<String, ?> env) throws IOException {
+        Objects.requireNonNull(uri, "uri");
         if (!SCHEME.equalsIgnoreCase(uri.getScheme())) {
             throw new IllegalArgumentException("uri scheme is not '" + SCHEME + "': " + uri);
         }
@@ -91,8 +103,14 @@ public final class GocryptFsProvider extends FileSystemProvider {
         return newFileSystem(dir, pw);
     }
 
+    /**
+     * Returns the filesystem for a {@code gocryptfs} URI.
+     *
+     * @throws NullPointerException if {@code uri} is {@code null}
+     */
     @Override
     public FileSystem getFileSystem(URI uri) {
+        Objects.requireNonNull(uri, "uri");
         String key = GocryptFsFileSystem.urlDecode(uri.getHost());
         GocryptFsFileSystem fs = filesystems.get(key);
         if (fs == null && filesystems.size() == 1) {
@@ -104,8 +122,14 @@ public final class GocryptFsProvider extends FileSystemProvider {
         return fs;
     }
 
+    /**
+     * Returns the path for a {@code gocryptfs} URI.
+     *
+     * @throws NullPointerException if {@code uri} is {@code null}
+     */
     @Override
     public Path getPath(URI uri) {
+        Objects.requireNonNull(uri, "uri");
         FileSystem fs = getFileSystem(uri);
         String path = uri.getPath();
         if (path == null || path.isEmpty()) {
@@ -137,9 +161,16 @@ public final class GocryptFsProvider extends FileSystemProvider {
     // Channels, streams
     // ------------------------------------------------------------------
 
+    /**
+     * Opens or creates a byte channel.
+     *
+     * @throws NullPointerException if {@code path} or {@code options} is {@code null}
+     */
     @Override
     public SeekableByteChannel newByteChannel(Path path, Set<? extends OpenOption> options,
                                               FileAttribute<?>... attrs) throws IOException {
+        Objects.requireNonNull(path, "path");
+        Objects.requireNonNull(options, "options");
         GocryptFsPath p = toAbsolute(path);
         GocryptFs fs = core(p);
         GocryptFs.Resolved r = fs.resolve(p.toString());
@@ -172,10 +203,16 @@ public final class GocryptFsProvider extends FileSystemProvider {
         return new GocryptFsFileChannel(cf, write, position);
     }
 
+    /**
+     * Opens a directory stream.
+     *
+     * @throws NullPointerException if {@code dir} is {@code null}
+     */
     @Override
     public DirectoryStream<Path> newDirectoryStream(Path dir,
                                                     DirectoryStream.Filter<? super Path> filter)
             throws IOException {
+        Objects.requireNonNull(dir, "dir");
         GocryptFsPath d = toAbsolute(dir);
         GocryptFs fs = core(d);
         List<Path> entries = new ArrayList<>();
@@ -188,14 +225,26 @@ public final class GocryptFsProvider extends FileSystemProvider {
         return new GocryptFsDirectoryStream(entries);
     }
 
+    /**
+     * Creates a directory.
+     *
+     * @throws NullPointerException if {@code dir} is {@code null}
+     */
     @Override
     public void createDirectory(Path dir, FileAttribute<?>... attrs) throws IOException {
+        Objects.requireNonNull(dir, "dir");
         GocryptFsPath d = toAbsolute(dir);
         core(d).mkdir(d.toString());
     }
 
+    /**
+     * Deletes a file, symlink or empty directory.
+     *
+     * @throws NullPointerException if {@code path} is {@code null}
+     */
     @Override
     public void delete(Path path) throws IOException {
+        Objects.requireNonNull(path, "path");
         GocryptFsPath p = toAbsolute(path);
         core(p).delete(p.toString());
     }
@@ -204,8 +253,15 @@ public final class GocryptFsProvider extends FileSystemProvider {
     // Copy / move
     // ------------------------------------------------------------------
 
+    /**
+     * Copies a file or directory tree.
+     *
+     * @throws NullPointerException if {@code source} or {@code target} is {@code null}
+     */
     @Override
     public void copy(Path source, Path target, CopyOption... options) throws IOException {
+        Objects.requireNonNull(source, "source");
+        Objects.requireNonNull(target, "target");
         GocryptFsPath s = toAbsolute(source);
         GocryptFsPath t = toAbsolute(target);
         GocryptFs fs = core(s);
@@ -233,8 +289,15 @@ public final class GocryptFsProvider extends FileSystemProvider {
         }
     }
 
+    /**
+     * Moves a file or directory tree.
+     *
+     * @throws NullPointerException if {@code source} or {@code target} is {@code null}
+     */
     @Override
     public void move(Path source, Path target, CopyOption... options) throws IOException {
+        Objects.requireNonNull(source, "source");
+        Objects.requireNonNull(target, "target");
         copy(source, target, options);
         deleteRecursively(toAbsolute(source));
     }
@@ -263,8 +326,15 @@ public final class GocryptFsProvider extends FileSystemProvider {
     // Attributes
     // ------------------------------------------------------------------
 
+    /**
+     * Tests whether two paths locate the same file.
+     *
+     * @throws NullPointerException if {@code path} or {@code path2} is {@code null}
+     */
     @Override
     public boolean isSameFile(Path path, Path path2) throws IOException {
+        Objects.requireNonNull(path, "path");
+        Objects.requireNonNull(path2, "path2");
         GocryptFsPath a = toAbsolute(path);
         GocryptFsPath b = toAbsolute(path2);
         if (a.getFileSystem() != b.getFileSystem()) {
@@ -275,27 +345,52 @@ public final class GocryptFsProvider extends FileSystemProvider {
         return ka != null && ka.equals(kb);
     }
 
+    /**
+     * Tests whether a path is considered hidden.
+     *
+     * @throws NullPointerException if {@code path} is {@code null}
+     */
     @Override
     public boolean isHidden(Path path) {
+        Objects.requireNonNull(path, "path");
         Path name = path.getFileName();
         return name != null && name.toString().startsWith(".");
     }
 
+    /**
+     * Returns the file store of a path.
+     *
+     * @throws NullPointerException if {@code path} is {@code null}
+     */
     @Override
     public FileStore getFileStore(Path path) {
+        Objects.requireNonNull(path, "path");
         return new GocryptFsFileStore((GocryptFsFileSystem) path.getFileSystem());
     }
 
+    /**
+     * Checks the existence of a path.
+     *
+     * @throws NullPointerException if {@code path} is {@code null}
+     */
     @Override
     public void checkAccess(Path path, AccessMode... modes) throws IOException {
+        Objects.requireNonNull(path, "path");
         GocryptFsPath p = toAbsolute(path);
         core(p).stat(p.toString());
     }
 
+    /**
+     * Returns a file attribute view.
+     *
+     * @throws NullPointerException if {@code path} or {@code type} is {@code null}
+     */
     @Override
     @SuppressWarnings("unchecked")
     public <V extends FileAttributeView> V getFileAttributeView(Path path, Class<V> type,
                                                                 LinkOption... options) {
+        Objects.requireNonNull(path, "path");
+        Objects.requireNonNull(type, "type");
         if (type == BasicFileAttributeView.class) {
             return (V) new GocryptFsBasicFileAttributeView(
                     (GocryptFsFileSystem) path.getFileSystem(), toAbsolute(path));
@@ -303,11 +398,18 @@ public final class GocryptFsProvider extends FileSystemProvider {
         return null;
     }
 
+    /**
+     * Reads a file's attributes.
+     *
+     * @throws NullPointerException if {@code path} or {@code type} is {@code null}
+     */
     @Override
     @SuppressWarnings("unchecked")
     public <A extends BasicFileAttributes> A readAttributes(Path path, Class<A> type,
                                                             LinkOption... options)
             throws IOException {
+        Objects.requireNonNull(path, "path");
+        Objects.requireNonNull(type, "type");
         if (type == BasicFileAttributes.class) {
             GocryptFsPath p = toAbsolute(path);
             return (A) new GocryptFsFileAttributes(core(p).stat(p.toString()));
@@ -315,9 +417,17 @@ public final class GocryptFsProvider extends FileSystemProvider {
         throw new UnsupportedOperationException("unsupported attribute type: " + type);
     }
 
+    /**
+     * Reads a set of attributes by name.
+     *
+     * @throws NullPointerException if {@code path} or {@code attributes} is {@code null}
+     * @throws IllegalArgumentException if an attribute is not supported
+     */
     @Override
     public Map<String, Object> readAttributes(Path path, String attributes, LinkOption... options)
             throws IOException {
+        Objects.requireNonNull(path, "path");
+        Objects.requireNonNull(attributes, "attributes");
         GocryptFsPath p = toAbsolute(path);
         DirEntry e = core(p).stat(p.toString());
         Map<String, Object> result = new HashMap<>();
@@ -359,9 +469,16 @@ public final class GocryptFsProvider extends FileSystemProvider {
         }
     }
 
+    /**
+     * Sets a file attribute by name.
+     *
+     * @throws NullPointerException if {@code path} or {@code attribute} is {@code null}
+     */
     @Override
     public void setAttribute(Path path, String attribute, Object value, LinkOption... options)
             throws IOException {
+        Objects.requireNonNull(path, "path");
+        Objects.requireNonNull(attribute, "attribute");
         GocryptFsPath p = toAbsolute(path);
         String name = attribute.contains(":") ? attribute.substring(attribute.indexOf(':') + 1)
                 : attribute;

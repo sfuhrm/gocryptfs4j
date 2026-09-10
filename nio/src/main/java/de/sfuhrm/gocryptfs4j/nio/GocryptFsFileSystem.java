@@ -12,6 +12,7 @@ import java.nio.file.PathMatcher;
 import java.nio.file.WatchService;
 import java.nio.file.attribute.UserPrincipalLookupService;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -112,8 +113,15 @@ public final class GocryptFsFileSystem extends FileSystem {
         return Set.of("basic");
     }
 
+    /**
+     * Converts a path string, or a sequence of strings, to a {@link Path}.
+     *
+     * @throws NullPointerException if {@code first} or {@code more} is {@code null}
+     */
     @Override
     public Path getPath(String first, String... more) {
+        Objects.requireNonNull(first, "first");
+        Objects.requireNonNull(more, "more");
         String joined = first;
         for (String m : more) {
             joined = joined.endsWith("/") ? joined + m : joined + "/" + m;
@@ -122,8 +130,15 @@ public final class GocryptFsFileSystem extends FileSystem {
         return new GocryptFsPath(this, joined, abs);
     }
 
+    /**
+     * Creates a path matcher for the given {@code glob} or {@code regex} pattern.
+     *
+     * @throws NullPointerException if {@code syntaxAndPattern} is {@code null}
+     * @throws IllegalArgumentException if the syntax is unknown or the pattern is invalid
+     */
     @Override
     public PathMatcher getPathMatcher(String syntaxAndPattern) {
+        Objects.requireNonNull(syntaxAndPattern, "syntaxAndPattern");
         return GocryptFsPathMatcher.create(syntaxAndPattern);
     }
 

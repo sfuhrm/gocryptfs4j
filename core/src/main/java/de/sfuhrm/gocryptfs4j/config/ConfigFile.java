@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Parses {@code gocryptfs.conf} and unlocks the master key from a password.
@@ -72,8 +73,10 @@ public final class ConfigFile {
      * @param path the path to the config file
      * @return the parsed config file
      * @throws IOException if the file is missing, malformed or unsupported
+     * @throws NullPointerException if {@code path} is {@code null}
      */
     public static ConfigFile load(Path path) throws IOException {
+        Objects.requireNonNull(path, "path");
         String json = Files.readString(path, StandardCharsets.UTF_8);
         ConfigFile cf = GSON.fromJson(json, ConfigFile.class);
         if (cf == null) {
@@ -119,8 +122,10 @@ public final class ConfigFile {
      *
      * @param flag the feature flag name
      * @return true if the flag is set
+     * @throws NullPointerException if {@code flag} is {@code null}
      */
     public boolean isFeatureFlagSet(String flag) {
+        Objects.requireNonNull(flag, "flag");
         return featureFlags != null && featureFlags.contains(flag);
     }
 
@@ -130,8 +135,10 @@ public final class ConfigFile {
      * @param password the password to unlock the master key with
      * @return the 32-byte master key
      * @throws IOException if the password is wrong or the config is malformed
+     * @throws NullPointerException if {@code password} is {@code null}
      */
     public byte[] decryptMasterKey(char[] password) throws IOException {
+        Objects.requireNonNull(password, "password");
         if (masterKey != null) {
             return masterKey;
         }
@@ -290,8 +297,10 @@ public final class ConfigFile {
      *
      * @param masterKey the 32-byte master key
      * @return the content-encryption helper
+     * @throws NullPointerException if {@code masterKey} is {@code null}
      */
     public ContentEnc contentEnc(byte[] masterKey) {
+        Objects.requireNonNull(masterKey, "masterKey");
         boolean useHkdf = hkdf();
         if (aessiv()) {
             byte[] sivKey = useHkdf
@@ -347,9 +356,13 @@ public final class ConfigFile {
      * @param plaintextNames whether to store file names unencrypted
      * @param cipherType     the content-encryption cipher
      * @return the created config file
+     * @throws NullPointerException if {@code masterKey}, {@code password} or {@code cipherType} is {@code null}
      */
     public static ConfigFile create(byte[] masterKey, char[] password, boolean plaintextNames,
                                     ContentCipherType cipherType) {
+        Objects.requireNonNull(masterKey, "masterKey");
+        Objects.requireNonNull(password, "password");
+        Objects.requireNonNull(cipherType, "cipherType");
         ConfigFile cf = new ConfigFile();
         cf.creator = "gocryptfs4j 0.1";
         cf.version = Constants.CURRENT_VERSION;
@@ -413,8 +426,10 @@ public final class ConfigFile {
      *
      * @param path the path to write to
      * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code path} is {@code null}
      */
     public void writeTo(Path path) throws IOException {
+        Objects.requireNonNull(path, "path");
         String json = GSON.toJson(this) + "\n";
         Files.writeString(path, json, StandardCharsets.UTF_8,
                 StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);

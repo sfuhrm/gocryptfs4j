@@ -7,6 +7,7 @@ import org.bouncycastle.crypto.params.KeyParameter;
 
 import javax.crypto.AEADBadTagException;
 import java.security.GeneralSecurityException;
+import java.util.Objects;
 
 /**
  * XChaCha20-Poly1305 helper matching Go's {@code chacha20poly1305.NewX}: a
@@ -21,8 +22,11 @@ public final class XChaCha20Poly1305 implements ContentCipher {
      * Creates an XChaCha20-Poly1305 instance.
      *
      * @param key the 32-byte key
+     * @throws NullPointerException if {@code key} is {@code null}
+     * @throws IllegalArgumentException if {@code key} is not 32 bytes long
      */
     public XChaCha20Poly1305(byte[] key) {
+        Objects.requireNonNull(key, "key");
         if (key.length != Constants.KEY_LEN) {
             throw new IllegalArgumentException("XChaCha20-Poly1305 key must be "
                     + Constants.KEY_LEN + " bytes");
@@ -37,9 +41,13 @@ public final class XChaCha20Poly1305 implements ContentCipher {
      * @param nonce     the 24-byte nonce
      * @param aad       additional authenticated data, or {@code null}
      * @return the ciphertext followed by the 16-byte tag
+     * @throws NullPointerException if {@code plaintext} or {@code nonce} is {@code null}
+     * @throws IllegalArgumentException if {@code nonce} is not 24 bytes long
      */
     @Override
     public byte[] encrypt(byte[] plaintext, byte[] nonce, byte[] aad) {
+        Objects.requireNonNull(plaintext, "plaintext");
+        Objects.requireNonNull(nonce, "nonce");
         if (nonce.length != Constants.XCHACHA_NONCE_LEN) {
             throw new IllegalArgumentException("XChaCha20-Poly1305 nonce must be "
                     + Constants.XCHACHA_NONCE_LEN + " bytes");
@@ -65,9 +73,13 @@ public final class XChaCha20Poly1305 implements ContentCipher {
      * @param aad        additional authenticated data, or {@code null}
      * @return the decrypted plaintext
      * @throws AEADBadTagException on authentication failure
+     * @throws NullPointerException if {@code ciphertext} or {@code nonce} is {@code null}
+     * @throws IllegalArgumentException if {@code nonce} is not 24 bytes long
      */
     @Override
     public byte[] decrypt(byte[] ciphertext, byte[] nonce, byte[] aad) throws GeneralSecurityException {
+        Objects.requireNonNull(ciphertext, "ciphertext");
+        Objects.requireNonNull(nonce, "nonce");
         if (nonce.length != Constants.XCHACHA_NONCE_LEN) {
             throw new IllegalArgumentException("XChaCha20-Poly1305 nonce must be "
                     + Constants.XCHACHA_NONCE_LEN + " bytes");

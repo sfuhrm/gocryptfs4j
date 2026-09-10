@@ -2,6 +2,7 @@ package de.sfuhrm.gocryptfs4j.crypto;
 
 import java.io.ByteArrayOutputStream;
 import java.security.GeneralSecurityException;
+import java.util.Objects;
 
 /**
  * Encrypts and decrypts file content blocks.
@@ -61,12 +62,20 @@ public final class ContentEnc {
      * @param cipher  the authenticated-encryption cipher
      * @param ivLen   the nonce length in bytes
      * @param plainBS the plaintext block size in bytes
+     * @throws NullPointerException if {@code cipher} is {@code null}
+     * @throws IllegalArgumentException if {@code ivLen} or {@code plainBS} is not positive
      */
     public ContentEnc(ContentCipher cipher, int ivLen, long plainBS) {
+        this.cipher = Objects.requireNonNull(cipher, "cipher");
+        if (ivLen <= 0) {
+            throw new IllegalArgumentException("ivLen must be positive: " + ivLen);
+        }
+        if (plainBS <= 0) {
+            throw new IllegalArgumentException("plainBS must be positive: " + plainBS);
+        }
         this.ivLen = ivLen;
         this.plainBS = plainBS;
         this.cipherBS = plainBS + ivLen + Constants.AUTH_TAG_LEN;
-        this.cipher = cipher;
         this.allZeroBlock = new byte[(int) cipherBS];
     }
 
@@ -97,8 +106,14 @@ public final class ContentEnc {
      * @param blockNo   the block number (used as additional authenticated data)
      * @param fileId    the 16-byte file id, or {@code null}
      * @return the nonce followed by ciphertext and tag
+     * @throws NullPointerException if {@code plaintext} is {@code null}
+     * @throws IllegalArgumentException if {@code blockNo} is negative
      */
     public byte[] encryptBlock(byte[] plaintext, long blockNo, byte[] fileId) {
+        Objects.requireNonNull(plaintext, "plaintext");
+        if (blockNo < 0) {
+            throw new IllegalArgumentException("negative block number: " + blockNo);
+        }
         if (plaintext.length == 0) {
             return plaintext;
         }
@@ -113,8 +128,15 @@ public final class ContentEnc {
      * @param fileId    the 16-byte file id, or {@code null}
      * @param nonce     the nonce to use
      * @return the nonce followed by ciphertext and tag
+     * @throws NullPointerException if {@code plaintext} or {@code nonce} is {@code null}
+     * @throws IllegalArgumentException if {@code blockNo} is negative or {@code nonce} has the wrong length
      */
     public byte[] encryptBlock(byte[] plaintext, long blockNo, byte[] fileId, byte[] nonce) {
+        Objects.requireNonNull(plaintext, "plaintext");
+        Objects.requireNonNull(nonce, "nonce");
+        if (blockNo < 0) {
+            throw new IllegalArgumentException("negative block number: " + blockNo);
+        }
         if (plaintext.length == 0) {
             return plaintext;
         }
@@ -138,8 +160,14 @@ public final class ContentEnc {
      * @param fileId     the 16-byte file id, or {@code null}
      * @return the decrypted plaintext
      * @throws GeneralSecurityException on authentication failure
+     * @throws NullPointerException if {@code ciphertext} is {@code null}
+     * @throws IllegalArgumentException if {@code blockNo} is negative or the block is malformed
      */
     public byte[] decryptBlock(byte[] ciphertext, long blockNo, byte[] fileId) throws GeneralSecurityException {
+        Objects.requireNonNull(ciphertext, "ciphertext");
+        if (blockNo < 0) {
+            throw new IllegalArgumentException("negative block number: " + blockNo);
+        }
         if (ciphertext.length == 0) {
             return ciphertext;
         }
@@ -168,8 +196,14 @@ public final class ContentEnc {
      * @param fileId       the 16-byte file id, or {@code null}
      * @return the decrypted plaintext
      * @throws GeneralSecurityException on authentication failure
+     * @throws NullPointerException if {@code ciphertext} is {@code null}
+     * @throws IllegalArgumentException if {@code firstBlockNo} is negative
      */
     public byte[] decryptBlocks(byte[] ciphertext, long firstBlockNo, byte[] fileId) throws GeneralSecurityException {
+        Objects.requireNonNull(ciphertext, "ciphertext");
+        if (firstBlockNo < 0) {
+            throw new IllegalArgumentException("negative block number: " + firstBlockNo);
+        }
         ByteArrayOutputStream out = new ByteArrayOutputStream(ciphertext.length);
         int pos = 0;
         long blockNo = firstBlockNo;

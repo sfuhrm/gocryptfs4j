@@ -27,6 +27,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * A Java API to a gocryptfs cipher directory.
@@ -81,8 +82,11 @@ public final class GocryptFs implements AutoCloseable {
      * @param password  the password to unlock the master key with
      * @return the opened filesystem
      * @throws IOException if the config is missing, the password is wrong or the filesystem is corrupt
+     * @throws NullPointerException if {@code cipherDir} or {@code password} is {@code null}
      */
     public static GocryptFs open(Path cipherDir, char[] password) throws IOException {
+        Objects.requireNonNull(cipherDir, "cipherDir");
+        Objects.requireNonNull(password, "password");
         Path confPath = cipherDir.resolve(Constants.CONF_DEFAULT_NAME);
         ConfigFile config = ConfigFile.load(confPath);
         byte[] masterKey = config.decryptMasterKey(password);
@@ -97,8 +101,10 @@ public final class GocryptFs implements AutoCloseable {
      * @param password  the password to unlock the master key with
      * @return the opened filesystem
      * @throws IOException if the config is missing, the password is wrong or the filesystem is corrupt
+     * @throws NullPointerException if {@code cipherDir} or {@code password} is {@code null}
      */
     public static GocryptFs open(Path cipherDir, String password) throws IOException {
+        Objects.requireNonNull(password, "password");
         return open(cipherDir, password.toCharArray());
     }
 
@@ -138,9 +144,13 @@ public final class GocryptFs implements AutoCloseable {
      * @param cipherType     the content-encryption cipher
      * @return the opened filesystem
      * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code cipherDir}, {@code password} or {@code cipherType} is {@code null}
      */
     public static GocryptFs create(Path cipherDir, char[] password, boolean plaintextNames,
                                    ContentCipherType cipherType) throws IOException {
+        Objects.requireNonNull(cipherDir, "cipherDir");
+        Objects.requireNonNull(password, "password");
+        Objects.requireNonNull(cipherType, "cipherType");
         Path dir = cipherDir.toAbsolutePath().normalize();
         if (!Files.isDirectory(dir)) {
             throw new IOException("cipher dir does not exist: " + dir);
@@ -215,8 +225,10 @@ public final class GocryptFs implements AutoCloseable {
      * @param cipherDir the ciphertext directory
      * @return the 16-byte directory IV
      * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code cipherDir} is {@code null}
      */
     public byte[] readDirIV(Path cipherDir) throws IOException {
+        Objects.requireNonNull(cipherDir, "cipherDir");
         if (plaintextNames) {
             return new byte[Constants.DIR_IV_LEN];
         }
@@ -241,8 +253,10 @@ public final class GocryptFs implements AutoCloseable {
      *
      * @param cipherDir the ciphertext directory
      * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code cipherDir} is {@code null}
      */
     public void writeDirIV(Path cipherDir) throws IOException {
+        Objects.requireNonNull(cipherDir, "cipherDir");
         if (plaintextNames || deterministicNames) {
             return;
         }
@@ -261,8 +275,11 @@ public final class GocryptFs implements AutoCloseable {
      * @param plainName the plaintext name
      * @param dirIV     the 16-byte directory IV
      * @return the ciphertext name
+     * @throws NullPointerException if {@code plainName} or {@code dirIV} is {@code null}
      */
     public String cipherNameFor(String plainName, byte[] dirIV) {
+        Objects.requireNonNull(plainName, "plainName");
+        Objects.requireNonNull(dirIV, "dirIV");
         if (plaintextNames) {
             return plainName;
         }
@@ -275,8 +292,11 @@ public final class GocryptFs implements AutoCloseable {
      * @param cipherName the ciphertext name
      * @param dirIV      the 16-byte directory IV
      * @return the plaintext name
+     * @throws NullPointerException if {@code cipherName} or {@code dirIV} is {@code null}
      */
     public String plainNameFor(String cipherName, byte[] dirIV) {
+        Objects.requireNonNull(cipherName, "cipherName");
+        Objects.requireNonNull(dirIV, "dirIV");
         if (plaintextNames) {
             return cipherName;
         }
@@ -315,8 +335,11 @@ public final class GocryptFs implements AutoCloseable {
      * @param plainPath the plaintext absolute path
      * @return the resolution result
      * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code plainPath} is {@code null}
+     * @throws IllegalArgumentException if the path contains a {@code ..} component
      */
     public Resolved resolve(String plainPath) throws IOException {
+        Objects.requireNonNull(plainPath, "plainPath");
         List<String> comps = normalize(plainPath);
         Path cur = cipherRoot;
         byte[] curIV = readDirIV(cur);
@@ -378,8 +401,10 @@ public final class GocryptFs implements AutoCloseable {
      * @param plainDir the plaintext directory path
      * @return the directory entries sorted by plaintext name
      * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code plainDir} is {@code null}
      */
     public List<DirEntry> list(String plainDir) throws IOException {
+        Objects.requireNonNull(plainDir, "plainDir");
         Resolved r = resolve(plainDir);
         byte[] iv = readDirIV(r.cipherPath);
         List<DirEntry> entries = listCipherDir(r.cipherPath, iv);
@@ -394,8 +419,11 @@ public final class GocryptFs implements AutoCloseable {
      * @param iv        the 16-byte directory IV
      * @return the directory entries
      * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code cipherDir} or {@code iv} is {@code null}
      */
     public List<DirEntry> listCipherDir(Path cipherDir, byte[] iv) throws IOException {
+        Objects.requireNonNull(cipherDir, "cipherDir");
+        Objects.requireNonNull(iv, "iv");
         List<DirEntry> out = new ArrayList<>();
         boolean isRoot = cipherDir.equals(cipherRoot);
         try (DirectoryStream<Path> ds = Files.newDirectoryStream(cipherDir)) {
@@ -465,8 +493,10 @@ public final class GocryptFs implements AutoCloseable {
      * @param cipherSymlink the ciphertext symlink path
      * @return the plaintext symlink target
      * @throws IOException on filesystem or decryption errors
+     * @throws NullPointerException if {@code cipherSymlink} is {@code null}
      */
     public String readSymlink(Path cipherSymlink) throws IOException {
+        Objects.requireNonNull(cipherSymlink, "cipherSymlink");
         String target = Files.readSymbolicLink(cipherSymlink).toString();
         if (plaintextNames) {
             return target;
@@ -489,8 +519,10 @@ public final class GocryptFs implements AutoCloseable {
      * @param plainPath the plaintext symlink path
      * @return the plaintext symlink target
      * @throws IOException on filesystem or decryption errors
+     * @throws NullPointerException if {@code plainPath} is {@code null}
      */
     public String readSymlinkTarget(String plainPath) throws IOException {
+        Objects.requireNonNull(plainPath, "plainPath");
         Resolved r = resolve(plainPath);
         return readSymlink(r.cipherPath);
     }
@@ -505,8 +537,10 @@ public final class GocryptFs implements AutoCloseable {
      * @param plainPath the plaintext path
      * @return the directory entry
      * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code plainPath} is {@code null}
      */
     public DirEntry stat(String plainPath) throws IOException {
+        Objects.requireNonNull(plainPath, "plainPath");
         Resolved r = resolve(plainPath);
         return statResolved(r);
     }
@@ -542,8 +576,10 @@ public final class GocryptFs implements AutoCloseable {
      * @param writable   whether to open for writing
      * @return the opened cipher file
      * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code cipherFile} is {@code null}
      */
     public CipherFile openCipherFile(Path cipherFile, boolean writable) throws IOException {
+        Objects.requireNonNull(cipherFile, "cipherFile");
         return CipherFile.open(cipherFile, contentEnc, writable);
     }
 
@@ -553,8 +589,10 @@ public final class GocryptFs implements AutoCloseable {
      * @param plainFile the plaintext file path
      * @return the plaintext size in bytes
      * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code plainFile} is {@code null}
      */
     public long size(String plainFile) throws IOException {
+        Objects.requireNonNull(plainFile, "plainFile");
         Resolved r = resolve(plainFile);
         try (CipherFile cf = openCipherFile(r.cipherPath, false)) {
             return cf.plainSize();
@@ -567,8 +605,10 @@ public final class GocryptFs implements AutoCloseable {
      * @param plainFile the plaintext file path
      * @return the plaintext content
      * @throws IOException on filesystem or decryption errors
+     * @throws NullPointerException if {@code plainFile} is {@code null}
      */
     public byte[] readAll(String plainFile) throws IOException {
+        Objects.requireNonNull(plainFile, "plainFile");
         Resolved r = resolve(plainFile);
         try (CipherFile cf = openCipherFile(r.cipherPath, false)) {
             long size = cf.plainSize();
@@ -594,8 +634,10 @@ public final class GocryptFs implements AutoCloseable {
      * @param plainFile the plaintext file path
      * @return the decrypting input stream
      * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code plainFile} is {@code null}
      */
     public InputStream openRead(String plainFile) throws IOException {
+        Objects.requireNonNull(plainFile, "plainFile");
         Resolved r = resolve(plainFile);
         CipherFile cf = openCipherFile(r.cipherPath, false);
         return new CipherInputStream(cf);
@@ -608,8 +650,15 @@ public final class GocryptFs implements AutoCloseable {
      * @param offset    the plaintext offset to write at
      * @param data      the data to write
      * @throws IOException on filesystem or encryption errors
+     * @throws NullPointerException if {@code plainFile} or {@code data} is {@code null}
+     * @throws IllegalArgumentException if {@code offset} is negative
      */
     public void write(String plainFile, long offset, byte[] data) throws IOException {
+        Objects.requireNonNull(plainFile, "plainFile");
+        Objects.requireNonNull(data, "data");
+        if (offset < 0) {
+            throw new IllegalArgumentException("negative offset: " + offset);
+        }
         Resolved r = resolve(plainFile);
         try (CipherFile cf = openCipherFile(r.cipherPath, true)) {
             cf.write(ByteBuffer.wrap(data), offset);
@@ -622,8 +671,14 @@ public final class GocryptFs implements AutoCloseable {
      * @param plainFile the plaintext file path
      * @param newSize   the new plaintext size in bytes
      * @throws IOException on filesystem or encryption errors
+     * @throws NullPointerException if {@code plainFile} is {@code null}
+     * @throws IllegalArgumentException if {@code newSize} is negative
      */
     public void truncate(String plainFile, long newSize) throws IOException {
+        Objects.requireNonNull(plainFile, "plainFile");
+        if (newSize < 0) {
+            throw new IllegalArgumentException("negative size: " + newSize);
+        }
         Resolved r = resolve(plainFile);
         try (CipherFile cf = openCipherFile(r.cipherPath, true)) {
             cf.truncate(newSize);
@@ -638,9 +693,11 @@ public final class GocryptFs implements AutoCloseable {
      * @param lastAccessTime   the last-access time
      * @param createTime       the creation time
      * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code plainPath} is {@code null}
      */
     public void setTimes(String plainPath, FileTime lastModifiedTime, FileTime lastAccessTime,
                          FileTime createTime) throws IOException {
+        Objects.requireNonNull(plainPath, "plainPath");
         Resolved r = resolve(plainPath);
         BasicFileAttributeView view = Files.getFileAttributeView(r.cipherPath,
                 BasicFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
@@ -697,8 +754,10 @@ public final class GocryptFs implements AutoCloseable {
      *
      * @param plainFile the plaintext file path
      * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code plainFile} is {@code null}
      */
     public void createFile(String plainFile) throws IOException {
+        Objects.requireNonNull(plainFile, "plainFile");
         Resolved r = resolveParent(plainFile);
         prepareLongName(r);
         Files.createFile(r.cipherPath);
@@ -709,8 +768,10 @@ public final class GocryptFs implements AutoCloseable {
      *
      * @param plainDir the plaintext directory path
      * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code plainDir} is {@code null}
      */
     public void mkdir(String plainDir) throws IOException {
+        Objects.requireNonNull(plainDir, "plainDir");
         Resolved r = resolveParent(plainDir);
         prepareLongName(r);
         Files.createDirectory(r.cipherPath);
@@ -722,8 +783,10 @@ public final class GocryptFs implements AutoCloseable {
      *
      * @param plainPath the plaintext path
      * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code plainPath} is {@code null}
      */
     public void delete(String plainPath) throws IOException {
+        Objects.requireNonNull(plainPath, "plainPath");
         Resolved r = resolve(plainPath);
         if (Files.isDirectory(r.cipherPath, LinkOption.NOFOLLOW_LINKS)) {
             Files.deleteIfExists(r.cipherPath.resolve(Constants.DIR_IV_FILENAME));
@@ -743,8 +806,11 @@ public final class GocryptFs implements AutoCloseable {
      * @param plainPath the plaintext symlink path
      * @param target    the plaintext target
      * @throws IOException on filesystem or encryption errors
+     * @throws NullPointerException if {@code plainPath} or {@code target} is {@code null}
      */
     public void createSymlink(String plainPath, String target) throws IOException {
+        Objects.requireNonNull(plainPath, "plainPath");
+        Objects.requireNonNull(target, "target");
         Resolved r = resolveParent(plainPath);
         prepareLongName(r);
         String cTarget = target;

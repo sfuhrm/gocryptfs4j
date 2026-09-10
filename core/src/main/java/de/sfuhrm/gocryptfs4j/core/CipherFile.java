@@ -12,6 +12,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.security.GeneralSecurityException;
 import java.util.Arrays;
+import java.util.Objects;
 
 /**
  * Random-access read/write access to a single encrypted (cipher-side) file.
@@ -41,8 +42,11 @@ public final class CipherFile implements AutoCloseable {
      * @param writable   whether the file should be opened for writing
      * @return the opened cipher file
      * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code cipherPath} or {@code enc} is {@code null}
      */
     public static CipherFile open(Path cipherPath, ContentEnc enc, boolean writable) throws IOException {
+        Objects.requireNonNull(cipherPath, "cipherPath");
+        Objects.requireNonNull(enc, "enc");
         FileChannel ch;
         if (writable) {
             ch = FileChannel.open(cipherPath, StandardOpenOption.READ, StandardOpenOption.WRITE);
@@ -96,8 +100,14 @@ public final class CipherFile implements AutoCloseable {
      * @param plainOffset the plaintext offset to read from
      * @return number of bytes read, or -1 if at or past end of file
      * @throws IOException on filesystem or decryption errors
+     * @throws NullPointerException if {@code dst} is {@code null}
+     * @throws IllegalArgumentException if {@code plainOffset} is negative
      */
     public int read(ByteBuffer dst, long plainOffset) throws IOException {
+        Objects.requireNonNull(dst, "dst");
+        if (plainOffset < 0) {
+            throw new IllegalArgumentException("negative offset: " + plainOffset);
+        }
         long size = plainSize();
         if (plainOffset >= size) {
             return -1;
@@ -147,8 +157,14 @@ public final class CipherFile implements AutoCloseable {
      * @param plainOffset the plaintext offset to write at
      * @return number of bytes written
      * @throws IOException on filesystem or encryption errors
+     * @throws NullPointerException if {@code src} is {@code null}
+     * @throws IllegalArgumentException if {@code plainOffset} is negative
      */
     public int write(ByteBuffer src, long plainOffset) throws IOException {
+        Objects.requireNonNull(src, "src");
+        if (plainOffset < 0) {
+            throw new IllegalArgumentException("negative offset: " + plainOffset);
+        }
         int length = src.remaining();
         if (length == 0) {
             return 0;
@@ -205,8 +221,12 @@ public final class CipherFile implements AutoCloseable {
      *
      * @param newPlainSize the new plaintext size in bytes
      * @throws IOException on filesystem or encryption errors
+     * @throws IllegalArgumentException if {@code newPlainSize} is negative
      */
     public void truncate(long newPlainSize) throws IOException {
+        if (newPlainSize < 0) {
+            throw new IllegalArgumentException("negative size: " + newPlainSize);
+        }
         long oldSize = plainSize();
         if (newPlainSize == oldSize) {
             return;

@@ -1,5 +1,7 @@
 package de.sfuhrm.gocryptfs4j.crypto;
 
+import java.util.Objects;
+
 /**
  * EME (ECB-Mix-ECB) wide-block encryption, as described by Halevi and Rogaway
  * and implemented by github.com/rfjakob/eme.
@@ -16,8 +18,11 @@ public final class Eme {
      * Creates an EME instance over the given block cipher.
      *
      * @param bc the underlying block cipher (must have a 16-byte block size)
+     * @throws NullPointerException if {@code bc} is {@code null}
+     * @throws IllegalArgumentException if {@code bc} does not have a 16-byte block size
      */
     public Eme(BlockCipher bc) {
+        Objects.requireNonNull(bc, "bc");
         if (bc.blockSize() != Constants.AES_BLOCK_SIZE) {
             throw new IllegalArgumentException("EME requires a 16-byte block cipher");
         }
@@ -30,8 +35,12 @@ public final class Eme {
      * @param tweak the 16-byte tweak
      * @param input the plaintext (a positive multiple of 16 bytes)
      * @return the ciphertext
+     * @throws NullPointerException if {@code tweak} or {@code input} is {@code null}
+     * @throws IllegalArgumentException if {@code tweak} is not 16 bytes or {@code input} is not a positive multiple of 16 bytes
      */
     public byte[] encrypt(byte[] tweak, byte[] input) {
+        Objects.requireNonNull(tweak, "tweak");
+        Objects.requireNonNull(input, "input");
         return transform(tweak, input, true);
     }
 
@@ -41,8 +50,12 @@ public final class Eme {
      * @param tweak the 16-byte tweak
      * @param input the ciphertext (a positive multiple of 16 bytes)
      * @return the plaintext
+     * @throws NullPointerException if {@code tweak} or {@code input} is {@code null}
+     * @throws IllegalArgumentException if {@code tweak} is not 16 bytes or {@code input} is not a positive multiple of 16 bytes
      */
     public byte[] decrypt(byte[] tweak, byte[] input) {
+        Objects.requireNonNull(tweak, "tweak");
+        Objects.requireNonNull(input, "input");
         return transform(tweak, input, false);
     }
 

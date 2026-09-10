@@ -7,6 +7,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Base64;
+import java.util.Objects;
 
 /**
  * Encrypts and decrypts file names using AES-256-EME with a per-directory IV.
@@ -35,10 +36,11 @@ public final class NameTransform {
      * @param longNameMax        the long-name limit in bytes
      * @param raw64              whether to use raw (unpadded) base64url
      * @param deterministicNames whether to use a deterministic (all-zero) diriv
+     * @throws NullPointerException if {@code eme} is {@code null}
      */
     public NameTransform(Eme eme, boolean longNames, int longNameMax, boolean raw64,
                          boolean deterministicNames) {
-        this.eme = eme;
+        this.eme = Objects.requireNonNull(eme, "eme");
         this.longNames = longNames;
         this.longNameMax = (longNameMax <= 0 || longNameMax > Constants.NAME_MAX)
                 ? Constants.NAME_MAX : longNameMax;
@@ -67,8 +69,11 @@ public final class NameTransform {
      * @param plainName the plaintext name
      * @param iv        the 16-byte directory IV
      * @return the encrypted, base64url-encoded name
+     * @throws NullPointerException if {@code plainName} or {@code iv} is {@code null}
      */
     public String encryptName(String plainName, byte[] iv) {
+        Objects.requireNonNull(plainName, "plainName");
+        Objects.requireNonNull(iv, "iv");
         byte[] bin = plainName.getBytes(StandardCharsets.UTF_8);
         bin = pad16(bin);
         bin = eme.encrypt(iv, bin);
@@ -81,9 +86,12 @@ public final class NameTransform {
      * @param cipherName the ciphertext name
      * @param iv         the 16-byte directory IV
      * @return the plaintext name
+     * @throws NullPointerException if {@code cipherName} or {@code iv} is {@code null}
      * @throws IllegalArgumentException if the name is not valid ciphertext
      */
     public String decryptName(String cipherName, byte[] iv) {
+        Objects.requireNonNull(cipherName, "cipherName");
+        Objects.requireNonNull(iv, "iv");
         byte[] bin;
         try {
             bin = b64Decoder.decode(cipherName);
@@ -108,8 +116,11 @@ public final class NameTransform {
      * @param name the plaintext name
      * @param iv   the 16-byte directory IV
      * @return the ciphertext name, possibly hashed
+     * @throws NullPointerException if {@code name} or {@code iv} is {@code null}
      */
     public String encryptAndHashName(String name, byte[] iv) {
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(iv, "iv");
         String cName = encryptName(name, iv);
         if (longNames && cName.length() > longNameMax) {
             return hashLongName(cName);
@@ -122,8 +133,10 @@ public final class NameTransform {
      *
      * @param cName the ciphertext name
      * @return the long-name hash
+     * @throws NullPointerException if {@code cName} is {@code null}
      */
     public String hashLongName(String cName) {
+        Objects.requireNonNull(cName, "cName");
         byte[] hash = sha256(cName.getBytes(StandardCharsets.UTF_8));
         return Constants.LONG_NAME_PREFIX + b64Encoder.encodeToString(hash);
     }
@@ -134,8 +147,10 @@ public final class NameTransform {
      * @param cName the ciphertext name
      * @return one of {@link #LONG_NAME_CONTENT}, {@link #LONG_NAME_FILENAME} or
      *         {@link #LONG_NAME_NONE}
+     * @throws NullPointerException if {@code cName} is {@code null}
      */
     public int nameType(String cName) {
+        Objects.requireNonNull(cName, "cName");
         if (!cName.startsWith(Constants.LONG_NAME_PREFIX)) {
             return LONG_NAME_NONE;
         }
@@ -150,6 +165,7 @@ public final class NameTransform {
      *
      * @param cName the ciphertext name
      * @return true if {@code cName} is a long-name content store
+     * @throws NullPointerException if {@code cName} is {@code null}
      */
     public boolean isLongContent(String cName) {
         return nameType(cName) == LONG_NAME_CONTENT;
@@ -160,8 +176,10 @@ public final class NameTransform {
      *
      * @param cName the ".name" support file name
      * @return the content-file name without the suffix
+     * @throws NullPointerException if {@code cName} is {@code null}
      */
     public static String removeLongNameSuffix(String cName) {
+        Objects.requireNonNull(cName, "cName");
         return cName.substring(0, cName.length() - Constants.LONG_NAME_SUFFIX.length());
     }
 
@@ -170,8 +188,10 @@ public final class NameTransform {
      *
      * @param data the data to encode
      * @return the base64url encoding
+     * @throws NullPointerException if {@code data} is {@code null}
      */
     public String b64Encode(byte[] data) {
+        Objects.requireNonNull(data, "data");
         return b64Encoder.encodeToString(data);
     }
 
@@ -180,8 +200,10 @@ public final class NameTransform {
      *
      * @param s the base64url string
      * @return the decoded bytes
+     * @throws NullPointerException if {@code s} is {@code null}
      */
     public byte[] b64Decode(String s) {
+        Objects.requireNonNull(s, "s");
         return b64Decoder.decode(s);
     }
 

@@ -4,6 +4,7 @@ import javax.crypto.Cipher;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import java.security.GeneralSecurityException;
+import java.util.Objects;
 
 /**
  * AES-256-GCM helper matching Go's {@code cipher.NewGCMWithNonceSize} with a
@@ -21,8 +22,11 @@ public final class Gcm implements ContentCipher {
      * Creates an AES-256-GCM instance.
      *
      * @param key the 32-byte AES key
+     * @throws NullPointerException if {@code key} is {@code null}
+     * @throws IllegalArgumentException if {@code key} is not 32 bytes long
      */
     public Gcm(byte[] key) {
+        Objects.requireNonNull(key, "key");
         if (key.length != Constants.KEY_LEN) {
             throw new IllegalArgumentException("GCM key must be " + Constants.KEY_LEN + " bytes");
         }
@@ -36,9 +40,12 @@ public final class Gcm implements ContentCipher {
      * @param nonce     the nonce (12 or 16 bytes)
      * @param aad       additional authenticated data, or {@code null}
      * @return the ciphertext followed by the 16-byte tag
+     * @throws NullPointerException if {@code plaintext} or {@code nonce} is {@code null}
      */
     @Override
     public byte[] encrypt(byte[] plaintext, byte[] nonce, byte[] aad) {
+        Objects.requireNonNull(plaintext, "plaintext");
+        Objects.requireNonNull(nonce, "nonce");
         try {
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
             cipher.init(Cipher.ENCRYPT_MODE, key, new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8, nonce));
@@ -61,9 +68,12 @@ public final class Gcm implements ContentCipher {
      * @return the decrypted plaintext
      * @throws javax.crypto.AEADBadTagException (a GeneralSecurityException) on
      *         authentication failure
+     * @throws NullPointerException if {@code ciphertext} or {@code nonce} is {@code null}
      */
     @Override
     public byte[] decrypt(byte[] ciphertext, byte[] nonce, byte[] aad) throws GeneralSecurityException {
+        Objects.requireNonNull(ciphertext, "ciphertext");
+        Objects.requireNonNull(nonce, "nonce");
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
         cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8, nonce));
         if (aad != null && aad.length > 0) {

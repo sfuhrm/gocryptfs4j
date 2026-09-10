@@ -2,6 +2,7 @@ package de.sfuhrm.gocryptfs4j.core;
 
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
+import java.util.Objects;
 
 /**
  * A directory entry of the decrypted (plaintext) view.
@@ -42,14 +43,15 @@ public final class DirEntry {
      * @param lastAccessTime   the last-access time
      * @param creationTime     the creation time
      * @param fileKey          the file key
+     * @throws NullPointerException if {@code plainName}, {@code cipherPath} or {@code kind} is {@code null}
      */
     public DirEntry(String plainName, String cipherName, Path cipherPath, Kind kind, long size,
                     FileTime lastModifiedTime, FileTime lastAccessTime, FileTime creationTime,
                     Object fileKey) {
-        this.plainName = plainName;
+        this.plainName = Objects.requireNonNull(plainName, "plainName");
         this.cipherName = cipherName;
-        this.cipherPath = cipherPath;
-        this.kind = kind;
+        this.cipherPath = Objects.requireNonNull(cipherPath, "cipherPath");
+        this.kind = Objects.requireNonNull(kind, "kind");
         this.size = size;
         this.lastModifiedTime = lastModifiedTime;
         this.lastAccessTime = lastAccessTime;
