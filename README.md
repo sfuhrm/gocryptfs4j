@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![build](https://github.com/sfuhrm/gocryptfs4j/actions/workflows/build.yml/badge.svg)](https://github.com/sfuhrm/gocryptfs4j/actions/workflows/build.yml)
-![Java](https://img.shields.io/badge/Java-17-blue.svg)
+![Java](https://img.shields.io/badge/Java-11-blue.svg)
 [![Coverage](https://raw.githubusercontent.com/sfuhrm/gocryptfs4j/gh-pages/jacoco.svg)]() 
 [![ReleaseDate](https://img.shields.io/github/release-date/sfuhrm/gocryptfs4j)](https://github.com/sfuhrm/gocryptfs4j/releases)
 [![Maven Central](https://img.shields.io/maven-central/v/de.sfuhrm/gocryptfs4j)](https://central.sonatype.com/artifact/de.sfuhrm/gocryptfs4j)
@@ -54,7 +54,8 @@ as gocryptfs, so both tools operate on the same data:
 
 ## Requirements
 
-* Java 17 or newer.
+* Java 11 or newer (to run).
+* JDK 17 or newer (to build; the test sources use `java.util.HexFormat`).
 * Maven 3.x (to build).
 * `gocryptfs` and FUSE are **only** needed to run the interop integration tests;
   those tests are skipped automatically when they are absent.
@@ -66,7 +67,8 @@ mvn clean verify   # build, run unit tests and integration tests
 mvn package        # build the jar only (skips integration tests)
 ```
 
-The build produces `target/gocryptfs4j-X.Y.Z.jar`.
+The build produces `fs/target/gocryptfs4j-fs-X.Y.Z.jar` (the plain Java API) and
+`nio/target/gocryptfs4j-nio-X.Y.Z.jar` (the `FileSystemProvider`).
 
 ### Tests
 
@@ -183,7 +185,17 @@ automatically with the correct cipher, since it is stored in `gocryptfs.conf`.
 ```xml
 <dependency>
     <groupId>de.sfuhrm</groupId>
-    <artifactId>gocryptfs4j</artifactId>
+    <artifactId>gocryptfs4j-fs</artifactId>
+    <version>0.2.0</version>
+</dependency>
+```
+
+The `FileSystemProvider` is a separate artifact that depends on the one above:
+
+```xml
+<dependency>
+    <groupId>de.sfuhrm</groupId>
+    <artifactId>gocryptfs4j-nio</artifactId>
     <version>0.2.0</version>
 </dependency>
 ```
