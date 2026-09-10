@@ -1,4 +1,4 @@
-package de.sfuhrm.gocryptfs4j.fs;
+package de.sfuhrm.gocryptfs4j.core;
 
 import de.sfuhrm.gocryptfs4j.config.ConfigFile;
 import de.sfuhrm.gocryptfs4j.crypto.AesBlockCipher;

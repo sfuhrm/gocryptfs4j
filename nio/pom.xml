@@ -14,7 +14,7 @@
     <name>gocryptfs4j-nio</name>
     <description>
         A java.nio.file.FileSystemProvider for gocryptfs cipher directories,
-        built on top of the gocryptfs4j-fs API.
+        built on top of the gocryptfs4j-core API.
     </description>
 
     <properties>
@@ -24,7 +24,7 @@
     <dependencies>
         <dependency>
             <groupId>de.sfuhrm</groupId>
-            <artifactId>gocryptfs4j-fs</artifactId>
+            <artifactId>gocryptfs4j-core</artifactId>
         </dependency>
 
         <dependency>

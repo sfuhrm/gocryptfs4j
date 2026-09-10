@@ -1,4 +1,4 @@
-package de.sfuhrm.gocryptfs4j.fs;
+package de.sfuhrm.gocryptfs4j.core;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;

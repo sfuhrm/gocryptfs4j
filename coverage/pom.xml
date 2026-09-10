@@ -12,7 +12,7 @@
     <packaging>pom</packaging>
 
     <name>gocryptfs4j-coverage</name>
-    <description>Aggregates code coverage over the gocryptfs4j-fs and gocryptfs4j-nio modules.</description>
+    <description>Aggregates code coverage over the gocryptfs4j-core and gocryptfs4j-nio modules.</description>
 
     <properties>
         <!-- This module has no sources/tests and is not published. -->
@@ -24,7 +24,7 @@
     <dependencies>
         <dependency>
             <groupId>de.sfuhrm</groupId>
-            <artifactId>gocryptfs4j-fs</artifactId>
+            <artifactId>gocryptfs4j-core</artifactId>
         </dependency>
         <dependency>
             <groupId>de.sfuhrm</groupId>

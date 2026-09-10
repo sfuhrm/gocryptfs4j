@@ -1,6 +1,6 @@
 package de.sfuhrm.gocryptfs4j.nio;
 
-import de.sfuhrm.gocryptfs4j.fs.GocryptFs;
+import de.sfuhrm.gocryptfs4j.core.GocryptFs;
 
 import java.io.IOException;
 import java.net.URI;

@@ -37,6 +37,6 @@ jobs:
         with:
           name: gocryptfs4j
           path: |
-            fs/target/*.jar
+            core/target/*.jar
             nio/target/*.jar
           if-no-files-found: error

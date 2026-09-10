@@ -1,4 +1,4 @@
-package de.sfuhrm.gocryptfs4j.fs;
+package de.sfuhrm.gocryptfs4j.core;
 
 import de.sfuhrm.gocryptfs4j.crypto.Constants;
 import de.sfuhrm.gocryptfs4j.crypto.ContentEnc;

@@ -38,7 +38,7 @@
     </scm>
 
     <modules>
-        <module>fs</module>
+        <module>core</module>
         <module>nio</module>
         <module>coverage</module>
     </modules>
@@ -71,7 +71,7 @@
             </dependency>
             <dependency>
                 <groupId>de.sfuhrm</groupId>
-                <artifactId>gocryptfs4j-fs</artifactId>
+                <artifactId>gocryptfs4j-core</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

@@ -1,6 +1,6 @@
 package de.sfuhrm.gocryptfs4j.nio;
 
-import de.sfuhrm.gocryptfs4j.fs.DirEntry;
+import de.sfuhrm.gocryptfs4j.core.DirEntry;
 
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;

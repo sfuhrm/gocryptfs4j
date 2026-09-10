@@ -8,17 +8,17 @@
         <version>0.2.1-SNAPSHOT</version>
     </parent>
 
-    <artifactId>gocryptfs4j-fs</artifactId>
+    <artifactId>gocryptfs4j-core</artifactId>
     <packaging>jar</packaging>
 
-    <name>gocryptfs4j-fs</name>
+    <name>gocryptfs4j-core</name>
     <description>
         A pure Java implementation of the gocryptfs forward-mode on-disk format
         (plain Java API).
     </description>
 
     <properties>
-        <module.name>de.sfuhrm.gocryptfs4j.fs</module.name>
+        <module.name>de.sfuhrm.gocryptfs4j.core</module.name>
     </properties>
 
     <dependencies>

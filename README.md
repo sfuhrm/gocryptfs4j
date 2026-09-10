@@ -19,7 +19,7 @@ gocryptfs4j understands the same ciphertext format as gocryptfs. A directory
 encrypted with gocryptfs4j can be mounted and read by the real gocryptfs tool,
 and vice versa. It exposes the filesystem through two complementary APIs:
 
-* a **plain Java API** (`de.sfuhrm.gocryptfs4j.fs.GocryptFs`) for create,
+* a **plain Java API** (`de.sfuhrm.gocryptfs4j.core.GocryptFs`) for create,
   open, list, read, write and delete operations, and
 * a **`java.nio.file.FileSystemProvider`** (`de.sfuhrm.gocryptfs4j.nio.GocryptFsProvider`)
   so the filesystem can be used transparently through the standard
@@ -67,7 +67,7 @@ mvn clean verify   # build, run unit tests and integration tests
 mvn package        # build the jar only (skips integration tests)
 ```
 
-The build produces `fs/target/gocryptfs4j-fs-X.Y.Z.jar` (the plain Java API) and
+The build produces `core/target/gocryptfs4j-core-X.Y.Z.jar` (the plain Java API) and
 `nio/target/gocryptfs4j-nio-X.Y.Z.jar` (the `FileSystemProvider`).
 
 ### Tests
@@ -83,8 +83,8 @@ The build produces `fs/target/gocryptfs4j-fs-X.Y.Z.jar` (the plain Java API) and
 ### 1. Plain Java API
 
 ```java
-import de.sfuhrm.gocryptfs4j.fs.DirEntry;
-import de.sfuhrm.gocryptfs4j.fs.GocryptFs;
+import de.sfuhrm.gocryptfs4j.core.DirEntry;
+import de.sfuhrm.gocryptfs4j.core.GocryptFs;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -156,11 +156,11 @@ try (FileSystem fs = new GocryptFsProvider()
 ### 3. Options: content cipher and plaintext names
 
 The content cipher and name-encryption mode are chosen at creation time via the
-`ContentCipherType` enum (`de.sfuhrm.gocryptfs4j.fs.ContentCipherType`):
+`ContentCipherType` enum (`de.sfuhrm.gocryptfs4j.core.ContentCipherType`):
 
 ```java
-import de.sfuhrm.gocryptfs4j.fs.ContentCipherType;
-import de.sfuhrm.gocryptfs4j.fs.GocryptFs;
+import de.sfuhrm.gocryptfs4j.core.ContentCipherType;
+import de.sfuhrm.gocryptfs4j.core.GocryptFs;
 
 // AES-256-GCM (default), XChaCha20-Poly1305 or AES-SIV:
 try (GocryptFs fs = GocryptFs.create(
@@ -185,7 +185,7 @@ automatically with the correct cipher, since it is stored in `gocryptfs.conf`.
 ```xml
 <dependency>
     <groupId>de.sfuhrm</groupId>
-    <artifactId>gocryptfs4j-fs</artifactId>
+    <artifactId>gocryptfs4j-core</artifactId>
     <version>0.2.0</version>
 </dependency>
 ```

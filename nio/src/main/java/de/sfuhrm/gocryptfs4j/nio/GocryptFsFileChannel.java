@@ -1,6 +1,6 @@
 package de.sfuhrm.gocryptfs4j.nio;
 
-import de.sfuhrm.gocryptfs4j.fs.CipherFile;
+import de.sfuhrm.gocryptfs4j.core.CipherFile;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;

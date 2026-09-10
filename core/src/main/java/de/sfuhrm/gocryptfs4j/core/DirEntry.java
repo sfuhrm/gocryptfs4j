@@ -1,4 +1,4 @@
-package de.sfuhrm.gocryptfs4j.fs;
+package de.sfuhrm.gocryptfs4j.core;
 
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
