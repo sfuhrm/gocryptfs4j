@@ -17,8 +17,9 @@ import java.util.Arrays;
  * Random-access read/write access to a single encrypted (cipher-side) file.
  *
  * <p>Encapsulates the per-file header (file id) and the block-wise
- * AES-256-GCM content encryption, including read-modify-write for partial
- * block writes.</p>
+ * authenticated content encryption (AES-256-GCM, XChaCha20-Poly1305 or
+ * AES-SIV, depending on the supplied {@link ContentEnc}), including
+ * read-modify-write for partial block writes.</p>
  */
 public final class CipherFile implements AutoCloseable {
 
@@ -36,7 +37,7 @@ public final class CipherFile implements AutoCloseable {
      * Opens a cipher-side file for random access.
      *
      * @param cipherPath the ciphertext-side file path
-     * @param enc        the content-encryption helper
+     * @param enc        the content-encryption helper (determines the cipher)
      * @param writable   whether the file should be opened for writing
      * @return the opened cipher file
      * @throws IOException on filesystem errors
