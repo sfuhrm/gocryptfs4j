@@ -5,7 +5,7 @@
     <parent>
         <groupId>de.sfuhrm</groupId>
         <artifactId>gocryptfs4j</artifactId>
-        <version>0.3.0</version>
+        <version>0.3.1-SNAPSHOT</version>
     </parent>
 
     <artifactId>gocryptfs4j-core</artifactId>
