@@ -3,7 +3,9 @@ package de.sfuhrm.gocryptfs4j.core;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -110,6 +112,83 @@ class GocryptFsTest {
             // the previous content remains (mirrors write(String, offset, data)).
             assertEquals("new content longer",
                     new String(fs.readAll("/f.txt"), StandardCharsets.UTF_8));
+        }
+    }
+
+    @Test
+    void openReadStreamsMultiBlockContent() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        byte[] data = new byte[250_000];
+        for (int i = 0; i < data.length; i++) {
+            data[i] = (byte) (i * 23);
+        }
+
+        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+            fs.createFile("/stream.bin");
+            fs.write("/stream.bin", 0, data);
+
+            try (InputStream in = fs.openRead("/stream.bin")) {
+                assertArrayEquals(data, in.readAllBytes());
+            }
+        }
+    }
+
+    @Test
+    void openReadByteByByteAndEof() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        byte[] data = "the quick brown fox".getBytes(StandardCharsets.UTF_8);
+
+        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+            fs.createFile("/text.txt");
+            fs.write("/text.txt", 0, data);
+
+            try (InputStream in = fs.openRead("/text.txt")) {
+                for (byte expected : data) {
+                    assertEquals(expected & 0xFF, in.read());
+                }
+                assertEquals(-1, in.read(), "read() past EOF must return -1");
+            }
+        }
+    }
+
+    @Test
+    void openReadChunkedAcrossBlockBoundaries() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        byte[] data = new byte[50_000];
+        for (int i = 0; i < data.length; i++) {
+            data[i] = (byte) (i * 5);
+        }
+
+        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+            fs.createFile("/chunk.bin");
+            fs.write("/chunk.bin", 0, data);
+
+            try (InputStream in = fs.openRead("/chunk.bin")) {
+                ByteArrayOutputStream out = new ByteArrayOutputStream(data.length);
+                byte[] buf = new byte[7];
+                int n;
+                while ((n = in.read(buf, 0, buf.length)) != -1) {
+                    out.write(buf, 0, n);
+                }
+                assertArrayEquals(data, out.toByteArray());
+            }
+        }
+    }
+
+    @Test
+    void openReadMissingFileThrows() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+            assertThrows(java.nio.file.NoSuchFileException.class,
+                    () -> fs.openRead("/does-not-exist"));
         }
     }
 
