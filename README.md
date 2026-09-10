@@ -152,10 +152,11 @@ try (GocryptFs fs = GocryptFs.open(cipherDir, "my-password".toCharArray())) {
 }
 ```
 
-The `GocryptFs` object is `AutoCloseable` and wipes the master key from memory
-on `close()`. Other operations include `size`, `truncate`, `delete`,
-`createSymlink`, `readSymlinkTarget`, `setTimes` and `openRead` (a streaming
-decrypting `InputStream`).
+The `GocryptFs` object is `AutoCloseable` and wipes the master key and derived
+keys from memory on `close()`. Other operations include `size`, `truncate`,
+`delete`, `createSymlink`, `readSymlinkTarget`, `setTimes`, `openRead` (a
+streaming decrypting `InputStream`) and `openWrite` (a streaming encrypting
+`OutputStream`).
 
 ### 2. NIO `FileSystemProvider` (`nio` module)
 

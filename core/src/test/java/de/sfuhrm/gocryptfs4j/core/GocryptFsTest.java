@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -63,6 +64,53 @@ class GocryptFsTest {
 
         // Wrong password must fail.
         assertThrows(IOException.class, () -> GocryptFs.open(cipherDir, "wrong".toCharArray()));
+    }
+
+    @Test
+    void openWriteStreaming() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        byte[] data = new byte[250_000];
+        for (int i = 0; i < data.length; i++) {
+            data[i] = (byte) (i * 17);
+        }
+
+        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+            fs.createFile("/stream.bin");
+            try (OutputStream out = fs.openWrite("/stream.bin")) {
+                for (int off = 0; off < data.length; off += 4096) {
+                    int len = Math.min(4096, data.length - off);
+                    out.write(data, off, len);
+                }
+            }
+            assertArrayEquals(data, fs.readAll("/stream.bin"));
+        }
+
+        // Reopen and verify the streamed content persisted.
+        try (GocryptFs fs = GocryptFs.open(cipherDir, "pw".toCharArray())) {
+            assertArrayEquals(data, fs.readAll("/stream.bin"));
+        }
+    }
+
+    @Test
+    void openWriteOverwritesExistingContent() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+            fs.createFile("/f.txt");
+            fs.write("/f.txt", 0, "old content longer".getBytes(StandardCharsets.UTF_8));
+
+            try (OutputStream out = fs.openWrite("/f.txt")) {
+                out.write("new".getBytes(StandardCharsets.UTF_8));
+            }
+
+            // openWrite starts at offset 0 and does not truncate, so the tail of
+            // the previous content remains (mirrors write(String, offset, data)).
+            assertEquals("new content longer",
+                    new String(fs.readAll("/f.txt"), StandardCharsets.UTF_8));
+        }
     }
 
     @Test

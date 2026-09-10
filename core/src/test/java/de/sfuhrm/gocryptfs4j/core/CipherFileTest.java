@@ -9,6 +9,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.channels.WritableByteChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
@@ -221,6 +222,39 @@ class CipherFileTest {
 
         try (CipherFile cf = CipherFile.open(p, enc(), false)) {
             assertArrayEquals(id, cf.fileId());
+        }
+    }
+
+    @Test
+    void writeChannelStreamingRoundTrip() throws IOException {
+        ContentEnc enc = enc();
+        byte[] data = new byte[(int) (enc.plainBS * 2 + 1000)];
+        for (int i = 0; i < data.length; i++) {
+            data[i] = (byte) (i * 7);
+        }
+
+        Path p = newFile();
+        try (CipherFile cf = CipherFile.open(p, enc, true)) {
+            // Write in irregular chunks to exercise streaming across blocks.
+            try (WritableByteChannel ch = cf.writeChannel(0)) {
+                int pos = 0;
+                while (pos < data.length) {
+                    int chunk = Math.min(777, data.length - pos);
+                    ch.write(ByteBuffer.wrap(data, pos, chunk));
+                    pos += chunk;
+                }
+            }
+        }
+
+        try (CipherFile cf = CipherFile.open(p, enc, false)) {
+            assertArrayEquals(data, readAll(cf));
+        }
+    }
+
+    @Test
+    void writeChannelRejectsNegativeOffset() throws IOException {
+        try (CipherFile cf = CipherFile.open(newFile(), enc(), true)) {
+            assertThrows(IllegalArgumentException.class, () -> cf.writeChannel(-1));
         }
     }
 

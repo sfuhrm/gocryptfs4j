@@ -11,7 +11,9 @@ import de.sfuhrm.gocryptfs4j.names.NameTransform;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.ByteBuffer;
+import java.nio.channels.Channels;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileAlreadyExistsException;
@@ -632,6 +634,25 @@ public final class GocryptFs implements AutoCloseable {
         Resolved r = resolve(plainFile);
         CipherFile cf = openCipherFile(r.cipherPath, false);
         return new CipherInputStream(cf);
+    }
+
+    /**
+     * Opens a streaming, encrypting output stream over a plaintext file path.
+     *
+     * <p>Writing starts at the beginning of the file, overwriting any existing
+     * content. Closing the stream closes the underlying file and flushes the
+     * encrypted data.</p>
+     *
+     * @param plainFile the plaintext file path
+     * @return the encrypting output stream
+     * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code plainFile} is {@code null}
+     */
+    public OutputStream openWrite(String plainFile) throws IOException {
+        Objects.requireNonNull(plainFile, "plainFile");
+        Resolved r = resolve(plainFile);
+        CipherFile cf = openCipherFile(r.cipherPath, true);
+        return Channels.newOutputStream(cf.writeChannel(0));
     }
 
     /**

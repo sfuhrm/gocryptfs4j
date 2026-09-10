@@ -7,7 +7,9 @@ import de.sfuhrm.gocryptfs4j.crypto.FileHeader;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.channels.ClosedChannelException;
 import java.nio.channels.FileChannel;
+import java.nio.channels.WritableByteChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.security.GeneralSecurityException;
@@ -346,6 +348,58 @@ public final class CipherFile implements AutoCloseable {
         long pos = offset;
         while (bb.hasRemaining()) {
             pos += channel.write(bb, pos);
+        }
+    }
+
+    /**
+     * Opens a streaming, encrypting {@link WritableByteChannel} positioned at
+     * the given plaintext offset.
+     *
+     * <p>Writes are performed block-wise and, for partial blocks, use
+     * read-modify-write exactly like {@link #write(ByteBuffer, long)}. Closing
+     * the returned channel closes this {@link CipherFile}.</p>
+     *
+     * @param plainOffset the plaintext offset to start writing at
+     * @return the encrypting writable channel
+     * @throws IOException on filesystem errors
+     * @throws IllegalArgumentException if {@code plainOffset} is negative
+     */
+    public WritableByteChannel writeChannel(long plainOffset) throws IOException {
+        if (plainOffset < 0) {
+            throw new IllegalArgumentException("negative offset: " + plainOffset);
+        }
+        return new WriteChannel(plainOffset);
+    }
+
+    private final class WriteChannel implements WritableByteChannel {
+        private long position;
+        private boolean open = true;
+
+        WriteChannel(long position) {
+            this.position = position;
+        }
+
+        @Override
+        public int write(ByteBuffer src) throws IOException {
+            if (!open) {
+                throw new ClosedChannelException();
+            }
+            int n = CipherFile.this.write(src, position);
+            position += n;
+            return n;
+        }
+
+        @Override
+        public boolean isOpen() {
+            return open;
+        }
+
+        @Override
+        public void close() throws IOException {
+            if (open) {
+                open = false;
+                CipherFile.this.close();
+            }
         }
     }
 
