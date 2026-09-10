@@ -173,7 +173,7 @@ import java.util.Map;
 
 Map<String, Object> env = new HashMap<>();
 env.put("cipherDir", Path.of("/data/cipher"));   // Path or String
-env.put("password", "my-password".toCharArray()); // String or char[]
+env.put("password", "my-password".toCharArray()); // char[]
 
 try (FileSystem fs = FileSystems.newFileSystem(URI.create("gocryptfs:///"), env)) {
     Path root = fs.getPath("/");

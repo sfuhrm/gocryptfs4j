@@ -30,6 +30,13 @@ public final class Eme {
     }
 
     /**
+     * Wipes the underlying block cipher's key material.
+     */
+    public void wipe() {
+        bc.wipe();
+    }
+
+    /**
      * EME-encrypts {@code input} under {@code tweak}.
      *
      * @param tweak the 16-byte tweak

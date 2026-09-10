@@ -4,6 +4,7 @@ import javax.crypto.Cipher;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import java.security.GeneralSecurityException;
+import java.util.Arrays;
 import java.util.Objects;
 
 /**
@@ -16,7 +17,7 @@ import java.util.Objects;
  */
 public final class Gcm implements ContentCipher {
 
-    private final SecretKeySpec key;
+    private final byte[] key;
 
     /**
      * Creates an AES-256-GCM instance.
@@ -30,7 +31,12 @@ public final class Gcm implements ContentCipher {
         if (key.length != Constants.KEY_LEN) {
             throw new IllegalArgumentException("GCM key must be " + Constants.KEY_LEN + " bytes");
         }
-        this.key = new SecretKeySpec(key, "AES");
+        this.key = Arrays.copyOf(key, key.length);
+    }
+
+    @Override
+    public void wipe() {
+        Arrays.fill(key, (byte) 0);
     }
 
     /**
@@ -48,7 +54,8 @@ public final class Gcm implements ContentCipher {
         Objects.requireNonNull(nonce, "nonce");
         try {
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-            cipher.init(Cipher.ENCRYPT_MODE, key, new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8, nonce));
+            cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(key, "AES"),
+                    new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8, nonce));
             if (aad != null && aad.length > 0) {
                 cipher.updateAAD(aad);
             }
@@ -75,7 +82,8 @@ public final class Gcm implements ContentCipher {
         Objects.requireNonNull(ciphertext, "ciphertext");
         Objects.requireNonNull(nonce, "nonce");
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-        cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8, nonce));
+        cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "AES"),
+                new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8, nonce));
         if (aad != null && aad.length > 0) {
             cipher.updateAAD(aad);
         }

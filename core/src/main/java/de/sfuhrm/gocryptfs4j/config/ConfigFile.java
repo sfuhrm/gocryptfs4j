@@ -306,13 +306,21 @@ public final class ConfigFile {
             byte[] sivKey = useHkdf
                     ? Hkdf.derive(masterKey, Constants.HKDF_INFO_SIV_CONTENT, Constants.SIV_KEY_LEN)
                     : sha512(masterKey);
-            return new ContentEnc(new AesSiv(sivKey), Constants.AES_BLOCK_SIZE);
+            try {
+                return new ContentEnc(new AesSiv(sivKey), Constants.AES_BLOCK_SIZE);
+            } finally {
+                Keys.wipe(sivKey);
+            }
         }
         boolean xchacha = xchacha();
         byte[] contentKey = useHkdf
                 ? Hkdf.derive(masterKey, contentHkdfInfo(xchacha), Constants.KEY_LEN)
                 : Arrays.copyOf(masterKey, masterKey.length);
-        return new ContentEnc(contentCipher(contentKey, xchacha), contentIvLen());
+        try {
+            return new ContentEnc(contentCipher(contentKey, xchacha), contentIvLen());
+        } finally {
+            Keys.wipe(contentKey);
+        }
     }
 
     /**

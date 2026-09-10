@@ -36,7 +36,7 @@ import java.util.Objects;
  * an encrypted directory using the gocryptfs forward-mode on-disk format.</p>
  *
  * <pre>{@code
- * try (GocryptFs fs = GocryptFs.open(Path.of("/data/cipher"), "password")) {
+ * try (GocryptFs fs = GocryptFs.open(Path.of("/data/cipher"), "password".toCharArray())) {
  *     for (DirEntry e : fs.list("/")) {
  *         System.out.println(e.plainName());
  *     }
@@ -68,7 +68,11 @@ public final class GocryptFs implements AutoCloseable {
         byte[] emeKey = useHkdf
                 ? Hkdf.derive(masterKey, Constants.HKDF_INFO_EME_NAMES, Constants.KEY_LEN)
                 : Arrays.copyOf(masterKey, masterKey.length);
-        this.eme = new Eme(new AesBlockCipher(emeKey));
+        try {
+            this.eme = new Eme(new AesBlockCipher(emeKey));
+        } finally {
+            Keys.wipe(emeKey);
+        }
         this.contentEnc = config.contentEnc(masterKey);
         this.nameTransform = new NameTransform(eme, config.longNames(), config.longNameMax(),
                 config.raw64(), deterministicNames);
@@ -93,20 +97,7 @@ public final class GocryptFs implements AutoCloseable {
         return new GocryptFs(cipherDir, config, masterKey);
     }
 
-    /**
-     * Opens an existing cipher directory, unlocking the master key from
-     * {@code password}.
-     *
-     * @param cipherDir the ciphertext directory
-     * @param password  the password to unlock the master key with
-     * @return the opened filesystem
-     * @throws IOException if the config is missing, the password is wrong or the filesystem is corrupt
-     * @throws NullPointerException if {@code cipherDir} or {@code password} is {@code null}
-     */
-    public static GocryptFs open(Path cipherDir, String password) throws IOException {
-        Objects.requireNonNull(password, "password");
-        return open(cipherDir, password.toCharArray());
-    }
+
 
     /**
      * Creates a new gocryptfs filesystem in {@code cipherDir} (which must exist
@@ -839,6 +830,8 @@ public final class GocryptFs implements AutoCloseable {
 
     @Override
     public void close() {
+        eme.wipe();
+        contentEnc.wipe();
         Keys.wipe(masterKey);
     }
 }

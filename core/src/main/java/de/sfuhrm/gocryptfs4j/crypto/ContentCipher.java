@@ -32,4 +32,11 @@ public interface ContentCipher {
      * @throws GeneralSecurityException on authentication failure
      */
     byte[] decrypt(byte[] ciphertext, byte[] nonce, byte[] aad) throws GeneralSecurityException;
+
+    /**
+     * Wipes any key material held by this cipher. Implementations that hold no
+     * copy of the key may leave this as a no-op.
+     */
+    default void wipe() {
+    }
 }

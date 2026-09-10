@@ -44,6 +44,12 @@ public final class AesSiv implements ContentCipher {
         this.k2 = Arrays.copyOfRange(key, Constants.KEY_LEN, 2 * Constants.KEY_LEN);
     }
 
+    @Override
+    public void wipe() {
+        Arrays.fill(k1, (byte) 0);
+        Arrays.fill(k2, (byte) 0);
+    }
+
     /**
      * Encrypts {@code plaintext}, returning the 16-byte SIV followed by the
      * ciphertext.

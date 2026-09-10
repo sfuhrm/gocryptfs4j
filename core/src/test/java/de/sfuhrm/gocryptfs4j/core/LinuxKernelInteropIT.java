@@ -142,7 +142,7 @@ class LinuxKernelInteropIT {
             }
         }
 
-        try (GocryptFs fs = GocryptFs.open(cipherDir, PASSWORD)) {
+        try (GocryptFs fs = GocryptFs.open(cipherDir, PASSWORD.toCharArray())) {
             assertManifestEquals(reference, manifest(fs, "/linux"));
         }
     }

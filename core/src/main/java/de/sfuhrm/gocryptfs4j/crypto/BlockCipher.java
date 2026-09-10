@@ -31,4 +31,11 @@ public interface BlockCipher {
      * @param outOff the offset into {@code out}
      */
     void decrypt(byte[] in, int inOff, byte[] out, int outOff);
+
+    /**
+     * Wipes any key material held by this cipher. Implementations that hold no
+     * copy of the key may leave this as a no-op.
+     */
+    default void wipe() {
+    }
 }

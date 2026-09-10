@@ -101,7 +101,7 @@ class GocryptfsInteropIT {
             }
         }
 
-        try (GocryptFs fs = GocryptFs.open(cipherDir, PASSWORD)) {
+        try (GocryptFs fs = GocryptFs.open(cipherDir, PASSWORD.toCharArray())) {
             Set<String> root = fs.list("/").stream()
                     .map(DirEntry::plainName).collect(Collectors.toSet());
             assertEquals(Set.of("sub", "hello.txt", longName()), root);

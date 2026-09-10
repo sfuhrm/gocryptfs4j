@@ -88,6 +88,13 @@ public final class ContentEnc {
         return cipherBS - plainBS;
     }
 
+    /**
+     * Wipes the underlying cipher's key material.
+     */
+    public void wipe() {
+        cipher.wipe();
+    }
+
     private static byte[] concatAD(long blockNo, byte[] fileId) {
         byte[] aad = new byte[8 + (fileId == null ? 0 : fileId.length)];
         for (int i = 0; i < 8; i++) {

@@ -39,8 +39,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>Register via {@code META-INF/services/java.nio.file.spi.FileSystemProvider}
  * to use {@code FileSystems.newFileSystem(URI.create("gocryptfs:///"), env)}, or
  * instantiate directly. The environment must contain {@code cipherDir} (a
- * {@link Path} or {@link String}) and {@code password} (a {@link String} or
- * {@code char[]}).</p>
+ * {@link Path} or {@link String}) and {@code password} (a {@code char[]}).</p>
  */
 public final class GocryptFsProvider extends FileSystemProvider {
 
@@ -81,8 +80,9 @@ public final class GocryptFsProvider extends FileSystemProvider {
      * Opens a filesystem from a {@code gocryptfs} URI.
      *
      * @throws NullPointerException if {@code uri} is {@code null}
-     * @throws IllegalArgumentException if the scheme is not {@code gocryptfs} or
-     *                                  the environment lacks {@code cipherDir}/{@code password}
+     * @throws IllegalArgumentException if the scheme is not {@code gocryptfs}, the
+     *                                  environment lacks {@code cipherDir}/{@code password},
+     *                                  or {@code password} is not a {@code char[]}
      */
     @Override
     public FileSystem newFileSystem(URI uri, Map<String, ?> env) throws IOException {
@@ -98,9 +98,10 @@ public final class GocryptFsProvider extends FileSystemProvider {
         }
         Path dir = cipherDir instanceof Path
                 ? (Path) cipherDir : Path.of(cipherDir.toString());
-        char[] pw = password instanceof char[]
-                ? (char[]) password : password.toString().toCharArray();
-        return newFileSystem(dir, pw);
+        if (!(password instanceof char[])) {
+            throw new IllegalArgumentException("password must be a char[]");
+        }
+        return newFileSystem(dir, (char[]) password);
     }
 
     /**

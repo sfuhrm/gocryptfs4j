@@ -7,6 +7,7 @@ import org.bouncycastle.crypto.params.KeyParameter;
 
 import javax.crypto.AEADBadTagException;
 import java.security.GeneralSecurityException;
+import java.util.Arrays;
 import java.util.Objects;
 
 /**
@@ -16,7 +17,7 @@ import java.util.Objects;
  */
 public final class XChaCha20Poly1305 implements ContentCipher {
 
-    private final KeyParameter key;
+    private final byte[] key;
 
     /**
      * Creates an XChaCha20-Poly1305 instance.
@@ -31,7 +32,12 @@ public final class XChaCha20Poly1305 implements ContentCipher {
             throw new IllegalArgumentException("XChaCha20-Poly1305 key must be "
                     + Constants.KEY_LEN + " bytes");
         }
-        this.key = new KeyParameter(key);
+        this.key = Arrays.copyOf(key, key.length);
+    }
+
+    @Override
+    public void wipe() {
+        Arrays.fill(key, (byte) 0);
     }
 
     /**
@@ -53,7 +59,7 @@ public final class XChaCha20Poly1305 implements ContentCipher {
                     + Constants.XCHACHA_NONCE_LEN + " bytes");
         }
         AEADCipher cipher = new org.bouncycastle.crypto.modes.XChaCha20Poly1305();
-        cipher.init(true, new AEADParameters(key, Constants.AUTH_TAG_LEN * 8, nonce, aad));
+        cipher.init(true, new AEADParameters(new KeyParameter(key), Constants.AUTH_TAG_LEN * 8, nonce, aad));
         byte[] out = new byte[cipher.getOutputSize(plaintext.length)];
         int len = cipher.processBytes(plaintext, 0, plaintext.length, out, 0);
         try {
@@ -85,7 +91,7 @@ public final class XChaCha20Poly1305 implements ContentCipher {
                     + Constants.XCHACHA_NONCE_LEN + " bytes");
         }
         AEADCipher cipher = new org.bouncycastle.crypto.modes.XChaCha20Poly1305();
-        cipher.init(false, new AEADParameters(key, Constants.AUTH_TAG_LEN * 8, nonce, aad));
+        cipher.init(false, new AEADParameters(new KeyParameter(key), Constants.AUTH_TAG_LEN * 8, nonce, aad));
         byte[] out = new byte[cipher.getOutputSize(ciphertext.length)];
         int len = cipher.processBytes(ciphertext, 0, ciphertext.length, out, 0);
         try {
