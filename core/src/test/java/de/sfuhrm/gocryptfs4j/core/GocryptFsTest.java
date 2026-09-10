@@ -10,6 +10,8 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -46,11 +48,11 @@ class GocryptFsTest {
             // verify listing
             Set<String> root = fs.list("/").stream()
                     .map(DirEntry::plainName).collect(Collectors.toSet());
-            assertEquals(Set.of("docs", "big.bin"), root);
+            assertEquals(new HashSet<>(Arrays.asList("docs", "big.bin")), root);
 
             Set<String> docs = fs.list("/docs").stream()
                     .map(DirEntry::plainName).collect(Collectors.toSet());
-            assertEquals(Set.of("hello.txt"), docs);
+            assertEquals(new HashSet<>(Arrays.asList("hello.txt")), docs);
 
             // verify size
             assertEquals(secret.length, fs.size("/docs/hello.txt"));
@@ -130,7 +132,13 @@ class GocryptFsTest {
             fs.write("/stream.bin", 0, data);
 
             try (InputStream in = fs.openRead("/stream.bin")) {
-                assertArrayEquals(data, in.readAllBytes());
+                ByteArrayOutputStream out = new ByteArrayOutputStream(data.length);
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) != -1) {
+                    out.write(buf, 0, n);
+                }
+                assertArrayEquals(data, out.toByteArray());
             }
         }
     }

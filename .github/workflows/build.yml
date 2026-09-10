@@ -11,9 +11,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # All LTS JDKs that can build the project. The baseline is Java 11
-        # (maven.compiler.release=11), so Java 8 is not buildable and is
-        # intentionally excluded.
+        # LTS JDKs used to build. The produced bytecode targets Java 8
+        # (maven.compiler.release=8), so the library runs on Java 8+; building
+        # itself needs JDK 9+ (the --release flag) and the test suite needs
+        # JDK 11+ (Mockito 5), so Java 8 is not a build JDK.
         java: ["11", "17", "21", "25"]
     steps:
       - name: Checkout

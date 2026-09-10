@@ -120,10 +120,12 @@ class ContentEncTest {
         for (int b = 0; b < blockCount; b++) {
             byte[] block = new byte[(int) enc.plainBS];
             System.arraycopy(data, b * (int) enc.plainBS, block, 0, (int) enc.plainBS);
-            out.writeBytes(enc.encryptBlock(block, b, fileId));
+            byte[] cipher = enc.encryptBlock(block, b, fileId);
+            out.write(cipher, 0, cipher.length);
         }
         byte[] last = Arrays.copyOfRange(data, blockCount * (int) enc.plainBS, data.length);
-        out.writeBytes(enc.encryptBlock(last, blockCount, fileId));
+        byte[] lastCipher = enc.encryptBlock(last, blockCount, fileId);
+        out.write(lastCipher, 0, lastCipher.length);
 
         assertArrayEquals(data, enc.decryptBlocks(out.toByteArray(), 0, fileId));
     }

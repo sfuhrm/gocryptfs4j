@@ -4,6 +4,7 @@ import de.sfuhrm.gocryptfs4j.crypto.Constants;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Objects;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -22,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class GocryptfsConfigGoldenTest {
 
     private static Path resource(String name) throws Exception {
-        return Path.of(Objects.requireNonNull(
+        return Paths.get(Objects.requireNonNull(
                         GocryptfsConfigGoldenTest.class.getResource(
                                 "/de/sfuhrm/gocryptfs4j/config/" + name))
                 .toURI());

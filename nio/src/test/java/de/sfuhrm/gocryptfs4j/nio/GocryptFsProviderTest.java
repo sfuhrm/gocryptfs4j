@@ -10,6 +10,7 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.FileSystem;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -43,7 +44,7 @@ class GocryptFsProviderTest {
                     names.add(p.getFileName().toString());
                 }
             }
-            assertEquals(Set.of("a"), names);
+            assertEquals(Collections.singleton("a"), names);
 
             Path one = nio.getPath("/a/one.txt");
             assertArrayEquals("one".getBytes(StandardCharsets.UTF_8),
@@ -74,7 +75,7 @@ class GocryptFsProviderTest {
             Path sub = nio.getPath("/data/sub");
             Files.createDirectory(sub);
             Files.write(sub.resolve("x.txt"), "x".getBytes(StandardCharsets.UTF_8));
-            assertEquals("x", Files.readString(sub.resolve("x.txt")));
+            assertEquals("x", new String(Files.readAllBytes(sub.resolve("x.txt")), StandardCharsets.UTF_8));
 
             Files.delete(file);
             assertFalse(Files.exists(file));

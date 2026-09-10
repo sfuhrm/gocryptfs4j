@@ -11,7 +11,7 @@ import java.nio.file.Path;
 import java.nio.file.PathMatcher;
 import java.nio.file.WatchService;
 import java.nio.file.attribute.UserPrincipalLookupService;
-import java.util.List;
+import java.util.Collections;
 import java.util.Objects;
 import java.util.Set;
 
@@ -56,7 +56,7 @@ public final class GocryptFsFileSystem extends FileSystem {
 
     static String urlDecode(String s) {
         try {
-            return java.net.URLDecoder.decode(s, java.nio.charset.StandardCharsets.UTF_8);
+            return java.net.URLDecoder.decode(s, "UTF-8");
         } catch (Exception e) {
             return s;
         }
@@ -100,17 +100,17 @@ public final class GocryptFsFileSystem extends FileSystem {
 
     @Override
     public Iterable<Path> getRootDirectories() {
-        return List.of(root);
+        return Collections.singletonList(root);
     }
 
     @Override
     public Iterable<FileStore> getFileStores() {
-        return List.of(new GocryptFsFileStore(this));
+        return Collections.singletonList(new GocryptFsFileStore(this));
     }
 
     @Override
     public Set<String> supportedFileAttributeViews() {
-        return Set.of("basic");
+        return Collections.singleton("basic");
     }
 
     /**

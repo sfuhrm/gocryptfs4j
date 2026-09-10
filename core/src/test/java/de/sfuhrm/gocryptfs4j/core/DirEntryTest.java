@@ -6,6 +6,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.nio.file.attribute.FileTime;
 import java.util.List;
 
@@ -18,7 +19,7 @@ class DirEntryTest {
     private static final FileTime CTIME = FileTime.fromMillis(3_000_000L);
 
     private static DirEntry entry(DirEntry.Kind kind) {
-        return new DirEntry("plain", "cipher", Path.of("/x/cipher"), kind, 42L,
+        return new DirEntry("plain", "cipher", Paths.get("/x/cipher"), kind, 42L,
                 MTIME, ATIME, CTIME, "key");
     }
 
@@ -28,7 +29,7 @@ class DirEntryTest {
 
         assertEquals("plain", e.plainName());
         assertEquals("cipher", e.cipherName());
-        assertEquals(Path.of("/x/cipher"), e.cipherPath());
+        assertEquals(Paths.get("/x/cipher"), e.cipherPath());
         assertEquals(DirEntry.Kind.FILE, e.kind());
         assertEquals(42L, e.size());
         assertEquals(MTIME, e.lastModifiedTime());
@@ -112,7 +113,7 @@ class DirEntryTest {
             List<DirEntry> root = fs.list("/");
             DirEntry link = root.stream()
                     .filter(e -> e.plainName().equals("link.txt"))
-                    .findFirst().orElseThrow();
+                    .findFirst().orElseThrow(() -> new AssertionError("link.txt not found"));
             assertEquals(DirEntry.Kind.SYMLINK, link.kind());
             assertTrue(link.isSymbolicLink());
             assertEquals("target.txt".length(), link.size());

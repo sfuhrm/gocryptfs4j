@@ -20,6 +20,7 @@ import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributeView;
 import java.nio.file.attribute.BasicFileAttributes;
@@ -38,7 +39,7 @@ import java.util.Objects;
  * an encrypted directory using the gocryptfs forward-mode on-disk format.</p>
  *
  * <pre>{@code
- * try (GocryptFs fs = GocryptFs.open(Path.of("/data/cipher"), "password".toCharArray())) {
+ * try (GocryptFs fs = GocryptFs.open(Paths.get("/data/cipher"), "password".toCharArray())) {
  *     for (DirEntry e : fs.list("/")) {
  *         System.out.println(e.plainName());
  *     }
@@ -440,7 +441,7 @@ public final class GocryptFs implements AutoCloseable {
                     }
                     if (t == NameTransform.LONG_NAME_CONTENT) {
                         Path nameFile = cipherDir.resolve(cName + Constants.LONG_NAME_SUFFIX);
-                        cipherName = Files.readString(nameFile, StandardCharsets.UTF_8);
+                        cipherName = new String(Files.readAllBytes(nameFile), StandardCharsets.UTF_8);
                     }
                 }
 
@@ -830,7 +831,7 @@ public final class GocryptFs implements AutoCloseable {
             byte[] enc = contentEnc.encryptBlock(target.getBytes(StandardCharsets.UTF_8), 0, null);
             cTarget = nameTransform.b64Encode(enc);
         }
-        Files.createSymbolicLink(r.cipherPath, Path.of(cTarget));
+        Files.createSymbolicLink(r.cipherPath, Paths.get(cTarget));
     }
 
     /** Writes the long-name support file if the cipher name is a long name. */

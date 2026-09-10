@@ -7,6 +7,9 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -26,7 +29,15 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  */
 class GocryptfsExampleFsGoldenTest {
 
-    private static final String LONG_NAME = "longname_255_" + "x".repeat(242);
+    private static final String LONG_NAME = "longname_255_" + repeat('x', 242);
+
+    private static String repeat(char c, int count) {
+        StringBuilder sb = new StringBuilder(count);
+        for (int i = 0; i < count; i++) {
+            sb.append(c);
+        }
+        return sb.toString();
+    }
 
     @TempDir
     Path tmp;
@@ -41,7 +52,8 @@ class GocryptfsExampleFsGoldenTest {
             Set<String> names = entries.stream()
                     .map(DirEntry::plainName)
                     .collect(Collectors.toSet());
-            assertEquals(Set.of("status.txt", "rel", "abs", LONG_NAME), names);
+            assertEquals(new HashSet<>(Arrays.asList("status.txt", "rel", "abs", LONG_NAME)),
+                    names);
 
             assertEquals("It works!\n",
                     new String(fs.readAll("/status.txt"), StandardCharsets.UTF_8));
@@ -60,7 +72,7 @@ class GocryptfsExampleFsGoldenTest {
     private static void restoreSymlinks(Path cipherDir) throws Exception {
         URL manifest = GocryptfsExampleFsGoldenTest.class
                 .getResource("/example-fs-v1.3-symlinks.txt");
-        for (String line : Files.readAllLines(Path.of(manifest.toURI()))) {
+        for (String line : Files.readAllLines(Paths.get(manifest.toURI()))) {
             if (line.isEmpty() || line.startsWith("#")) {
                 continue;
             }
@@ -68,12 +80,12 @@ class GocryptfsExampleFsGoldenTest {
             Path link = cipherDir.resolve(line.substring(0, eq));
             String target = line.substring(eq + 1);
             Files.delete(link);
-            Files.createSymbolicLink(link, Path.of(target));
+            Files.createSymbolicLink(link, Paths.get(target));
         }
     }
 
     private static Path copyResource(String resource, Path dest) throws Exception {
-        Path src = Path.of(Objects.requireNonNull(
+        Path src = Paths.get(Objects.requireNonNull(
                 GocryptfsExampleFsGoldenTest.class.getResource(resource)).toURI());
         try (Stream<Path> walk = Files.walk(src)) {
             for (Path p : walk.collect(Collectors.toList())) {

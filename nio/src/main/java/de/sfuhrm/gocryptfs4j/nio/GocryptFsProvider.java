@@ -17,6 +17,7 @@ import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.OpenOption;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributeView;
@@ -26,7 +27,10 @@ import java.nio.file.attribute.FileAttributeView;
 import java.nio.file.attribute.FileTime;
 import java.nio.file.spi.FileSystemProvider;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -97,7 +101,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
                     "environment must contain 'cipherDir' and 'password'");
         }
         Path dir = cipherDir instanceof Path
-                ? (Path) cipherDir : Path.of(cipherDir.toString());
+                ? (Path) cipherDir : Paths.get(cipherDir.toString());
         if (!(password instanceof char[])) {
             throw new IllegalArgumentException("password must be a char[]");
         }
@@ -266,7 +270,9 @@ public final class GocryptFsProvider extends FileSystemProvider {
         GocryptFsPath s = toAbsolute(source);
         GocryptFsPath t = toAbsolute(target);
         GocryptFs fs = core(s);
-        Set<CopyOption> opts = options.length == 0 ? Set.of() : Set.of(options);
+        Set<CopyOption> opts = options.length == 0
+                ? Collections.<CopyOption>emptySet()
+                : new HashSet<>(Arrays.asList(options));
         boolean replace = opts.contains(StandardCopyOption.REPLACE_EXISTING);
 
         if (replace && exists(t)) {

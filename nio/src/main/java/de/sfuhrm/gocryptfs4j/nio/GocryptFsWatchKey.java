@@ -11,6 +11,7 @@ import java.nio.file.Watchable;
 import java.nio.file.attribute.FileTime;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
@@ -27,7 +28,7 @@ final class GocryptFsWatchKey implements WatchKey {
     private final Object lock = new Object();
 
     private WatchEvent.Kind<?>[] events = GocryptFsWatchService.NO_EVENTS;
-    private Map<String, SnapshotEntry> snapshot = Map.of();
+    private Map<String, SnapshotEntry> snapshot = Collections.emptyMap();
     private final Deque<WatchEvent<?>> queue = new ArrayDeque<>();
     private volatile boolean valid = true;
     private volatile boolean signalled;
@@ -119,7 +120,7 @@ final class GocryptFsWatchKey implements WatchKey {
     @SuppressWarnings("unchecked")
     private WatchEvent<Path> event(WatchEvent.Kind<?> kind, String name) {
         Path context = name == null ? null : dir.resolve(name);
-        return new WatchEvent<>() {
+        return new WatchEvent<Path>() {
             @Override
             public WatchEvent.Kind<Path> kind() {
                 return (WatchEvent.Kind<Path>) kind;

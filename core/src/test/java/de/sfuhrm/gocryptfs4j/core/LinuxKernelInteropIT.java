@@ -6,23 +6,22 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import org.bouncycastle.util.encoders.Hex;
@@ -293,21 +292,21 @@ class LinuxKernelInteropIT {
     // Download
     // ------------------------------------------------------------------
 
-    private static void download(String url, Path dest) throws IOException, InterruptedException {
-        HttpClient client = HttpClient.newBuilder()
-                .followRedirects(HttpClient.Redirect.NORMAL)
-                .connectTimeout(Duration.ofSeconds(30))
-                .build();
-        HttpRequest request = HttpRequest.newBuilder(URI.create(url))
-                .timeout(Duration.ofSeconds(60))
-                .build();
-        HttpResponse<InputStream> response =
-                client.send(request, HttpResponse.BodyHandlers.ofInputStream());
-        if (response.statusCode() != 200) {
-            throw new IOException("download failed: HTTP " + response.statusCode() + " " + url);
-        }
-        try (InputStream in = response.body()) {
-            Files.copy(in, dest, StandardCopyOption.REPLACE_EXISTING);
+    private static void download(String url, Path dest) throws IOException {
+        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+        conn.setInstanceFollowRedirects(true);
+        conn.setConnectTimeout(30_000);
+        conn.setReadTimeout(60_000);
+        try {
+            int code = conn.getResponseCode();
+            if (code != 200) {
+                throw new IOException("download failed: HTTP " + code + " " + url);
+            }
+            try (InputStream in = conn.getInputStream()) {
+                Files.copy(in, dest, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } finally {
+            conn.disconnect();
         }
     }
 
@@ -317,7 +316,7 @@ class LinuxKernelInteropIT {
 
     private Path writePassfile() throws IOException {
         Path p = tmp.resolve("passfile-" + System.nanoTime());
-        Files.writeString(p, PASSWORD, StandardCharsets.UTF_8);
+        Files.write(p, PASSWORD.getBytes(StandardCharsets.UTF_8));
         return p;
     }
 
@@ -330,7 +329,7 @@ class LinuxKernelInteropIT {
         } catch (IOException e) {
             haveBinary = false;
         }
-        boolean haveFuse = Files.exists(Path.of("/dev/fuse"));
+        boolean haveFuse = Files.exists(Paths.get("/dev/fuse"));
         assumeTrue(haveBinary, "gocryptfs binary not found on PATH");
         assumeTrue(haveFuse, "FUSE (/dev/fuse) not available");
     }
@@ -345,10 +344,20 @@ class LinuxKernelInteropIT {
 
     private static void run(String... cmd) throws IOException, InterruptedException {
         Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
-        String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        String out = new String(readAll(p.getInputStream()), StandardCharsets.UTF_8);
         if (!p.waitFor(120, TimeUnit.SECONDS) || p.exitValue() != 0) {
             throw new IOException("command failed: " + Arrays.toString(cmd) + "\n" + out);
         }
+    }
+
+    private static byte[] readAll(InputStream in) throws IOException {
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        byte[] chunk = new byte[8192];
+        int n;
+        while ((n = in.read(chunk)) != -1) {
+            buffer.write(chunk, 0, n);
+        }
+        return buffer.toByteArray();
     }
 
     private static void waitForMount(Path mount) throws IOException, InterruptedException {
@@ -363,7 +372,7 @@ class LinuxKernelInteropIT {
 
     private static boolean isMounted(Path mount) throws IOException {
         String real = mount.toRealPath().toString();
-        for (String line : Files.readAllLines(Path.of("/proc/mounts"))) {
+        for (String line : Files.readAllLines(Paths.get("/proc/mounts"))) {
             if (line.contains(real)) {
                 return true;
             }

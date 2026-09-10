@@ -3,10 +3,13 @@ package de.sfuhrm.gocryptfs4j.core;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
 
@@ -109,7 +112,7 @@ class GocryptfsToolingIT {
 
     private Path writePassfile() throws IOException {
         Path p = tmp.resolve("passfile-" + System.nanoTime());
-        Files.writeString(p, PASSWORD, StandardCharsets.UTF_8);
+        Files.write(p, PASSWORD.getBytes(StandardCharsets.UTF_8));
         return p;
     }
 
@@ -127,7 +130,7 @@ class GocryptfsToolingIT {
 
     private static void assumeFuse() throws InterruptedException, IOException {
         assumeGocryptfsBinary();
-        assumeTrue(Files.exists(Path.of("/dev/fuse")), "FUSE (/dev/fuse) not available");
+        assumeTrue(Files.exists(Paths.get("/dev/fuse")), "FUSE (/dev/fuse) not available");
     }
 
     private static ProcessResult run(String... cmd) throws Exception {
@@ -141,12 +144,22 @@ class GocryptfsToolingIT {
             p.getOutputStream().write(stdin);
             p.getOutputStream().close();
         }
-        String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        String out = new String(readAll(p.getInputStream()), StandardCharsets.UTF_8);
         if (!p.waitFor(120, TimeUnit.SECONDS)) {
             p.destroyForcibly();
             throw new IOException("command timed out: " + Arrays.toString(cmd));
         }
         return new ProcessResult(p.exitValue(), out);
+    }
+
+    private static byte[] readAll(InputStream in) throws IOException {
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        byte[] chunk = new byte[8192];
+        int n;
+        while ((n = in.read(chunk)) != -1) {
+            buffer.write(chunk, 0, n);
+        }
+        return buffer.toByteArray();
     }
 
     private static final class ProcessResult {

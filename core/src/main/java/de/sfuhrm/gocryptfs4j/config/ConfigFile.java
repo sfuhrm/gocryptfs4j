@@ -77,7 +77,7 @@ public final class ConfigFile {
      */
     public static ConfigFile load(Path path) throws IOException {
         Objects.requireNonNull(path, "path");
-        String json = Files.readString(path, StandardCharsets.UTF_8);
+        String json = new String(Files.readAllBytes(path), StandardCharsets.UTF_8);
         ConfigFile cf = GSON.fromJson(json, ConfigFile.class);
         if (cf == null) {
             throw new IOException("empty config file");
@@ -439,7 +439,7 @@ public final class ConfigFile {
     public void writeTo(Path path) throws IOException {
         Objects.requireNonNull(path, "path");
         String json = GSON.toJson(this) + "\n";
-        Files.writeString(path, json, StandardCharsets.UTF_8,
+        Files.write(path, json.getBytes(StandardCharsets.UTF_8),
                 StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
     }
 }

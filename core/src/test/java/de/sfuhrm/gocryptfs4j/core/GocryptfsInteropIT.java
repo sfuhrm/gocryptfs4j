@@ -9,8 +9,10 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
@@ -91,9 +93,9 @@ class GocryptfsInteropIT {
             waitForMount(mount);
 
             Files.createDirectories(mount.resolve("sub"));
-            Files.writeString(mount.resolve("hello.txt"), "hello world", StandardCharsets.UTF_8);
+            Files.write(mount.resolve("hello.txt"), "hello world".getBytes(StandardCharsets.UTF_8));
             Files.write(mount.resolve("sub/big.bin"), bigData());
-            Files.writeString(mount.resolve(longName()), longNameContent(), StandardCharsets.UTF_8);
+            Files.write(mount.resolve(longName()), longNameContent().getBytes(StandardCharsets.UTF_8));
         } finally {
             unmount(mount);
             if (!mountProc.waitFor(30, TimeUnit.SECONDS)) {
@@ -104,7 +106,7 @@ class GocryptfsInteropIT {
         try (GocryptFs fs = GocryptFs.open(cipherDir, PASSWORD.toCharArray())) {
             Set<String> root = fs.list("/").stream()
                     .map(DirEntry::plainName).collect(Collectors.toSet());
-            assertEquals(Set.of("sub", "hello.txt", longName()), root);
+            assertEquals(new HashSet<>(Arrays.asList("sub", "hello.txt", longName())), root);
 
             assertEquals("hello world",
                     new String(fs.readAll("/hello.txt"), StandardCharsets.UTF_8));
@@ -138,14 +140,16 @@ class GocryptfsInteropIT {
         try {
             waitForMount(mount);
 
-            assertEquals("hello world", Files.readString(mount.resolve("hello.txt")));
+            assertEquals("hello world",
+                    new String(Files.readAllBytes(mount.resolve("hello.txt")), StandardCharsets.UTF_8));
             assertArrayEquals(bigData(), Files.readAllBytes(mount.resolve("sub/big.bin")));
-            assertEquals(longNameContent(), Files.readString(mount.resolve(longName())));
+            assertEquals(longNameContent(),
+                    new String(Files.readAllBytes(mount.resolve(longName())), StandardCharsets.UTF_8));
 
             try (Stream<Path> stream = Files.list(mount)) {
                 Set<String> names = stream.map(p -> p.getFileName().toString())
                         .collect(Collectors.toSet());
-                assertEquals(Set.of("sub", "hello.txt", longName()), names);
+                assertEquals(new HashSet<>(Arrays.asList("sub", "hello.txt", longName())), names);
             }
         } finally {
             unmount(mount);
@@ -182,7 +186,7 @@ class GocryptfsInteropIT {
 
     private Path writePassfile() throws IOException {
         Path p = tmp.resolve("passfile-" + System.nanoTime());
-        Files.writeString(p, PASSWORD, StandardCharsets.UTF_8);
+        Files.write(p, PASSWORD.getBytes(StandardCharsets.UTF_8));
         return p;
     }
 
@@ -195,7 +199,7 @@ class GocryptfsInteropIT {
         } catch (IOException e) {
             haveBinary = false;
         }
-        boolean haveFuse = Files.exists(Path.of("/dev/fuse"));
+        boolean haveFuse = Files.exists(Paths.get("/dev/fuse"));
         assumeTrue(haveBinary, "gocryptfs binary not found on PATH");
         assumeTrue(haveFuse, "FUSE (/dev/fuse) not available");
     }
@@ -227,7 +231,7 @@ class GocryptfsInteropIT {
 
     private static boolean isMounted(Path mount) throws IOException {
         String real = mount.toRealPath().toString();
-        for (String line : Files.readAllLines(Path.of("/proc/mounts"))) {
+        for (String line : Files.readAllLines(Paths.get("/proc/mounts"))) {
             if (line.contains(real)) {
                 return true;
             }

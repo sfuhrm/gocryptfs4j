@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![build](https://github.com/sfuhrm/gocryptfs4j/actions/workflows/build.yml/badge.svg)](https://github.com/sfuhrm/gocryptfs4j/actions/workflows/build.yml)
-![Java](https://img.shields.io/badge/Java-11-blue.svg)
+![Java](https://img.shields.io/badge/Java-8-blue.svg)
 [![Coverage](https://raw.githubusercontent.com/sfuhrm/gocryptfs4j/gh-pages/jacoco.svg)]() 
 [![ReleaseDate](https://img.shields.io/github/release-date/sfuhrm/gocryptfs4j)](https://github.com/sfuhrm/gocryptfs4j/releases)
 [![Maven Central](https://img.shields.io/maven-central/v/de.sfuhrm/gocryptfs4j)](https://central.sonatype.com/artifact/de.sfuhrm/gocryptfs4j)
@@ -72,8 +72,8 @@ the other two modules and is skipped for publishing.
 
 ## Requirements
 
-* Java 11 or newer (to run).
-* JDK 11 or newer (to build).
+* Java 8 or newer (to run).
+* JDK 11 or newer (to build and run the tests).
 * Maven 3.x (to build).
 * `gocryptfs` and FUSE are **only** needed to run the interop integration tests;
   those tests are skipped automatically when they are absent.
