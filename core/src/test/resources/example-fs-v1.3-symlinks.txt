@@ -1,0 +1,10 @@
+# Reconstruction data for the gocryptfs v1.3 example filesystem symlinks.
+#
+# gocryptfs stores a symlink on disk as a link whose target is the
+# base64url-encoded ciphertext of the plaintext target. Git and raw HTTP
+# downloads cannot represent symlinks, so the target strings are committed as
+# regular files and re-linked here by GocryptfsExampleFsGoldenTest.
+#
+# Format: <ciphertextName>=<on-disk symlink target>
+gv65k_g2NQyBsSv_5dzMVQ=ra2NOzuRPOI9tj-Hc7RIYJcZNCJKWY1bo4681ABZi5eEMkK9iZCQ8A
+uD4PVrDBY5y2k_qLKNOFvA=pAes0cNmAncysGM-LxZ-jXvIpdLwc2qQNXvrEw0l1-dM5X74-kBXgF7P

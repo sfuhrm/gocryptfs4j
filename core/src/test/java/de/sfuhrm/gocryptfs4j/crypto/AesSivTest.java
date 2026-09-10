@@ -94,4 +94,26 @@ class AesSivTest {
         assertThrows(IllegalArgumentException.class, () -> cipher.encrypt(new byte[1], new byte[12], null));
         assertThrows(IllegalArgumentException.class, () -> cipher.decrypt(new byte[17], new byte[12], null));
     }
+
+    /**
+     * Golden vector from gocryptfs {@code internal/siv_aead/correctness_test.go}
+     * ({@code TestK64}), which exercises the 64-byte key layout gocryptfs uses
+     * for content encryption.
+     */
+    @Test
+    void gocryptfsTestK64() throws GeneralSecurityException {
+        byte[] key = new byte[Constants.SIV_KEY_LEN];
+        Arrays.fill(key, (byte) 1);
+        byte[] nonce = new byte[Constants.AES_BLOCK_SIZE];
+        Arrays.fill(nonce, (byte) 2);
+        byte[] aad = new byte[24];
+        byte[] plaintext = {1, 2, 3, 4, 5, 6, 7, 8, 9};
+
+        AesSiv cipher = new AesSiv(key);
+        byte[] out = cipher.encrypt(plaintext, nonce, aad);
+
+        // SIV (16 bytes) followed by ciphertext (9 bytes).
+        assertArrayEquals(HEX.parseHex("317b316f67c3ad336c01c9a01b4c5e552ba89e966bc4c1ade1"), out);
+        assertArrayEquals(plaintext, cipher.decrypt(out, nonce, aad));
+    }
 }

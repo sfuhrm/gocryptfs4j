@@ -49,4 +49,29 @@ class HkdfTest {
             assertEquals(len, Hkdf.derive(ikm, "info", len).length);
         }
     }
+
+    /**
+     * Golden vectors from gocryptfs {@code internal/cryptocore/hkdf_test.go}
+     * ({@code TestHkdfDerive}). These pin the sub-key derivation that defines
+     * the on-disk format and must never change.
+     */
+    @Test
+    void gocryptfsMasterKeyVectors() {
+        byte[] master0 = new byte[32];
+        byte[] master1 = new byte[32];
+        Arrays.fill(master1, (byte) 1);
+
+        assertArrayEquals(HEX.parseHex(
+                        "9ba3cddd48c6339c6e56ebe85f0281d6e9051be4104176e65cb0f8a6f77ae6b4"),
+                Hkdf.derive(master0, Constants.HKDF_INFO_EME_NAMES, 32));
+        assertArrayEquals(HEX.parseHex(
+                        "e8a2499f48700b954f31de732efd04abce822f5c948e7fbc0896607be0d36d12"),
+                Hkdf.derive(master1, Constants.HKDF_INFO_EME_NAMES, 32));
+        assertArrayEquals(HEX.parseHex(
+                        "9137f2e67a842484137f3c458f357f204c30d7458f94f432fa989be96854a649"),
+                Hkdf.derive(master1, Constants.HKDF_INFO_GCM_CONTENT, 32));
+        assertArrayEquals(HEX.parseHex(
+                        "0bfa5da7d9724d4753269940d36898e2c0f3717c0fee86ada58b5fd6c08cc26c"),
+                Hkdf.derive(master1, Constants.HKDF_INFO_SIV_CONTENT, 32));
+    }
 }
