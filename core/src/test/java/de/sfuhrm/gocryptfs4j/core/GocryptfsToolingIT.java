@@ -19,10 +19,9 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * Uses the reference {@code gocryptfs} binary as an oracle against cipher
  * directories written by gocryptfs4j.
  *
- * <p>Unlike the interop tests, none of these require FUSE: {@code -info} reads
- * the config, {@code -fsck} verifies the ciphertext directly and {@code -passwd}
- * re-encrypts the master key. The tests are skipped when {@code gocryptfs} is
- * not on {@code PATH}.</p>
+ * <p>{@code -info} and {@code -passwd} require only the {@code gocryptfs}
+ * binary; {@code -fsck} additionally requires FUSE. The tests are skipped when
+ * the required tools are unavailable.</p>
  */
 class GocryptfsToolingIT {
 
@@ -50,7 +49,7 @@ class GocryptfsToolingIT {
 
     @Test
     void fsckAcceptsJavaWrittenFilesystem() throws Exception {
-        assumeGocryptfsBinary();
+        assumeFuse();
 
         Path cipherDir = Files.createDirectory(tmp.resolve("cipher"));
         try (GocryptFs fs = GocryptFs.create(cipherDir, PASSWORD.toCharArray())) {
@@ -77,10 +76,13 @@ class GocryptfsToolingIT {
 
         Path oldPassfile = writePassfile();
         String newPassword = "brand-new-password";
+        // gocryptfs reads the old and new password from stdin (one per line)
+        // when no -passfile/-extpass is given. This works on every gocryptfs
+        // version, unlike relying on -passfile for the old password (which some
+        // versions also reuse as the new password).
         ProcessResult r = runWithInput(
-                (newPassword + "\n").getBytes(StandardCharsets.UTF_8),
-                "gocryptfs", "-passwd", "-passfile", oldPassfile.toString(),
-                cipherDir.toString());
+                (PASSWORD + "\n" + newPassword + "\n").getBytes(StandardCharsets.UTF_8),
+                "gocryptfs", "-passwd", cipherDir.toString());
         assertEquals(0, r.exitCode, "gocryptfs -passwd failed:\n" + r.output);
 
         // New password opens and reads; old password is rejected.
@@ -121,6 +123,11 @@ class GocryptfsToolingIT {
             haveBinary = false;
         }
         assumeTrue(haveBinary, "gocryptfs binary not found on PATH");
+    }
+
+    private static void assumeFuse() throws InterruptedException, IOException {
+        assumeGocryptfsBinary();
+        assumeTrue(Files.exists(Path.of("/dev/fuse")), "FUSE (/dev/fuse) not available");
     }
 
     private static ProcessResult run(String... cmd) throws Exception {

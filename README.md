@@ -121,8 +121,8 @@ not on `PATH`:
   timestamps) against the real `gocryptfs` binary, via the plain API and the NIO
   view respectively. Requires FUSE.
 * `GocryptfsToolingIT` — uses `gocryptfs -info`, `-fsck` and `-passwd` as an
-  oracle against gocryptfs4j-written directories. Requires only the binary, not
-  FUSE.
+  oracle against gocryptfs4j-written directories. `-info` and `-passwd` need
+  only the binary; `-fsck` additionally needs FUSE.
 
 ## Usage
 
