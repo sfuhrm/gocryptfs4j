@@ -6,6 +6,7 @@ import java.net.URI;
 import java.nio.file.FileSystem;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.ProviderMismatchException;
 import java.nio.file.WatchKey;
 import java.nio.file.WatchService;
 import java.nio.file.WatchEvent;
@@ -309,12 +310,28 @@ final class GocryptFsPath implements Path {
     }
 
     @Override
-    public WatchKey register(WatchService watcher, WatchEvent.Kind<?>[] events, WatchEvent.Modifier... modifiers) {
-        throw new UnsupportedOperationException("watch service not supported");
+    public WatchKey register(WatchService watcher, WatchEvent.Kind<?>[] events, WatchEvent.Modifier... modifiers) throws IOException {
+        if (watcher == null) {
+            throw new NullPointerException("watcher");
+        }
+        if (events == null) {
+            throw new NullPointerException("events");
+        }
+        if (!(watcher instanceof GocryptFsWatchService)) {
+            throw new ProviderMismatchException();
+        }
+        GocryptFsWatchService ws = (GocryptFsWatchService) watcher;
+        if (ws.fileSystem() != fs) {
+            throw new ProviderMismatchException();
+        }
+        if (!isAbsolute()) {
+            throw new IllegalArgumentException("path must be absolute");
+        }
+        return ws.register(this, events, modifiers);
     }
 
     @Override
-    public WatchKey register(WatchService watcher, WatchEvent.Kind<?>... events) {
-        throw new UnsupportedOperationException("watch service not supported");
+    public WatchKey register(WatchService watcher, WatchEvent.Kind<?>... events) throws IOException {
+        return register(watcher, events, new WatchEvent.Modifier[0]);
     }
 }

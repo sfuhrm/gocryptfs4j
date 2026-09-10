@@ -4,6 +4,7 @@ import de.sfuhrm.gocryptfs4j.core.GocryptFs;
 
 import java.io.IOException;
 import java.net.URI;
+import java.nio.file.ClosedFileSystemException;
 import java.nio.file.FileStore;
 import java.nio.file.FileSystem;
 import java.nio.file.Path;
@@ -26,6 +27,7 @@ public final class GocryptFsFileSystem extends FileSystem {
     private final String key;
     private final URI uri;
     private final GocryptFsPath root;
+    private final GocryptFsUserPrincipalLookupService userPrincipalLookupService;
     private volatile boolean open = true;
 
     GocryptFsFileSystem(GocryptFsProvider provider, GocryptFs core, String key) {
@@ -34,6 +36,7 @@ public final class GocryptFsFileSystem extends FileSystem {
         this.key = key;
         this.uri = URI.create("gocryptfs://" + urlEncode(key) + "/");
         this.root = GocryptFsPath.absolute(this, "/");
+        this.userPrincipalLookupService = new GocryptFsUserPrincipalLookupService(this);
     }
 
     private static String urlEncode(String s) {
@@ -121,17 +124,20 @@ public final class GocryptFsFileSystem extends FileSystem {
 
     @Override
     public PathMatcher getPathMatcher(String syntaxAndPattern) {
-        throw new UnsupportedOperationException("PathMatcher is not supported");
+        return GocryptFsPathMatcher.create(syntaxAndPattern);
     }
 
     @Override
     public UserPrincipalLookupService getUserPrincipalLookupService() {
-        throw new UnsupportedOperationException("UserPrincipalLookupService is not supported");
+        return userPrincipalLookupService;
     }
 
     @Override
     public WatchService newWatchService() {
-        throw new UnsupportedOperationException("WatchService is not supported");
+        if (!open) {
+            throw new ClosedFileSystemException();
+        }
+        return new GocryptFsWatchService(this);
     }
 
     @Override

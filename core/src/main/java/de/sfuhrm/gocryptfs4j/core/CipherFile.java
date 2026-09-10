@@ -246,9 +246,7 @@ public final class CipherFile implements AutoCloseable {
         if (!fileIdLoaded) {
             long size = channel.size();
             if (size == 0) {
-                FileHeader h = FileHeader.random();
-                writeCipherRange(0, h.pack());
-                fileId = h.id();
+                fileId = null;
             } else {
                 byte[] hdr = readCipherRange(0, Constants.HEADER_LEN);
                 if (hdr.length < Constants.HEADER_LEN) {
@@ -259,7 +257,10 @@ public final class CipherFile implements AutoCloseable {
             fileIdLoaded = true;
         }
         if (fileId == null) {
-            throw new IOException("could not determine file id");
+            // The file is empty (or was truncated to empty): mint a fresh header.
+            FileHeader h = FileHeader.random();
+            writeCipherRange(0, h.pack());
+            fileId = h.id();
         }
         return fileId;
     }
