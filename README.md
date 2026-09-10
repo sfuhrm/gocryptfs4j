@@ -73,7 +73,7 @@ the other two modules and is skipped for publishing.
 ## Requirements
 
 * Java 11 or newer (to run).
-* JDK 17 or newer (to build; the test sources use `java.util.HexFormat`).
+* JDK 11 or newer (to build).
 * Maven 3.x (to build).
 * `gocryptfs` and FUSE are **only** needed to run the interop integration tests;
   those tests are skipped automatically when they are absent.

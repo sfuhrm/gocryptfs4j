@@ -28,7 +28,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HexFormat;
+import org.bouncycastle.util.encoders.Hex;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -267,7 +267,7 @@ class LinuxKernelNioInteropIT {
     private static String sha256(byte[] data) {
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
-            return HexFormat.of().formatHex(md.digest(data));
+            return Hex.toHexString(md.digest(data));
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException(e);
         }

@@ -2,13 +2,11 @@ package de.sfuhrm.gocryptfs4j.crypto;
 
 import org.junit.jupiter.api.Test;
 
-import java.util.HexFormat;
+import org.bouncycastle.util.encoders.Hex;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 
 class EmeTest {
-
-    private static final HexFormat HEX = HexFormat.of();
 
     @Test
     void knownAnswerSingleBlock() {
@@ -21,7 +19,7 @@ class EmeTest {
         Eme eme = new Eme(new AesBlockCipher(key));
         byte[] out = eme.encrypt(tweak, input);
 
-        byte[] expected = HEX.parseHex("f1b9ce8ca15a4ba9fb476905434b9fd3");
+        byte[] expected = Hex.decode("f1b9ce8ca15a4ba9fb476905434b9fd3");
         assertArrayEquals(expected, out);
     }
 

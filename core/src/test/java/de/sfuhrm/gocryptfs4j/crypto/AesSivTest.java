@@ -5,7 +5,7 @@ import org.junit.jupiter.api.Test;
 import javax.crypto.AEADBadTagException;
 import java.security.GeneralSecurityException;
 import java.util.Arrays;
-import java.util.HexFormat;
+import org.bouncycastle.util.encoders.Hex;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -13,24 +13,22 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class AesSivTest {
 
-    private static final HexFormat HEX = HexFormat.of();
-
     /** RFC 5297 A.1: AES-CMAC-SIV-256, deterministic encryption. */
     @Test
     void rfc5297TestCaseA1() {
-        byte[] key = HEX.parseHex(
+        byte[] key = Hex.decode(
                 "fffefdfcfbfaf9f8f7f6f5f4f3f2f1f0f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff");
         byte[] k1 = Arrays.copyOfRange(key, 0, 16);
         byte[] k2 = Arrays.copyOfRange(key, 16, 32);
-        byte[] ad = HEX.parseHex(
+        byte[] ad = Hex.decode(
                 "101112131415161718191a1b1c1d1e1f2021222324252627");
-        byte[] plaintext = HEX.parseHex("112233445566778899aabbccddee");
+        byte[] plaintext = Hex.decode("112233445566778899aabbccddee");
 
         byte[] siv = AesSiv.s2v(k1, new byte[][]{ad}, plaintext);
-        assertArrayEquals(HEX.parseHex("85632d07c6e8f37f950acd320a2ecc93"), siv);
+        assertArrayEquals(Hex.decode("85632d07c6e8f37f950acd320a2ecc93"), siv);
 
         byte[] ct = AesSiv.ctr(k2, siv, plaintext);
-        assertArrayEquals(HEX.parseHex("40c02b9690c4dc04daef7f6afe5c"), ct);
+        assertArrayEquals(Hex.decode("40c02b9690c4dc04daef7f6afe5c"), ct);
     }
 
     @Test
@@ -113,7 +111,7 @@ class AesSivTest {
         byte[] out = cipher.encrypt(plaintext, nonce, aad);
 
         // SIV (16 bytes) followed by ciphertext (9 bytes).
-        assertArrayEquals(HEX.parseHex("317b316f67c3ad336c01c9a01b4c5e552ba89e966bc4c1ade1"), out);
+        assertArrayEquals(Hex.decode("317b316f67c3ad336c01c9a01b4c5e552ba89e966bc4c1ade1"), out);
         assertArrayEquals(plaintext, cipher.decrypt(out, nonce, aad));
     }
 }

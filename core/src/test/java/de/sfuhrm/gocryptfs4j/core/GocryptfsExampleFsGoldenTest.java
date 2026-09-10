@@ -3,6 +3,7 @@ package de.sfuhrm.gocryptfs4j.core;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -10,6 +11,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -56,7 +58,7 @@ class GocryptfsExampleFsGoldenTest {
      * here from the {@code example-fs-v1.3-symlinks.txt} manifest.
      */
     private static void restoreSymlinks(Path cipherDir) throws Exception {
-        var manifest = GocryptfsExampleFsGoldenTest.class
+        URL manifest = GocryptfsExampleFsGoldenTest.class
                 .getResource("/example-fs-v1.3-symlinks.txt");
         for (String line : Files.readAllLines(Path.of(manifest.toURI()))) {
             if (line.isEmpty() || line.startsWith("#")) {
@@ -73,7 +75,7 @@ class GocryptfsExampleFsGoldenTest {
     private static Path copyResource(String resource, Path dest) throws Exception {
         Path src = Path.of(Objects.requireNonNull(
                 GocryptfsExampleFsGoldenTest.class.getResource(resource)).toURI());
-        try (var walk = Files.walk(src)) {
+        try (Stream<Path> walk = Files.walk(src)) {
             for (Path p : walk.collect(Collectors.toList())) {
                 Path target = dest.resolve(src.relativize(p).toString());
                 if (Files.isDirectory(p)) {

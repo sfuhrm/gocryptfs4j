@@ -142,7 +142,7 @@ class GocryptfsInteropIT {
             assertArrayEquals(bigData(), Files.readAllBytes(mount.resolve("sub/big.bin")));
             assertEquals(longNameContent(), Files.readString(mount.resolve(longName())));
 
-            try (var stream = Files.list(mount)) {
+            try (Stream<Path> stream = Files.list(mount)) {
                 Set<String> names = stream.map(p -> p.getFileName().toString())
                         .collect(Collectors.toSet());
                 assertEquals(Set.of("sub", "hello.txt", longName()), names);
