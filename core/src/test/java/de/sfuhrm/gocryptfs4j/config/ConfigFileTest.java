@@ -8,9 +8,14 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ConfigFileTest {
@@ -95,6 +100,78 @@ class ConfigFileTest {
             org.junit.jupiter.api.Assertions.fail("expected IOException for wrong password");
         } catch (java.io.IOException expected) {
             // ok
+        }
+    }
+
+    @Test
+    void reencryptMasterKeyChangesPassword() throws Exception {
+        byte[] masterKey = Keys.randomBytes(Constants.KEY_LEN);
+        ConfigFile cf = ConfigFile.create(masterKey, PASSWORD, false, ContentCipherType.AES_GCM);
+
+        cf.reencryptMasterKey(masterKey, "new-password".toCharArray());
+
+        assertArrayEquals(masterKey, cf.decryptMasterKey("new-password".toCharArray()));
+
+        // A freshly parsed config accepts the new and rejects the old password.
+        Path dir = Files.createTempDirectory("gocryptfs4j-");
+        try {
+            Path conf = dir.resolve("gocryptfs.conf");
+            cf.writeTo(conf);
+            ConfigFile reloaded = ConfigFile.load(conf);
+            assertArrayEquals(masterKey, reloaded.decryptMasterKey("new-password".toCharArray()));
+
+            // Use a second instance: decryptMasterKey caches the result per instance.
+            ConfigFile reloaded2 = ConfigFile.load(conf);
+            assertThrows(IOException.class, () -> reloaded2.decryptMasterKey(PASSWORD));
+        } finally {
+            Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
+    void reencryptMasterKeyRejectsWrongLength() {
+        ConfigFile cf = ConfigFile.create(Keys.randomBytes(Constants.KEY_LEN), PASSWORD, false,
+                ContentCipherType.AES_GCM);
+        assertThrows(IllegalArgumentException.class,
+                () -> cf.reencryptMasterKey(new byte[16], "pw".toCharArray()));
+    }
+
+    @Test
+    void writeToOverwritesExistingFile() throws Exception {
+        byte[] masterKey = Keys.randomBytes(Constants.KEY_LEN);
+        ConfigFile cf = ConfigFile.create(masterKey, PASSWORD, false, ContentCipherType.AES_GCM);
+
+        Path dir = Files.createTempDirectory("gocryptfs4j-");
+        try {
+            Path conf = dir.resolve("gocryptfs.conf");
+            cf.writeTo(conf);
+
+            // Change the password and overwrite the config in place.
+            cf.reencryptMasterKey(masterKey, "new-password".toCharArray());
+            cf.writeTo(conf, true);
+
+            ConfigFile reloaded = ConfigFile.load(conf);
+            assertArrayEquals(masterKey, reloaded.decryptMasterKey("new-password".toCharArray()));
+        } finally {
+            Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
+    void writeToFailsOnExistingFile() throws Exception {
+        ConfigFile cf = ConfigFile.create(Keys.randomBytes(Constants.KEY_LEN), PASSWORD, false,
+                ContentCipherType.AES_GCM);
+
+        Path dir = Files.createTempDirectory("gocryptfs4j-");
+        try {
+            Path conf = dir.resolve("gocryptfs.conf");
+            cf.writeTo(conf);
+            assertThrows(java.nio.file.FileAlreadyExistsException.class, () -> cf.writeTo(conf));
+        } finally {
+            Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
+            Files.deleteIfExists(dir);
         }
     }
 }

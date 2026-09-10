@@ -1,5 +1,6 @@
 package de.sfuhrm.gocryptfs4j.core;
 
+import de.sfuhrm.gocryptfs4j.config.ConfigFile;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -22,6 +23,37 @@ class GocryptFsTest {
 
     @TempDir
     Path tmp;
+
+    @Test
+    void openWithMasterKey() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+            fs.createFile("/hello.txt");
+            fs.write("/hello.txt", 0, "secret".getBytes(StandardCharsets.UTF_8));
+        }
+
+        byte[] masterKey = ConfigFile.load(cipherDir.resolve("gocryptfs.conf"))
+                .decryptMasterKey("pw".toCharArray());
+
+        try (GocryptFs fs = GocryptFs.open(cipherDir, masterKey)) {
+            assertEquals("secret", new String(fs.readAll("/hello.txt"), StandardCharsets.UTF_8));
+        }
+    }
+
+    @Test
+    void openWithWrongLengthMasterKeyThrows() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+            // just create the filesystem
+        }
+
+        assertThrows(IllegalArgumentException.class,
+                () -> GocryptFs.open(cipherDir, new byte[16]));
+    }
 
     @Test
     void createWriteReadListAndReopen() throws IOException {

@@ -100,6 +100,32 @@ public final class GocryptFs implements AutoCloseable {
         return new GocryptFs(cipherDir, config, masterKey);
     }
 
+    /**
+     * Opens an existing cipher directory using the raw 32-byte master key,
+     * bypassing the password-based key derivation.
+     *
+     * <p>This is equivalent to gocryptfs's {@code -masterkey} option and is
+     * useful when the password is unknown but the master key is available.</p>
+     *
+     * @param cipherDir the ciphertext directory
+     * @param masterKey the 32-byte master key
+     * @return the opened filesystem
+     * @throws IOException if the config is missing or the filesystem is corrupt
+     * @throws NullPointerException if {@code cipherDir} or {@code masterKey} is {@code null}
+     * @throws IllegalArgumentException if {@code masterKey} is not 32 bytes long
+     */
+    public static GocryptFs open(Path cipherDir, byte[] masterKey) throws IOException {
+        Objects.requireNonNull(cipherDir, "cipherDir");
+        Objects.requireNonNull(masterKey, "masterKey");
+        if (masterKey.length != Constants.KEY_LEN) {
+            throw new IllegalArgumentException("master key must be "
+                    + Constants.KEY_LEN + " bytes");
+        }
+        Path confPath = cipherDir.resolve(Constants.CONF_DEFAULT_NAME);
+        ConfigFile config = ConfigFile.load(confPath);
+        return new GocryptFs(cipherDir, config, masterKey.clone());
+    }
+
 
 
     /**

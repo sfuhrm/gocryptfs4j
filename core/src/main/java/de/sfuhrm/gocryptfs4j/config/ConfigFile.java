@@ -179,6 +179,64 @@ public final class ConfigFile {
         return out;
     }
 
+    /**
+     * Re-encrypts the master key with a new password, updating {@link #encryptedKey}
+     * and the scrypt salt in place.
+     *
+     * <p>This is the equivalent of gocryptfs's {@code -passwd}. Because it takes
+     * the master key directly, it also supports changing the password without
+     * knowing the previous one (gocryptfs's {@code -passwd -masterkey}). The
+     * scrypt cost parameters ({@code N}, {@code R}, {@code P}, {@code KeyLen}) and
+     * all feature flags are preserved; only the salt is regenerated. Use
+     * {@link #writeTo(Path, boolean)} with {@code overwrite = true} afterwards to
+     * persist the change.</p>
+     *
+     * @param masterKey the 32-byte master key
+     * @param password  the new password
+     * @throws NullPointerException if {@code masterKey} or {@code password} is {@code null}
+     * @throws IllegalArgumentException if {@code masterKey} is not 32 bytes long
+     */
+    public void reencryptMasterKey(byte[] masterKey, char[] password) {
+        Objects.requireNonNull(masterKey, "masterKey");
+        Objects.requireNonNull(password, "password");
+        if (masterKey.length != Constants.KEY_LEN) {
+            throw new IllegalArgumentException("master key must be "
+                    + Constants.KEY_LEN + " bytes");
+        }
+        ScryptKdf s = scryptObject;
+        if (s == null) {
+            throw new IllegalStateException("config has no scrypt object");
+        }
+
+        byte[] salt = Keys.randomBytes(Constants.KEY_LEN);
+        byte[] scryptHash = Keys.scrypt(
+                charsToBytes(password), salt, s.n, s.r, s.p, s.keyLen);
+        try {
+            // The master key is always protected with AES-256-GCM; the content
+            // cipher selection only affects file content.
+            boolean useHkdf = isFeatureFlagSet(Constants.FLAG_HKDF);
+            int ivLen = useHkdf ? Constants.DEFAULT_IV_BITS / 8 : 96 / 8;
+            byte[] contentKey = useHkdf
+                    ? Hkdf.derive(scryptHash, Constants.HKDF_INFO_GCM_CONTENT, Constants.KEY_LEN)
+                    : scryptHash;
+
+            byte[] nonce = Keys.randomBytes(ivLen);
+            byte[] aad = new byte[8];
+            byte[] ct = new Gcm(contentKey).encrypt(masterKey, nonce, aad);
+            byte[] encrypted = new byte[nonce.length + ct.length];
+            System.arraycopy(nonce, 0, encrypted, 0, nonce.length);
+            System.arraycopy(ct, 0, encrypted, nonce.length, ct.length);
+
+            encryptedKey = Base64.getEncoder().encodeToString(encrypted);
+            s.salt = Base64.getEncoder().encodeToString(salt);
+            // Invalidate any cached master key so the new password is verified.
+            this.masterKey = null;
+        } finally {
+            Keys.wipe(scryptHash);
+            Keys.wipe(salt);
+        }
+    }
+
     private static byte[] decode(String b64) {
         return Base64.getDecoder().decode(b64);
     }
@@ -430,16 +488,35 @@ public final class ConfigFile {
     }
 
     /**
-     * Writes the config as JSON (with a trailing newline) to {@code path}.
+     * Writes the config as JSON (with a trailing newline) to {@code path},
+     * failing if the file already exists.
      *
      * @param path the path to write to
-     * @throws IOException on filesystem errors
+     * @throws IOException on filesystem errors, or if the file already exists
      * @throws NullPointerException if {@code path} is {@code null}
      */
     public void writeTo(Path path) throws IOException {
+        writeTo(path, false);
+    }
+
+    /**
+     * Writes the config as JSON (with a trailing newline) to {@code path},
+     * optionally overwriting an existing file.
+     *
+     * @param path      the path to write to
+     * @param overwrite whether to replace an existing file
+     * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code path} is {@code null}
+     */
+    public void writeTo(Path path, boolean overwrite) throws IOException {
         Objects.requireNonNull(path, "path");
         String json = GSON.toJson(this) + "\n";
-        Files.write(path, json.getBytes(StandardCharsets.UTF_8),
-                StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+        if (overwrite) {
+            Files.write(path, bytes, StandardOpenOption.CREATE,
+                    StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+        } else {
+            Files.write(path, bytes, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+        }
     }
 }
