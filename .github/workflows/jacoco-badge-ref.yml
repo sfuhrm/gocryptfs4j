@@ -17,6 +17,6 @@ jobs:
       java_version: 17
       maven_target: verify
       artifact_name: jacoco-report
-      artifact_path: ./fs/target/site/jacoco/
+      artifact_path: ./coverage/target/site/jacoco-aggregate/
       jacoco_csv_path: >
-        ./fs/target/site/jacoco/jacoco.csv
+        ./coverage/target/site/jacoco-aggregate/jacoco.csv

@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>de.sfuhrm</groupId>
+        <artifactId>gocryptfs4j</artifactId>
+        <version>0.2.1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>gocryptfs4j-coverage</artifactId>
+    <packaging>pom</packaging>
+
+    <name>gocryptfs4j-coverage</name>
+    <description>Aggregates code coverage over the gocryptfs4j-fs and gocryptfs4j-nio modules.</description>
+
+    <properties>
+        <!-- This module has no sources/tests and is not published. -->
+        <maven.source.skip>true</maven.source.skip>
+        <maven.javadoc.skip>true</maven.javadoc.skip>
+        <maven.deploy.skip>true</maven.deploy.skip>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>de.sfuhrm</groupId>
+            <artifactId>gocryptfs4j-fs</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>de.sfuhrm</groupId>
+            <artifactId>gocryptfs4j-nio</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- Disable inherited executions that do not apply to this aggregator module. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>default</id>
+                        <phase>none</phase>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>prepare-agent</id>
+                        <phase>none</phase>
+                    </execution>
+                    <execution>
+                        <id>prepare-agent-integration</id>
+                        <phase>none</phase>
+                    </execution>
+                    <execution>
+                        <id>merge-results</id>
+                        <phase>none</phase>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>none</phase>
+                    </execution>
+                    <execution>
+                        <id>report-aggregate</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>report-aggregate</goal>
+                        </goals>
+                        <configuration>
+                            <dataFileIncludes>
+                                <dataFileInclude>target/jacoco-merged.exec</dataFileInclude>
+                            </dataFileIncludes>
+                            <outputDirectory>${project.build.directory}/site/jacoco-aggregate</outputDirectory>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>
