@@ -17,13 +17,15 @@ tool — no FUSE, no native libraries and no gocryptfs binary required.
 
 gocryptfs4j understands the same ciphertext format as gocryptfs. A directory
 encrypted with gocryptfs4j can be mounted and read by the real gocryptfs tool,
-and vice versa. It exposes the filesystem through two complementary APIs:
+and vice versa. It exposes the filesystem through two complementary APIs,
+provided by two of the project's [modules](#modules):
 
-* a **plain Java API** (`de.sfuhrm.gocryptfs4j.core.GocryptFs`) for create,
-  open, list, read, write and delete operations, and
-* a **`java.nio.file.FileSystemProvider`** (`de.sfuhrm.gocryptfs4j.nio.GocryptFsProvider`)
-  so the filesystem can be used transparently through the standard
-  `java.nio.file.Files` / `Path` API.
+* a **plain Java API** (`de.sfuhrm.gocryptfs4j.core.GocryptFs`, in the
+  [`core`](#modules) module) for create, open, list, read, write and delete
+  operations, and
+* a **`java.nio.file.FileSystemProvider`** (`de.sfuhrm.gocryptfs4j.nio.GocryptFsProvider`,
+  in the [`nio`](#modules) module) so the filesystem can be used transparently
+  through the standard `java.nio.file.Files` / `Path` API.
 
 ### Relation to gocryptfs
 
@@ -52,6 +54,22 @@ as gocryptfs, so both tools operate on the same data:
 * Plaintext-names mode for compatibility with setups that disable name encryption.
 * No external processes, no JNI, no FUSE — runs anywhere the JVM runs.
 
+## Modules
+
+The project is split into three Maven sub modules. The first two are published
+to Maven Central; the third exists only for the build:
+
+| Module     | Directory             | Artifact ID            | Java module                     | Purpose                                                            |
+|------------|-----------------------|------------------------|---------------------------------|--------------------------------------------------------------------|
+| `core`     | [`core/`](core)       | `gocryptfs4j-core`     | `de.sfuhrm.gocryptfs4j.core`    | The plain Java API (`GocryptFs`) plus the internal crypto, config and name handling. |
+| `nio`      | [`nio/`](nio)         | `gocryptfs4j-nio`      | `de.sfuhrm.gocryptfs4j.nio`     | The `java.nio.file` `FileSystemProvider`, built on top of `core`.  |
+| `coverage` | [`coverage/`](coverage) | `gocryptfs4j-coverage` | —                               | Build-time only JaCoCo aggregation module; not published.          |
+
+`gocryptfs4j-nio` depends on `gocryptfs4j-core` and re-exports it, so adding
+only the `nio` module is enough to use both APIs. The `coverage` module contains
+no sources or tests of its own — it merely merges the code-coverage reports of
+the other two modules and is skipped for publishing.
+
 ## Requirements
 
 * Java 11 or newer (to run).
@@ -67,20 +85,48 @@ mvn clean verify   # build, run unit tests and integration tests
 mvn package        # build the jar only (skips integration tests)
 ```
 
-The build produces `core/target/gocryptfs4j-core-X.Y.Z.jar` (the plain Java API) and
-`nio/target/gocryptfs4j-nio-X.Y.Z.jar` (the `FileSystemProvider`).
+The build produces the two published artifacts:
+
+* `core/target/gocryptfs4j-core-X.Y.Z.jar` — the plain Java API (the `core` module), and
+* `nio/target/gocryptfs4j-nio-X.Y.Z.jar` — the `FileSystemProvider` (the `nio` module).
+
+See [Modules](#modules) for a description of each module.
 
 ### Tests
 
-* Unit tests exercise key derivation, EME, content encryption and the API.
-* Integration tests (`*IT.java`) download the Linux kernel 1.0 source tree and
-  verify it round-trips byte-for-byte (including sizes and timestamps) against
-  the real `gocryptfs` binary, in both directions. They are picked up by
-  `mvn verify` and skip gracefully when `gocryptfs` or FUSE are unavailable.
+The test suite spans both published modules and is split into unit tests (run by
+`mvn test`) and integration tests (run by `mvn verify`).
+
+**Unit tests** — `*Test.java`, in the `core` and `nio` modules:
+
+* Cryptographic known-answer tests against RFC and gocryptfs vectors: scrypt
+  (RFC 7914), HKDF (RFC 5869 plus gocryptfs's sub-key vectors), AES-SIV
+  (RFC 5297 plus gocryptfs's `TestK64`), AES-GCM (NIST), EME (from
+  `rfjakob/eme`) and AES.
+* Core API tests for `GocryptFs`, `CipherFile` and `DirEntry`.
+* NIO provider tests covering `Files` traversal/read/write, `PathMatcher`
+  (glob/regex), `WatchService` and `UserPrincipalLookupService`.
+* Golden fixtures from the reference gocryptfs, committed under
+  `core/src/test/resources/`, verify that gocryptfs4j decrypts real
+  gocryptfs-produced ciphertext: legacy v0.11 `gocryptfs.conf` files and the
+  v1.3 example filesystem (HKDF, EME names, GCM content, long names, symlinks).
+
+**Integration tests** — `*IT.java`, skipped automatically when `gocryptfs` is
+not on `PATH`:
+
+* `GocryptfsInteropIT` — small bidirectional round-trip (gocryptfs writes →
+  gocryptfs4j reads and vice versa) across all ciphers and name modes.
+* `LinuxKernelInteropIT` / `LinuxKernelNioInteropIT` — download the Linux kernel
+  1.0 source tree and verify it round-trips byte-for-byte (including sizes and
+  timestamps) against the real `gocryptfs` binary, via the plain API and the NIO
+  view respectively. Requires FUSE.
+* `GocryptfsToolingIT` — uses `gocryptfs -info`, `-fsck` and `-passwd` as an
+  oracle against gocryptfs4j-written directories. Requires only the binary, not
+  FUSE.
 
 ## Usage
 
-### 1. Plain Java API
+### 1. Plain Java API (`core` module)
 
 ```java
 import de.sfuhrm.gocryptfs4j.core.DirEntry;
@@ -111,7 +157,7 @@ on `close()`. Other operations include `size`, `truncate`, `delete`,
 `createSymlink`, `readSymlinkTarget`, `setTimes` and `openRead` (a streaming
 decrypting `InputStream`).
 
-### 2. NIO `FileSystemProvider`
+### 2. NIO `FileSystemProvider` (`nio` module)
 
 The provider is registered as a service, so it can be obtained via
 `FileSystems.newFileSystem` and used with the standard `Files` API:
@@ -182,6 +228,8 @@ automatically with the correct cipher, since it is stored in `gocryptfs.conf`.
 
 ## Maven coordinates
 
+The `core` module (the plain Java API):
+
 ```xml
 <dependency>
     <groupId>de.sfuhrm</groupId>
@@ -190,7 +238,8 @@ automatically with the correct cipher, since it is stored in `gocryptfs.conf`.
 </dependency>
 ```
 
-The `FileSystemProvider` is a separate artifact that depends on the one above:
+The `nio` module (the `FileSystemProvider`) is a separate artifact that depends
+on, and re-exports, the `core` module:
 
 ```xml
 <dependency>
@@ -199,6 +248,8 @@ The `FileSystemProvider` is a separate artifact that depends on the one above:
     <version>0.2.0</version>
 </dependency>
 ```
+
+> Note: the `coverage` module is not published and has no Maven coordinates.
 
 ## License
 
