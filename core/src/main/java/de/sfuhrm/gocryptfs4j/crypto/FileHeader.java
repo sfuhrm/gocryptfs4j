@@ -106,9 +106,9 @@ public final class FileHeader {
     /**
      * Returns the file id.
      *
-     * @return the 16-byte file id
+     * @return a copy of the 16-byte file id
      */
     public byte[] id() {
-        return id;
+        return Arrays.copyOf(id, id.length);
     }
 }

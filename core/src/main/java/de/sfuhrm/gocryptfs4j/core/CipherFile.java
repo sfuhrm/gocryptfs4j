@@ -64,7 +64,7 @@ public final class CipherFile implements AutoCloseable {
      * @return the 16-byte file id, or {@code null}
      * @throws IOException if the file header is corrupt
      */
-    public byte[] fileId() throws IOException {
+    public synchronized byte[] fileId() throws IOException {
         if (!fileIdLoaded) {
             long size = channel.size();
             if (size == 0) {
@@ -87,7 +87,7 @@ public final class CipherFile implements AutoCloseable {
      * @return the plaintext size in bytes
      * @throws IOException on filesystem errors
      */
-    public long plainSize() throws IOException {
+    public synchronized long plainSize() throws IOException {
         long cipherSize = channel.size();
         if (cipherSize == 0) {
             return 0;
@@ -105,7 +105,7 @@ public final class CipherFile implements AutoCloseable {
      * @throws NullPointerException if {@code dst} is {@code null}
      * @throws IllegalArgumentException if {@code plainOffset} is negative
      */
-    public int read(ByteBuffer dst, long plainOffset) throws IOException {
+    public synchronized int read(ByteBuffer dst, long plainOffset) throws IOException {
         Objects.requireNonNull(dst, "dst");
         if (plainOffset < 0) {
             throw new IllegalArgumentException("negative offset: " + plainOffset);
@@ -162,7 +162,7 @@ public final class CipherFile implements AutoCloseable {
      * @throws NullPointerException if {@code src} is {@code null}
      * @throws IllegalArgumentException if {@code plainOffset} is negative
      */
-    public int write(ByteBuffer src, long plainOffset) throws IOException {
+    public synchronized int write(ByteBuffer src, long plainOffset) throws IOException {
         Objects.requireNonNull(src, "src");
         if (plainOffset < 0) {
             throw new IllegalArgumentException("negative offset: " + plainOffset);
@@ -225,7 +225,7 @@ public final class CipherFile implements AutoCloseable {
      * @throws IOException on filesystem or encryption errors
      * @throws IllegalArgumentException if {@code newPlainSize} is negative
      */
-    public void truncate(long newPlainSize) throws IOException {
+    public synchronized void truncate(long newPlainSize) throws IOException {
         if (newPlainSize < 0) {
             throw new IllegalArgumentException("negative size: " + newPlainSize);
         }
@@ -404,7 +404,7 @@ public final class CipherFile implements AutoCloseable {
     }
 
     @Override
-    public void close() throws IOException {
+    public synchronized void close() throws IOException {
         channel.close();
     }
 }
