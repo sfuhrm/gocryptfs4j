@@ -77,8 +77,8 @@ public final class FileHeader {
         }
         int version = ((buf[0] & 0xFF) << 8) | (buf[1] & 0xFF);
         if (version != Constants.CURRENT_VERSION) {
-            throw new IllegalArgumentException("invalid version: want="
-                    + Constants.CURRENT_VERSION + " have=" + version);
+            throw new IllegalArgumentException("unsupported file header version " + version
+                    + " (this implementation supports version " + Constants.CURRENT_VERSION + ")");
         }
         byte[] id = Arrays.copyOfRange(buf, Constants.HEADER_VERSION_LEN, Constants.HEADER_LEN);
         boolean zeroId = true;
