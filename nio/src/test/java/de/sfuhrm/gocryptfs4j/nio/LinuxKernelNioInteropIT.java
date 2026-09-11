@@ -111,10 +111,33 @@ class LinuxKernelNioInteropIT {
         }
     }
 
+    private static String gocryptfsHelp;
+
+    /** Skips the test when this gocryptfs release lacks the cipher's {@code -init} flag. */
+    private static void assumeCipherSupported(ContentCipherType cipherType)
+            throws IOException, InterruptedException {
+        String flag = cipherFlag(cipherType);
+        if (flag != null) {
+            assumeTrue(gocryptfsSupports(flag), "gocryptfs does not support " + flag);
+        }
+    }
+
+    /** Returns whether the installed gocryptfs advertises {@code flag} in {@code -hh}. */
+    private static boolean gocryptfsSupports(String flag) throws IOException, InterruptedException {
+        if (gocryptfsHelp == null) {
+            Process p = new ProcessBuilder("gocryptfs", "-hh")
+                    .redirectErrorStream(true).start();
+            gocryptfsHelp = new String(readAll(p.getInputStream()), StandardCharsets.UTF_8);
+            p.waitFor(30, TimeUnit.SECONDS);
+        }
+        return gocryptfsHelp.toLowerCase().contains(flag.replace("-", "").toLowerCase());
+    }
+
     @ParameterizedTest(name = "plaintextNames={0}, cipher={1}")
     @MethodSource("variations")
     void gocryptfsWritesNioReads(boolean plaintextNames, ContentCipherType cipherType) throws Exception {
         assumeGocryptfs();
+        assumeCipherSupported(cipherType);
         assumeTrue(sourceAvailable, "kernel source could not be downloaded/extracted");
 
         Path cipherDir = Files.createDirectory(tmp.resolve("cipher-gocryptfs"));
@@ -156,6 +179,7 @@ class LinuxKernelNioInteropIT {
     @MethodSource("variations")
     void nioWritesGocryptfsReads(boolean plaintextNames, ContentCipherType cipherType) throws Exception {
         assumeGocryptfs();
+        assumeCipherSupported(cipherType);
         assumeTrue(sourceAvailable, "kernel source could not be downloaded/extracted");
 
         Path cipherDir = Files.createDirectory(tmp.resolve("cipher-java"));

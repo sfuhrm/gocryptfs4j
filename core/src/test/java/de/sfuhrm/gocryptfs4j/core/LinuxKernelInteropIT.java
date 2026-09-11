@@ -106,10 +106,20 @@ class LinuxKernelInteropIT {
         }
     }
 
+    /** Skips the test when this gocryptfs release lacks the cipher's {@code -init} flag. */
+    private static void assumeCipherSupported(ContentCipherType cipherType)
+            throws IOException, InterruptedException {
+        String flag = cipherFlag(cipherType);
+        if (flag != null) {
+            assumeTrue(GocryptfsCli.supports(flag), "gocryptfs does not support " + flag);
+        }
+    }
+
     @ParameterizedTest(name = "plaintextNames={0}, cipher={1}")
     @MethodSource("variations")
     void gocryptfsWritesJavaReads(boolean plaintextNames, ContentCipherType cipherType) throws Exception {
         assumeGocryptfs();
+        assumeCipherSupported(cipherType);
         assumeTrue(sourceAvailable, "kernel source could not be downloaded/extracted");
 
         Path cipherDir = Files.createDirectory(tmp.resolve("cipher-gocryptfs"));
@@ -150,6 +160,7 @@ class LinuxKernelInteropIT {
     @MethodSource("variations")
     void javaWritesGocryptfsReads(boolean plaintextNames, ContentCipherType cipherType) throws Exception {
         assumeGocryptfs();
+        assumeCipherSupported(cipherType);
         assumeTrue(sourceAvailable, "kernel source could not be downloaded/extracted");
 
         Path cipherDir = Files.createDirectory(tmp.resolve("cipher-java"));
