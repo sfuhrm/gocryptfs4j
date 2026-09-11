@@ -1,0 +1,59 @@
+name: gocryptfs-version-matrix
+
+on:
+  push:
+    branches: [main, master]
+  schedule:
+    # Weekly, to catch regressions introduced by new gocryptfs releases.
+    - cron: '0 3 * * 0'
+  workflow_dispatch:
+
+jobs:
+  interop:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Pinned gocryptfs releases spanning the format's history:
+        #   1.4     earliest release with a static (without_openssl) Linux binary
+        #   1.8.0   last release of the v1.x line
+        #   2.0     first release of the v2.x line
+        #   2.6.1   current release
+        # Pre-1.4 releases ship only dynamically linked binaries that depend on
+        # the long-retired OpenSSL 1.0 (libcrypto.so.1.0.0), so they cannot run
+        # on a modern runner; the pre-HKDF on-disk format is instead covered by
+        # the static golden fixtures under core/src/test/resources.
+        gocryptfs: ["1.4", "1.8.0", "2.0", "2.6.1"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Install FUSE
+        run: |
+          sudo apt-get update
+          # v1.x needs fusermount (fuse), v2.x needs fusermount3 (fuse3).
+          sudo apt-get install -y fuse fuse3
+
+      - name: Download gocryptfs v${{ matrix.gocryptfs }}
+        run: |
+          mkdir -p "$HOME/bin"
+          curl -fsSL -o /tmp/gocryptfs.tar.gz \
+            "https://github.com/rfjakob/gocryptfs/releases/download/v${{ matrix.gocryptfs }}/gocryptfs_v${{ matrix.gocryptfs }}_linux-static_amd64.tar.gz"
+          tar -xzf /tmp/gocryptfs.tar.gz -C "$HOME/bin" gocryptfs
+          chmod +x "$HOME/bin/gocryptfs"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      - name: Verify gocryptfs + FUSE availability
+        run: |
+          gocryptfs -version
+          ls -la /dev/fuse || true
+
+      - name: Build and test (unit + integration)
+        run: mvn -B clean verify

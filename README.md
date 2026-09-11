@@ -124,6 +124,11 @@ not on `PATH`:
   oracle against gocryptfs4j-written directories. `-info` and `-passwd` need
   only the binary; `-fsck` additionally needs FUSE.
 
+The `.github/workflows/gocryptfs-matrix.yml` workflow runs the same integration
+tests against a matrix of pinned gocryptfs releases (1.4, 1.8.0, 2.0 and the
+current release), downloading each static binary from GitHub releases to catch
+format regressions across the version history.
+
 ## Usage
 
 ### 1. Plain Java API (`core` module)
