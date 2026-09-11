@@ -1,10 +1,14 @@
 package de.sfuhrm.gocryptfs4j.nio;
 
+import de.sfuhrm.gocryptfs4j.core.DirEntry;
+import de.sfuhrm.gocryptfs4j.core.GocryptFs;
+
 import java.io.File;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.file.FileSystem;
 import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.ProviderMismatchException;
 import java.nio.file.WatchKey;
@@ -255,8 +259,48 @@ final class GocryptFsPath implements Path {
     }
 
     @Override
-    public Path toRealPath(LinkOption... options) {
-        return toAbsolutePath().normalize();
+    public Path toRealPath(LinkOption... options) throws IOException {
+        Path abs = toAbsolutePath().normalize();
+        if (Arrays.asList(options).contains(LinkOption.NOFOLLOW_LINKS)) {
+            return abs;
+        }
+        return resolveLinks(abs, 0);
+    }
+
+    /** Resolves symbolic links in {@code abs}, returning the fully-resolved path. */
+    private Path resolveLinks(Path abs, int depth) throws IOException {
+        if (depth > 40) {
+            throw new IOException("too many levels of symbolic links: " + path);
+        }
+        GocryptFs core = fs.core();
+        Path result = fs.getRootPath();
+        int count = abs.getNameCount();
+        for (int i = 0; i < count; i++) {
+            String elem = abs.getName(i).toString();
+            if (elem.equals(".")) {
+                continue;
+            }
+            if (elem.equals("..")) {
+                Path parent = result.getParent();
+                result = parent == null ? result : parent;
+                continue;
+            }
+            Path candidate = result.resolve(elem);
+            try {
+                DirEntry e = core.stat(candidate.toString());
+                if (e.isSymbolicLink()) {
+                    String target = core.readSymlinkTarget(candidate.toString());
+                    Path t = target.startsWith("/")
+                            ? fs.getPath(target) : result.resolve(target);
+                    result = resolveLinks(t.normalize(), depth + 1);
+                } else {
+                    result = candidate;
+                }
+            } catch (NoSuchFileException ex) {
+                result = candidate;
+            }
+        }
+        return result.normalize();
     }
 
     @Override

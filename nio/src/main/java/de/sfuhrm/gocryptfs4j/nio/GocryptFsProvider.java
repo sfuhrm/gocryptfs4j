@@ -5,9 +5,13 @@ import de.sfuhrm.gocryptfs4j.core.GocryptFs;
 import de.sfuhrm.gocryptfs4j.core.CipherFile;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.URI;
 import java.nio.channels.SeekableByteChannel;
+import java.nio.file.AccessDeniedException;
 import java.nio.file.AccessMode;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.CopyOption;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileAlreadyExistsException;
@@ -116,11 +120,9 @@ public final class GocryptFsProvider extends FileSystemProvider {
     @Override
     public FileSystem getFileSystem(URI uri) {
         Objects.requireNonNull(uri, "uri");
-        String key = GocryptFsFileSystem.urlDecode(uri.getHost());
-        GocryptFsFileSystem fs = filesystems.get(key);
-        if (fs == null && filesystems.size() == 1) {
-            fs = filesystems.values().iterator().next();
-        }
+        String host = uri.getHost();
+        GocryptFsFileSystem fs = host == null
+                ? null : filesystems.get(GocryptFsFileSystem.urlDecode(host));
         if (fs == null) {
             throw new java.nio.file.FileSystemNotFoundException("no filesystem for " + uri);
         }
@@ -290,9 +292,15 @@ public final class GocryptFsProvider extends FileSystemProvider {
         } else if (se.isSymbolicLink()) {
             fs.createSymlink(t.toString(), fs.readSymlinkTarget(s.toString()));
         } else {
-            byte[] data = fs.readAll(s.toString());
             fs.createFile(t.toString());
-            fs.write(t.toString(), 0, data);
+            try (InputStream in = fs.openRead(s.toString());
+                 OutputStream out = fs.openWrite(t.toString())) {
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) != -1) {
+                    out.write(buf, 0, n);
+                }
+            }
         }
     }
 
@@ -305,6 +313,16 @@ public final class GocryptFsProvider extends FileSystemProvider {
     public void move(Path source, Path target, CopyOption... options) throws IOException {
         Objects.requireNonNull(source, "source");
         Objects.requireNonNull(target, "target");
+        Set<CopyOption> opts = options.length == 0
+                ? Collections.<CopyOption>emptySet()
+                : new HashSet<>(Arrays.asList(options));
+        if (opts.contains(StandardCopyOption.ATOMIC_MOVE)) {
+            throw new AtomicMoveNotSupportedException(source.toString(), target.toString(),
+                    "atomic moves are not supported");
+        }
+        if (toAbsolute(source).equals(toAbsolute(target))) {
+            return;
+        }
         copy(source, target, options);
         deleteRecursively(toAbsolute(source));
     }
@@ -384,7 +402,12 @@ public final class GocryptFsProvider extends FileSystemProvider {
     public void checkAccess(Path path, AccessMode... modes) throws IOException {
         Objects.requireNonNull(path, "path");
         GocryptFsPath p = toAbsolute(path);
-        core(p).stat(p.toString());
+        DirEntry e = core(p).stat(p.toString());
+        for (AccessMode mode : modes) {
+            if (mode == AccessMode.EXECUTE && !e.isDirectory()) {
+                throw new AccessDeniedException(p.toString());
+            }
+        }
     }
 
     /**
