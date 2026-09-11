@@ -33,4 +33,30 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <!-- Add a real module descriptor as a multi-release JAR (Java 9+). -->
+            <plugin>
+                <groupId>org.moditect</groupId>
+                <artifactId>moditect-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>add-module-info</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>add-module-info</goal>
+                        </goals>
+                        <configuration>
+                            <jvmVersion>9</jvmVersion>
+                            <failOnWarning>false</failOnWarning>
+                            <module>
+                                <moduleInfoFile>src/main/java9/module-info.java</moduleInfoFile>
+                            </module>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
 </project>
