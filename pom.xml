@@ -242,6 +242,10 @@
                 <artifactId>maven-javadoc-plugin</artifactId>
                 <configuration>
                     <failOnError>false</failOnError>
+                    <!-- Internal implementation packages are public only for
+                         cross-package access within the module; hide them from
+                         the published javadoc. -->
+                    <excludePackageNames>de.sfuhrm.gocryptfs4j.crypto,de.sfuhrm.gocryptfs4j.config,de.sfuhrm.gocryptfs4j.names,de.sfuhrm.gocryptfs4j.benchmark</excludePackageNames>
                 </configuration>
                 <executions>
                     <execution>
