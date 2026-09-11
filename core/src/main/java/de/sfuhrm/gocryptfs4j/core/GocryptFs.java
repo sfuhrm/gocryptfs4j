@@ -209,7 +209,7 @@ public final class GocryptFs implements AutoCloseable {
      *
      * @return the configuration file
      */
-    public ConfigFile config() {
+    ConfigFile config() {
         return config;
     }
 
@@ -218,7 +218,7 @@ public final class GocryptFs implements AutoCloseable {
      *
      * @return the content-encryption helper
      */
-    public ContentEnc contentEnc() {
+    ContentEnc contentEnc() {
         return contentEnc;
     }
 
@@ -227,7 +227,7 @@ public final class GocryptFs implements AutoCloseable {
      *
      * @return the name-transform helper
      */
-    public NameTransform nameTransform() {
+    NameTransform nameTransform() {
         return nameTransform;
     }
 
