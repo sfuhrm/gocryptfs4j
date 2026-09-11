@@ -38,8 +38,19 @@ jobs:
       - name: Install FUSE
         run: |
           sudo apt-get update
-          # v1.x needs fusermount (fuse), v2.x needs fusermount3 (fuse3).
-          sudo apt-get install -y fuse fuse3
+          # v1.x mounts via the fuse2 helper 'fusermount', v2.x via the fuse3
+          # helper 'fusermount3'. On Ubuntu 24.04 the two packages conflict
+          # (fuse3 Breaks fuse), so install per major version.
+          case "${{ matrix.gocryptfs }}" in
+            1.*)
+              sudo apt-get remove -y fuse3
+              sudo apt-get install -y fuse
+              ;;
+            *)
+              sudo apt-get install -y fuse3
+              ;;
+          esac
+          ls -la /bin/fusermount /bin/fusermount3 2>/dev/null || true
 
       - name: Download gocryptfs v${{ matrix.gocryptfs }}
         run: |
