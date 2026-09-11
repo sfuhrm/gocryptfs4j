@@ -19,6 +19,17 @@ public final class Gcm implements ContentCipher {
 
     private final byte[] key;
 
+    private final ThreadLocal<Cipher> encryptCipher = ThreadLocal.withInitial(Gcm::newCipher);
+    private final ThreadLocal<Cipher> decryptCipher = ThreadLocal.withInitial(Gcm::newCipher);
+
+    private static Cipher newCipher() {
+        try {
+            return Cipher.getInstance("AES/GCM/NoPadding");
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException("AES-GCM unavailable", e);
+        }
+    }
+
     /**
      * Creates an AES-256-GCM instance.
      *
@@ -53,7 +64,7 @@ public final class Gcm implements ContentCipher {
         Objects.requireNonNull(plaintext, "plaintext");
         Objects.requireNonNull(nonce, "nonce");
         try {
-            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            Cipher cipher = encryptCipher.get();
             cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(key, "AES"),
                     new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8, nonce));
             if (aad != null && aad.length > 0) {
@@ -81,7 +92,7 @@ public final class Gcm implements ContentCipher {
     public byte[] decrypt(byte[] ciphertext, byte[] nonce, byte[] aad) throws GeneralSecurityException {
         Objects.requireNonNull(ciphertext, "ciphertext");
         Objects.requireNonNull(nonce, "nonce");
-        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        Cipher cipher = decryptCipher.get();
         cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "AES"),
                 new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8, nonce));
         if (aad != null && aad.length > 0) {

@@ -753,8 +753,12 @@ public final class GocryptFs implements AutoCloseable {
     }
 
     private static final class CipherInputStream extends InputStream {
+        private static final int BUFFER_SIZE = 8192;
         private final CipherFile cf;
         private long pos;
+        private byte[] buf;
+        private int bufPos;
+        private int bufLen;
 
         CipherInputStream(CipherFile cf) {
             this.cf = cf;
@@ -762,13 +766,11 @@ public final class GocryptFs implements AutoCloseable {
 
         @Override
         public int read() throws IOException {
-            byte[] one = new byte[1];
-            int n = cf.read(ByteBuffer.wrap(one), pos);
-            if (n < 0) {
+            if (bufPos >= bufLen && !fill()) {
                 return -1;
             }
-            pos += n;
-            return one[0] & 0xFF;
+            pos++;
+            return buf[bufPos++] & 0xFF;
         }
 
         @Override
@@ -776,12 +778,37 @@ public final class GocryptFs implements AutoCloseable {
             if (len == 0) {
                 return 0;
             }
-            int n = cf.read(ByteBuffer.wrap(b, off, len), pos);
+            int copied = 0;
+            if (bufPos < bufLen) {
+                int n = Math.min(len, bufLen - bufPos);
+                System.arraycopy(buf, bufPos, b, off, n);
+                bufPos += n;
+                pos += n;
+                copied = n;
+                if (copied == len) {
+                    return copied;
+                }
+            }
+            int n = cf.read(ByteBuffer.wrap(b, off + copied, len - copied), pos);
             if (n < 0) {
-                return -1;
+                return copied == 0 ? -1 : copied;
             }
             pos += n;
-            return n;
+            return copied + n;
+        }
+
+        private boolean fill() throws IOException {
+            if (buf == null) {
+                buf = new byte[BUFFER_SIZE];
+            }
+            int n = cf.read(ByteBuffer.wrap(buf), pos);
+            if (n <= 0) {
+                bufLen = 0;
+                return false;
+            }
+            bufLen = n;
+            bufPos = 0;
+            return true;
         }
 
         @Override
