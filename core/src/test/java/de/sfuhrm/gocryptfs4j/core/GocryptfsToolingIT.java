@@ -53,6 +53,7 @@ class GocryptfsToolingIT {
     @Test
     void fsckAcceptsJavaWrittenFilesystem() throws Exception {
         assumeFuse();
+        assumeTrue(GocryptfsCli.supports("-fsck"), "gocryptfs does not support -fsck");
 
         Path cipherDir = Files.createDirectory(tmp.resolve("cipher"));
         try (GocryptFs fs = GocryptFs.create(cipherDir, PASSWORD.toCharArray())) {

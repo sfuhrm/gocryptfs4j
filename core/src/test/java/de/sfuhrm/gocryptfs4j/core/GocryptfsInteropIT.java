@@ -66,10 +66,20 @@ class GocryptfsInteropIT {
         }
     }
 
+    /** Skips the test when this gocryptfs release lacks the cipher's {@code -init} flag. */
+    private static void assumeCipherSupported(ContentCipherType cipherType)
+            throws IOException, InterruptedException {
+        String flag = cipherFlag(cipherType);
+        if (flag != null) {
+            assumeTrue(GocryptfsCli.supports(flag), "gocryptfs does not support " + flag);
+        }
+    }
+
     @ParameterizedTest(name = "plaintextNames={0}, cipher={1}")
     @MethodSource("variations")
     void gocryptfsWritesJavaReads(boolean plaintextNames, ContentCipherType cipherType) throws Exception {
         assumeGocryptfs();
+        assumeCipherSupported(cipherType);
 
         Path cipherDir = Files.createDirectory(tmp.resolve("cipher-gocryptfs"));
         Path mount = Files.createDirectory(tmp.resolve("mount"));
@@ -120,6 +130,7 @@ class GocryptfsInteropIT {
     @MethodSource("variations")
     void javaWritesGocryptfsReads(boolean plaintextNames, ContentCipherType cipherType) throws Exception {
         assumeGocryptfs();
+        assumeCipherSupported(cipherType);
 
         Path cipherDir = Files.createDirectory(tmp.resolve("cipher-java"));
         Path passfile = writePassfile();
