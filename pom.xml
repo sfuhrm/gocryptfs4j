@@ -40,6 +40,7 @@
     <modules>
         <module>core</module>
         <module>nio</module>
+        <module>fido2-libfido2</module>
         <module>coverage</module>
     </modules>
 
@@ -77,6 +78,11 @@
             <dependency>
                 <groupId>de.sfuhrm</groupId>
                 <artifactId>gocryptfs4j-nio</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>de.sfuhrm</groupId>
+                <artifactId>gocryptfs4j-fido2-libfido2</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

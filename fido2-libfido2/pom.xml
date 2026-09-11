@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>de.sfuhrm</groupId>
+        <artifactId>gocryptfs4j</artifactId>
+        <version>0.3.2-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>gocryptfs4j-fido2-libfido2</artifactId>
+    <packaging>jar</packaging>
+
+    <name>gocryptfs4j-fido2-libfido2</name>
+    <description>
+        A FIDO2 token implementation for gocryptfs4j that drives the libfido2
+        command-line tools fido2-cred and fido2-assert.
+    </description>
+
+    <properties>
+        <module.name>de.sfuhrm.gocryptfs4j.fido2.libfido2</module.name>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>de.sfuhrm</groupId>
+            <artifactId>gocryptfs4j-core</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- Add a real module descriptor as a multi-release JAR (Java 9+). -->
+            <plugin>
+                <groupId>org.moditect</groupId>
+                <artifactId>moditect-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>add-module-info</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>add-module-info</goal>
+                        </goals>
+                        <configuration>
+                            <jvmVersion>9</jvmVersion>
+                            <failOnWarning>false</failOnWarning>
+                            <module>
+                                <moduleInfoFile>src/main/java9/module-info.java</moduleInfoFile>
+                            </module>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

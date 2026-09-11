@@ -59,7 +59,7 @@ public final class ConfigFile {
 
     /** FIDO2 key-protection data, or {@code null} if unused. */
     @SerializedName("FIDO2")
-    public Object fido2;
+    public Fido2Params fido2;
 
     private transient byte[] masterKey;
 
@@ -99,7 +99,15 @@ public final class ConfigFile {
             }
         }
         if (isFeatureFlagSet(Constants.FLAG_FIDO2)) {
-            throw new UnsupportedOperationException("FIDO2-based key protection is not supported");
+            if (fido2 == null) {
+                throw new IOException("FIDO2 feature flag is set but the FIDO2 object is missing");
+            }
+            if (fido2.credentialId == null || fido2.credentialId.length == 0) {
+                throw new IOException("FIDO2 credential ID is missing");
+            }
+            if (fido2.hmacSalt == null || fido2.hmacSalt.length == 0) {
+                throw new IOException("FIDO2 HMAC salt is missing");
+            }
         }
     }
 
@@ -139,12 +147,32 @@ public final class ConfigFile {
      */
     public byte[] decryptMasterKey(char[] password) throws IOException {
         Objects.requireNonNull(password, "password");
+        byte[] passwordBytes = charsToBytes(password);
+        try {
+            return decryptMasterKey(passwordBytes);
+        } finally {
+            Keys.wipe(passwordBytes);
+        }
+    }
+
+    /**
+     * Derives the scrypt key from a raw secret and decrypts the master key.
+     *
+     * <p>This is the FIDO2 code path: gocryptfs uses the raw bytes returned by
+     * the token's {@code hmac-secret} extension as the scrypt password.</p>
+     *
+     * @param secret the raw secret to unlock the master key with
+     * @return the 32-byte master key
+     * @throws IOException if the secret is wrong or the config is malformed
+     * @throws NullPointerException if {@code secret} is {@code null}
+     */
+    public byte[] decryptMasterKey(byte[] secret) throws IOException {
+        Objects.requireNonNull(secret, "secret");
         if (masterKey != null) {
             return masterKey;
         }
         ScryptKdf s = scryptObject;
-        byte[] scryptHash = Keys.scrypt(
-                charsToBytes(password), decode(s.salt), s.n, s.r, s.p, s.keyLen);
+        byte[] scryptHash = Keys.scrypt(secret, decode(s.salt), s.n, s.r, s.p, s.keyLen);
         try {
             // gocryptfs always protects the master key with AES-256-GCM, even
             // when the content cipher is XChaCha20-Poly1305.
@@ -426,8 +454,36 @@ public final class ConfigFile {
      */
     public static ConfigFile create(byte[] masterKey, char[] password, boolean plaintextNames,
                                     ContentCipherType cipherType) {
-        Objects.requireNonNull(masterKey, "masterKey");
         Objects.requireNonNull(password, "password");
+        byte[] secret = charsToBytes(password);
+        try {
+            return create(masterKey, secret, plaintextNames, cipherType, null);
+        } finally {
+            Keys.wipe(secret);
+        }
+    }
+
+    /**
+     * Creates a fresh config file protected by a raw secret, optionally with
+     * FIDO2 parameters.
+     *
+     * <p>This is the FIDO2 code path: {@code secret} is the raw bytes returned by
+     * the token's {@code hmac-secret} extension and is used directly as the scrypt
+     * password. When {@code fido2} is non-{@code null} the {@code FIDO2} feature
+     * flag is set and the parameters are stored in the config.</p>
+     *
+     * @param masterKey      the 32-byte master key
+     * @param secret         the raw secret to protect the master key with
+     * @param plaintextNames whether to store file names unencrypted
+     * @param cipherType     the content-encryption cipher
+     * @param fido2          the FIDO2 parameters, or {@code null} for password protection
+     * @return the created config file
+     * @throws NullPointerException if {@code masterKey}, {@code secret} or {@code cipherType} is {@code null}
+     */
+    public static ConfigFile create(byte[] masterKey, byte[] secret, boolean plaintextNames,
+                                    ContentCipherType cipherType, Fido2Params fido2) {
+        Objects.requireNonNull(masterKey, "masterKey");
+        Objects.requireNonNull(secret, "secret");
         Objects.requireNonNull(cipherType, "cipherType");
         ConfigFile cf = new ConfigFile();
         cf.creator = "gocryptfs4j 0.1";
@@ -458,7 +514,11 @@ public final class ConfigFile {
             flags.add(Constants.FLAG_LONG_NAMES);
             flags.add(Constants.FLAG_RAW64);
         }
+        if (fido2 != null) {
+            flags.add(Constants.FLAG_FIDO2);
+        }
         cf.featureFlags = flags;
+        cf.fido2 = fido2;
 
         ScryptKdf sk = new ScryptKdf();
         sk.salt = Base64.getEncoder().encodeToString(Keys.randomBytes(Constants.KEY_LEN));
@@ -469,7 +529,7 @@ public final class ConfigFile {
         cf.scryptObject = sk;
 
         byte[] scryptHash = Keys.scrypt(
-                charsToBytes(password), decode(sk.salt), sk.n, sk.r, sk.p, sk.keyLen);
+                secret, decode(sk.salt), sk.n, sk.r, sk.p, sk.keyLen);
         try {
             // The master key is always protected with AES-256-GCM; the content
             // cipher selection only affects file content.

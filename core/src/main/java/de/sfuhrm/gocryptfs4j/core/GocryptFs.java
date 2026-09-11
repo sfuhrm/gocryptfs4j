@@ -1,12 +1,14 @@
 package de.sfuhrm.gocryptfs4j.core;
 
 import de.sfuhrm.gocryptfs4j.config.ConfigFile;
+import de.sfuhrm.gocryptfs4j.config.Fido2Params;
 import de.sfuhrm.gocryptfs4j.crypto.AesBlockCipher;
 import de.sfuhrm.gocryptfs4j.crypto.Constants;
 import de.sfuhrm.gocryptfs4j.crypto.ContentEnc;
 import de.sfuhrm.gocryptfs4j.crypto.Eme;
 import de.sfuhrm.gocryptfs4j.crypto.Hkdf;
 import de.sfuhrm.gocryptfs4j.crypto.Keys;
+import de.sfuhrm.gocryptfs4j.fido2.Fido2Token;
 import de.sfuhrm.gocryptfs4j.names.NameTransform;
 
 import java.io.IOException;
@@ -28,6 +30,7 @@ import java.nio.file.attribute.FileTime;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
@@ -126,6 +129,42 @@ public final class GocryptFs implements AutoCloseable {
         return new GocryptFs(cipherDir, config, masterKey.clone());
     }
 
+    /**
+     * Opens an existing FIDO2-protected cipher directory.
+     *
+     * <p>Reads the credential ID, HMAC salt and assertion options from the
+     * {@code FIDO2} object in {@code gocryptfs.conf}, asks the supplied
+     * {@link Fido2Token} for the {@code hmac-secret} and uses it to unlock the
+     * master key. The token implementation is provided by the application; see
+     * {@link Fido2Token} for the required semantics.</p>
+     *
+     * @param cipherDir the ciphertext directory
+     * @param token     the FIDO2 token implementation to unlock the master key with
+     * @return the opened filesystem
+     * @throws IOException if the config is missing, not FIDO2-protected, or the token fails
+     * @throws NullPointerException if {@code cipherDir} or {@code token} is {@code null}
+     */
+    public static GocryptFs open(Path cipherDir, Fido2Token token) throws IOException {
+        Objects.requireNonNull(cipherDir, "cipherDir");
+        Objects.requireNonNull(token, "token");
+        Path confPath = cipherDir.resolve(Constants.CONF_DEFAULT_NAME);
+        ConfigFile config = ConfigFile.load(confPath);
+        if (!config.isFeatureFlagSet(Constants.FLAG_FIDO2) || config.fido2 == null) {
+            throw new IOException("filesystem is not protected by a FIDO2 token");
+        }
+        Fido2Params params = config.fido2;
+        List<String> assertOptions = params.assertOptions == null
+                ? Collections.<String>emptyList()
+                : params.assertOptions;
+        byte[] secret = token.hmacSecret(params.credentialId, params.hmacSalt, assertOptions);
+        try {
+            byte[] masterKey = config.decryptMasterKey(secret);
+            return new GocryptFs(cipherDir, config, masterKey);
+        } finally {
+            Keys.wipe(secret);
+        }
+    }
+
 
 
     /**
@@ -192,6 +231,107 @@ public final class GocryptFs implements AutoCloseable {
         } catch (IOException e) {
             Files.deleteIfExists(dir.resolve(Constants.CONF_DEFAULT_NAME));
             throw e;
+        }
+    }
+
+    /**
+     * Creates a new FIDO2-protected filesystem in {@code cipherDir} (which must
+     * exist and be empty) and opens it.
+     *
+     * <p>Registers a new credential on the supplied {@link Fido2Token}, generates
+     * a random HMAC-secret salt, derives the secret and uses it to protect the
+     * master key. The credential ID, salt and (empty) assertion options are stored
+     * in {@code gocryptfs.conf}. The user name used for registration is the base
+     * name of {@code cipherDir}. Uses AES-256-GCM and encrypted names; use the
+     * more specific overload to change that.</p>
+     *
+     * @param cipherDir the ciphertext directory (must exist and be empty)
+     * @param token     the FIDO2 token implementation to protect the master key with
+     * @return the opened filesystem
+     * @throws IOException on filesystem errors or if the token interaction fails
+     * @throws NullPointerException if {@code cipherDir} or {@code token} is {@code null}
+     */
+    public static GocryptFs create(Path cipherDir, Fido2Token token) throws IOException {
+        return create(cipherDir, token, null, false, ContentCipherType.AES_GCM,
+                Collections.<String>emptyList());
+    }
+
+    /**
+     * Creates a new FIDO2-protected filesystem, optionally with plaintext names
+     * and a custom content cipher.
+     *
+     * @param cipherDir      the ciphertext directory (must exist and be empty)
+     * @param token          the FIDO2 token implementation to protect the master key with
+     * @param plaintextNames whether to store file names unencrypted
+     * @param cipherType     the content-encryption cipher
+     * @return the opened filesystem
+     * @throws IOException on filesystem errors or if the token interaction fails
+     * @throws NullPointerException if {@code cipherDir}, {@code token} or {@code cipherType} is {@code null}
+     */
+    public static GocryptFs create(Path cipherDir, Fido2Token token, boolean plaintextNames,
+                                   ContentCipherType cipherType) throws IOException {
+        return create(cipherDir, token, null, plaintextNames, cipherType,
+                Collections.<String>emptyList());
+    }
+
+    /**
+     * Creates a new FIDO2-protected filesystem.
+     *
+     * <p>The {@code assertOptions} are stored verbatim in the config and handed
+     * back to the token on every open. Pass {@code null} or an empty list for
+     * none.</p>
+     *
+     * @param cipherDir      the ciphertext directory (must exist and be empty)
+     * @param token          the FIDO2 token implementation to protect the master key with
+     * @param userName       the user name to register the credential with, or
+     *                       {@code null} to use the base name of {@code cipherDir}
+     * @param plaintextNames whether to store file names unencrypted
+     * @param cipherType     the content-encryption cipher
+     * @param assertOptions  options to pass to the token assertion, or {@code null}
+     * @return the opened filesystem
+     * @throws IOException on filesystem errors or if the token interaction fails
+     * @throws NullPointerException if {@code cipherDir}, {@code token} or {@code cipherType} is {@code null}
+     */
+    public static GocryptFs create(Path cipherDir, Fido2Token token, String userName,
+                                   boolean plaintextNames, ContentCipherType cipherType,
+                                   List<String> assertOptions) throws IOException {
+        Objects.requireNonNull(cipherDir, "cipherDir");
+        Objects.requireNonNull(token, "token");
+        Objects.requireNonNull(cipherType, "cipherType");
+        Path dir = cipherDir.toAbsolutePath().normalize();
+        if (!Files.isDirectory(dir)) {
+            throw new IOException("cipher dir does not exist: " + dir);
+        }
+        try (DirectoryStream<Path> ds = Files.newDirectoryStream(dir)) {
+            if (ds.iterator().hasNext()) {
+                throw new IOException("cipher dir is not empty: " + dir);
+            }
+        }
+        List<String> options = assertOptions == null
+                ? Collections.<String>emptyList()
+                : new ArrayList<>(assertOptions);
+        String name = userName != null ? userName : String.valueOf(dir.getFileName());
+
+        byte[] credentialId = token.registerCredential(name);
+        byte[] hmacSalt = Keys.randomBytes(Fido2Params.HMAC_SALT_LEN);
+        byte[] secret = token.hmacSecret(credentialId, hmacSalt, options);
+        try {
+            byte[] masterKey = Keys.randomBytes(Constants.KEY_LEN);
+            ConfigFile config = ConfigFile.create(masterKey, secret, plaintextNames, cipherType,
+                    new Fido2Params(credentialId, hmacSalt, options));
+            config.writeTo(dir.resolve(Constants.CONF_DEFAULT_NAME));
+            GocryptFs fs = new GocryptFs(dir, config, masterKey);
+            try {
+                if (!plaintextNames) {
+                    fs.writeDirIV(dir);
+                }
+                return fs;
+            } catch (IOException e) {
+                Files.deleteIfExists(dir.resolve(Constants.CONF_DEFAULT_NAME));
+                throw e;
+            }
+        } finally {
+            Keys.wipe(secret);
         }
     }
 

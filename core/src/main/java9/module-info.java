@@ -10,5 +10,6 @@ module de.sfuhrm.gocryptfs4j.core {
     requires com.google.gson;
 
     exports de.sfuhrm.gocryptfs4j.core;
+    exports de.sfuhrm.gocryptfs4j.fido2;
     exports de.sfuhrm.gocryptfs4j.benchmark;
 }

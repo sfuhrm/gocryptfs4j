@@ -30,6 +30,10 @@
             <groupId>de.sfuhrm</groupId>
             <artifactId>gocryptfs4j-nio</artifactId>
         </dependency>
+        <dependency>
+            <groupId>de.sfuhrm</groupId>
+            <artifactId>gocryptfs4j-fido2-libfido2</artifactId>
+        </dependency>
     </dependencies>
 
     <build>
