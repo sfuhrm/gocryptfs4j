@@ -27,6 +27,11 @@ public final class AesSiv implements ContentCipher {
     private final byte[] k1;
     private final byte[] k2;
 
+    private static final ThreadLocal<CMac> CMAC = ThreadLocal.withInitial(
+            () -> new CMac(new AESEngine()));
+    private static final ThreadLocal<SICBlockCipher> CTR = ThreadLocal.withInitial(
+            () -> new SICBlockCipher(new AESEngine()));
+
     /**
      * Creates an AES-SIV instance.
      *
@@ -176,7 +181,7 @@ public final class AesSiv implements ContentCipher {
         byte[] q = siv.clone();
         q[8] &= 0x7f;
         q[12] &= 0x7f;
-        SICBlockCipher cipher = new SICBlockCipher(new AESEngine());
+        SICBlockCipher cipher = CTR.get();
         cipher.init(true, new ParametersWithIV(new KeyParameter(k2), q));
         byte[] out = new byte[data.length];
         cipher.processBytes(data, 0, data.length, out, 0);
@@ -191,7 +196,7 @@ public final class AesSiv implements ContentCipher {
      * @return the 16-byte CMAC
      */
     private static byte[] cmac(byte[] key, byte[] data) {
-        CMac mac = new CMac(new AESEngine());
+        CMac mac = CMAC.get();
         mac.init(new KeyParameter(key));
         mac.update(data, 0, data.length);
         byte[] out = new byte[Constants.AES_BLOCK_SIZE];

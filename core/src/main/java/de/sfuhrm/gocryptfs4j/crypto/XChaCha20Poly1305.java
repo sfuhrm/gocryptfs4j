@@ -19,6 +19,11 @@ public final class XChaCha20Poly1305 implements ContentCipher {
 
     private final byte[] key;
 
+    private final ThreadLocal<AEADCipher> encryptCipher = ThreadLocal.withInitial(
+            org.bouncycastle.crypto.modes.XChaCha20Poly1305::new);
+    private final ThreadLocal<AEADCipher> decryptCipher = ThreadLocal.withInitial(
+            org.bouncycastle.crypto.modes.XChaCha20Poly1305::new);
+
     /**
      * Creates an XChaCha20-Poly1305 instance.
      *
@@ -58,7 +63,7 @@ public final class XChaCha20Poly1305 implements ContentCipher {
             throw new IllegalArgumentException("XChaCha20-Poly1305 nonce must be "
                     + Constants.XCHACHA_NONCE_LEN + " bytes");
         }
-        AEADCipher cipher = new org.bouncycastle.crypto.modes.XChaCha20Poly1305();
+        AEADCipher cipher = encryptCipher.get();
         cipher.init(true, new AEADParameters(new KeyParameter(key), Constants.AUTH_TAG_LEN * 8, nonce, aad));
         byte[] out = new byte[cipher.getOutputSize(plaintext.length)];
         int len = cipher.processBytes(plaintext, 0, plaintext.length, out, 0);
@@ -90,7 +95,7 @@ public final class XChaCha20Poly1305 implements ContentCipher {
             throw new IllegalArgumentException("XChaCha20-Poly1305 nonce must be "
                     + Constants.XCHACHA_NONCE_LEN + " bytes");
         }
-        AEADCipher cipher = new org.bouncycastle.crypto.modes.XChaCha20Poly1305();
+        AEADCipher cipher = decryptCipher.get();
         cipher.init(false, new AEADParameters(new KeyParameter(key), Constants.AUTH_TAG_LEN * 8, nonce, aad));
         byte[] out = new byte[cipher.getOutputSize(ciphertext.length)];
         int len = cipher.processBytes(ciphertext, 0, ciphertext.length, out, 0);
