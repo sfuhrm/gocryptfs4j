@@ -142,9 +142,8 @@ class GocryptFsTest {
                 out.write("new".getBytes(StandardCharsets.UTF_8));
             }
 
-            // openWrite starts at offset 0 and does not truncate, so the tail of
-            // the previous content remains (mirrors write(String, offset, data)).
-            assertEquals("new content longer",
+            // openWrite starts at offset 0 and truncates any previous content.
+            assertEquals("new",
                     new String(fs.readAll("/f.txt"), StandardCharsets.UTF_8));
         }
     }

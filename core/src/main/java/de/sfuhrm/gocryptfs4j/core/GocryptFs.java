@@ -175,6 +175,11 @@ public final class GocryptFs implements AutoCloseable {
         if (!Files.isDirectory(dir)) {
             throw new IOException("cipher dir does not exist: " + dir);
         }
+        try (DirectoryStream<Path> ds = Files.newDirectoryStream(dir)) {
+            if (ds.iterator().hasNext()) {
+                throw new IOException("cipher dir is not empty: " + dir);
+            }
+        }
         byte[] masterKey = Keys.randomBytes(Constants.KEY_LEN);
         ConfigFile config = ConfigFile.create(masterKey, password, plaintextNames, cipherType);
         config.writeTo(dir.resolve(Constants.CONF_DEFAULT_NAME));
@@ -679,6 +684,7 @@ public final class GocryptFs implements AutoCloseable {
         Objects.requireNonNull(plainFile, "plainFile");
         Resolved r = resolve(plainFile);
         CipherFile cf = openCipherFile(r.cipherPath, true);
+        cf.truncate(0);
         return Channels.newOutputStream(cf.writeChannel(0));
     }
 

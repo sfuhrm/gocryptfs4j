@@ -235,7 +235,7 @@ The `core` module (the plain Java API):
 <dependency>
     <groupId>de.sfuhrm</groupId>
     <artifactId>gocryptfs4j-core</artifactId>
-    <version>0.2.0</version>
+    <version>0.3.0</version>
 </dependency>
 ```
 
@@ -246,7 +246,7 @@ on, and re-exports, the `core` module:
 <dependency>
     <groupId>de.sfuhrm</groupId>
     <artifactId>gocryptfs4j-nio</artifactId>
-    <version>0.2.0</version>
+    <version>0.3.0</version>
 </dependency>
 ```
 
