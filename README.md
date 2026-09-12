@@ -8,25 +8,30 @@
 [![Maven Central](https://img.shields.io/maven-central/v/de.sfuhrm/gocryptfs4j)](https://central.sonatype.com/artifact/de.sfuhrm/gocryptfs4j)
 [![javadoc core](https://javadoc.io/badge2/de.sfuhrm/gocryptfs4j-core/0.3.0/javadoc.svg)](https://javadoc.io/doc/de.sfuhrm/gocryptfs4j-core)
 [![javadoc nio](https://javadoc.io/badge2/de.sfuhrm/gocryptfs4j-nio/0.3.0/javadoc.svg)](https://javadoc.io/doc/de.sfuhrm/gocryptfs4j-nio)
+[![javadoc libfido2](https://javadoc.io/badge2/de.sfuhrm/gocryptfs4j-libfido2/0.3.0/javadoc.svg)](https://javadoc.io/doc/de.sfuhrm/gocryptfs4j-libfido2)
 
 A pure Java implementation of the [gocryptfs](https://github.com/rfjakob/gocryptfs)
 forward-mode on-disk format. It lets Java applications create, read and write
 encrypted directories that are fully interchangeable with the original gocryptfs
-tool — no FUSE, no native libraries and no gocryptfs binary required.
+tool — no FUSE, no native libraries and no gocryptfs binary required for
+password-protected filesystems.
 
 ## What is gocryptfs4j?
 
 gocryptfs4j understands the same ciphertext format as gocryptfs. A directory
 encrypted with gocryptfs4j can be mounted and read by the real gocryptfs tool,
-and vice versa. It exposes the filesystem through two complementary APIs,
-provided by two of the project's [modules](#modules):
+and vice versa. It exposes the filesystem through two complementary APIs, plus
+optional FIDO2 support, provided by the project's [modules](#modules):
 
 * a **plain Java API** (`de.sfuhrm.gocryptfs4j.core.GocryptFs`, in the
   [`core`](#modules) module) for create, open, list, read, write and delete
-  operations, and
+  operations,
 * a **`java.nio.file.FileSystemProvider`** (`de.sfuhrm.gocryptfs4j.nio.GocryptFsProvider`,
   in the [`nio`](#modules) module) so the filesystem can be used transparently
-  through the standard `java.nio.file.Files` / `Path` API.
+  through the standard `java.nio.file.Files` / `Path` API, and
+* an optional **FIDO2 token** (`de.sfuhrm.gocryptfs4j.fido2.libfido2.LibFido2Token`,
+  in the [`libfido2`](#modules) module) that protects a filesystem with a
+  security key instead of a password, compatible with gocryptfs's `-fido2` mode.
 
 ### Relation to gocryptfs
 
@@ -53,8 +58,8 @@ as gocryptfs, so both tools operate on the same data:
 * Random access reads and writes, including partial-block and sparse writes.
 * Symlink support.
 * Plaintext-names mode for compatibility with setups that disable name encryption.
-* Optional **FIDO2** (`-fido2`) support through the `libfido2` module, reading
-  and writing filesystems protected by a security key's `hmac-secret` and
+* Optional **FIDO2** (`-fido2`) support through the `libfido2` module: create
+  and open filesystems protected by a security key's `hmac-secret`, byte-
   compatible with credentials created by gocryptfs.
 * Password-protected filesystems need no external processes, no JNI and no FUSE
   — runs anywhere the JVM runs.
@@ -85,6 +90,9 @@ other modules and is skipped for publishing.
 * Maven 3.x (to build).
 * `gocryptfs` and FUSE are **only** needed to run the interop integration tests;
   those tests are skipped automatically when they are absent.
+* For the optional FIDO2 support (`libfido2` module): the `fido2-cred` and
+  `fido2-assert` tools (`fido2-tools` on Debian/Ubuntu, the `libfido2` Homebrew
+  formula on macOS) and a security key with the `hmac-secret` extension.
 
 ## Building
 
@@ -120,8 +128,8 @@ The test suite spans all published modules and is split into unit tests (run by
   gocryptfs-produced ciphertext: legacy v0.11 `gocryptfs.conf` files and the
   v1.3 example filesystem (HKDF, EME names, GCM content, long names, symlinks).
 
-**Integration tests** — `*IT.java`, skipped automatically when `gocryptfs` is
-not on `PATH`:
+**Integration tests** — `*IT.java`, skipped automatically when their required
+tools or configuration are unavailable:
 
 * `GocryptfsInteropIT` — small bidirectional round-trip (gocryptfs writes →
   gocryptfs4j reads and vice versa) across all ciphers and name modes.
@@ -245,6 +253,49 @@ The third `create` argument controls plaintext (unencrypted) names: pass
 for the default EME-encrypted names. Filesystems are always opened
 automatically with the correct cipher, since it is stored in `gocryptfs.conf`.
 
+### 4. FIDO2-protected filesystems (`libfido2` module)
+
+The optional `libfido2` module provides `LibFido2Token`, a `Fido2Token`
+implementation that drives the libfido2 command-line tools. It is byte-compatible
+with gocryptfs's `-fido2` mode, so a credential created by gocryptfs can be used
+from Java and vice versa. Create and open take the token instead of a password:
+
+```java
+import de.sfuhrm.gocryptfs4j.core.GocryptFs;
+import de.sfuhrm.gocryptfs4j.fido2.Fido2Token;
+import de.sfuhrm.gocryptfs4j.fido2.libfido2.LibFido2Token;
+
+import java.nio.charset.StandardCharsets;
+
+Fido2Token token = new LibFido2Token("/dev/hidraw5");  // list with: fido2-token -L
+
+// Create a new filesystem: registers a credential on the key and touches it.
+try (GocryptFs fs = GocryptFs.create(cipherDir, token)) {
+    fs.createFile("/hello.txt");
+    fs.write("/hello.txt", 0, "hello fido2".getBytes(StandardCharsets.UTF_8));
+}
+
+// Open an existing one: the credential ID and salt come from gocryptfs.conf.
+try (GocryptFs fs = GocryptFs.open(cipherDir, token)) {
+    String content = new String(fs.readAll("/hello.txt"), StandardCharsets.UTF_8);
+}
+```
+
+Pass `pin=true` in the assertion options when creating the filesystem if the key
+is PIN-protected:
+
+```java
+import de.sfuhrm.gocryptfs4j.core.ContentCipherType;
+import java.util.Collections;
+
+try (GocryptFs fs = GocryptFs.create(cipherDir, token, null, false,
+        ContentCipherType.AES_GCM, Collections.singletonList("pin=true"))) {
+    // ...
+}
+```
+
+The options are stored in the config and reused on every open.
+
 ## Maven coordinates
 
 The `core` module (the plain Java API):
@@ -264,6 +315,16 @@ on, and re-exports, the `core` module:
 <dependency>
     <groupId>de.sfuhrm</groupId>
     <artifactId>gocryptfs4j-nio</artifactId>
+    <version>0.3.0</version>
+</dependency>
+```
+
+For FIDO2 support, add the `libfido2` module as well (it depends on `core`):
+
+```xml
+<dependency>
+    <groupId>de.sfuhrm</groupId>
+    <artifactId>gocryptfs4j-libfido2</artifactId>
     <version>0.3.0</version>
 </dependency>
 ```
