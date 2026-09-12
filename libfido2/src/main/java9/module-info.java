@@ -1,5 +1,5 @@
 /**
- * Module descriptor for gocryptfs4j-fido2-libfido2.
+ * Module descriptor for gocryptfs4j-libfido2.
  *
  * <p>Compiled with {@code --release 9} and packaged as a multi-release JAR
  * ({@code META-INF/versions/9/module-info.class}), so the artifact stays a

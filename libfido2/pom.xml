@@ -8,10 +8,10 @@
         <version>0.3.2-SNAPSHOT</version>
     </parent>
 
-    <artifactId>gocryptfs4j-fido2-libfido2</artifactId>
+    <artifactId>gocryptfs4j-libfido2</artifactId>
     <packaging>jar</packaging>
 
-    <name>gocryptfs4j-fido2-libfido2</name>
+    <name>gocryptfs4j-libfido2</name>
     <description>
         A FIDO2 token implementation for gocryptfs4j that drives the libfido2
         command-line tools fido2-cred and fido2-assert.

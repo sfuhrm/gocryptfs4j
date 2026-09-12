@@ -47,5 +47,5 @@ jobs:
           path: |
             core/target/*.jar
             nio/target/*.jar
-            fido2-libfido2/target/*.jar
+            libfido2/target/*.jar
           if-no-files-found: error

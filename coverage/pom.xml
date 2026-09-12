@@ -32,7 +32,7 @@
         </dependency>
         <dependency>
             <groupId>de.sfuhrm</groupId>
-            <artifactId>gocryptfs4j-fido2-libfido2</artifactId>
+            <artifactId>gocryptfs4j-libfido2</artifactId>
         </dependency>
     </dependencies>
 
