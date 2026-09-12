@@ -53,23 +53,30 @@ as gocryptfs, so both tools operate on the same data:
 * Random access reads and writes, including partial-block and sparse writes.
 * Symlink support.
 * Plaintext-names mode for compatibility with setups that disable name encryption.
-* No external processes, no JNI, no FUSE — runs anywhere the JVM runs.
+* Optional **FIDO2** (`-fido2`) support through the `libfido2` module, reading
+  and writing filesystems protected by a security key's `hmac-secret` and
+  compatible with credentials created by gocryptfs.
+* Password-protected filesystems need no external processes, no JNI and no FUSE
+  — runs anywhere the JVM runs.
 
 ## Modules
 
-The project is split into three Maven sub modules. The first two are published
-to Maven Central; the third exists only for the build:
+The project is split into four Maven sub modules. The first three are published
+to Maven Central; the fourth exists only for the build:
 
 | Module     | Directory             | Artifact ID            | Java module                     | Purpose                                                            |
 |------------|-----------------------|------------------------|---------------------------------|--------------------------------------------------------------------|
 | `core`     | [`core/`](core)       | `gocryptfs4j-core`     | `de.sfuhrm.gocryptfs4j.core`    | The plain Java API (`GocryptFs`) plus the internal crypto, config and name handling. |
 | `nio`      | [`nio/`](nio)         | `gocryptfs4j-nio`      | `de.sfuhrm.gocryptfs4j.nio`     | The `java.nio.file` `FileSystemProvider`, built on top of `core`.  |
+| `libfido2` | [`libfido2/`](libfido2) | `gocryptfs4j-libfido2` | `de.sfuhrm.gocryptfs4j.fido2.libfido2` | Optional `Fido2Token` implementation that drives the libfido2 `fido2-cred`/`fido2-assert` tools. |
 | `coverage` | [`coverage/`](coverage) | `gocryptfs4j-coverage` | —                               | Build-time only JaCoCo aggregation module; not published.          |
 
 `gocryptfs4j-nio` depends on `gocryptfs4j-core` and re-exports it, so adding
-only the `nio` module is enough to use both APIs. The `coverage` module contains
-no sources or tests of its own — it merely merges the code-coverage reports of
-the other two modules and is skipped for publishing.
+only the `nio` module is enough to use both APIs. `gocryptfs4j-libfido2` also
+depends on `gocryptfs4j-core` and provides the optional FIDO2 support; it is not
+needed for password-protected filesystems. The `coverage` module contains no
+sources or tests of its own — it merely merges the code-coverage reports of the
+other modules and is skipped for publishing.
 
 ## Requirements
 
@@ -86,19 +93,20 @@ mvn clean verify   # build, run unit tests and integration tests
 mvn package        # build the jar only (skips integration tests)
 ```
 
-The build produces the two published artifacts:
+The build produces the three published artifacts:
 
-* `core/target/gocryptfs4j-core-X.Y.Z.jar` — the plain Java API (the `core` module), and
-* `nio/target/gocryptfs4j-nio-X.Y.Z.jar` — the `FileSystemProvider` (the `nio` module).
+* `core/target/gocryptfs4j-core-X.Y.Z.jar` — the plain Java API (the `core` module),
+* `nio/target/gocryptfs4j-nio-X.Y.Z.jar` — the `FileSystemProvider` (the `nio` module), and
+* `libfido2/target/gocryptfs4j-libfido2-X.Y.Z.jar` — the libfido2-backed FIDO2 token (the `libfido2` module).
 
 See [Modules](#modules) for a description of each module.
 
 ### Tests
 
-The test suite spans both published modules and is split into unit tests (run by
+The test suite spans all published modules and is split into unit tests (run by
 `mvn test`) and integration tests (run by `mvn verify`).
 
-**Unit tests** — `*Test.java`, in the `core` and `nio` modules:
+**Unit tests** — `*Test.java`, in the `core`, `nio` and `libfido2` modules:
 
 * Cryptographic known-answer tests against RFC and gocryptfs vectors: scrypt
   (RFC 7914), HKDF (RFC 5869 plus gocryptfs's sub-key vectors), AES-SIV
