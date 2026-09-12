@@ -11,7 +11,9 @@ import com.google.gson.annotations.JsonAdapter;
 import com.google.gson.annotations.SerializedName;
 
 import java.lang.reflect.Type;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -57,7 +59,9 @@ public final class Fido2Params {
     public Fido2Params(byte[] credentialId, byte[] hmacSalt, List<String> assertOptions) {
         this.credentialId = credentialId.clone();
         this.hmacSalt = hmacSalt.clone();
-        this.assertOptions = assertOptions;
+        this.assertOptions = assertOptions == null
+                ? null
+                : Collections.unmodifiableList(new ArrayList<>(assertOptions));
     }
 
     /**

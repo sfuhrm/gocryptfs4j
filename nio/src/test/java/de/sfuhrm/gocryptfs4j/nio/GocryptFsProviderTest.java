@@ -12,6 +12,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileSystem;
+import java.nio.file.FileSystemAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collections;
@@ -143,6 +144,26 @@ class GocryptFsProviderTest {
         GocryptFsProvider provider = new GocryptFsProvider();
         assertThrows(IllegalArgumentException.class,
                 () -> provider.newFileSystem(URI.create("gocryptfs:///"), env));
+    }
+
+    @Test
+    void nioRejectsAlreadyOpenFilesystem() throws IOException {
+        Path cipherDir = tmp.resolve("cipher-open");
+        Files.createDirectory(cipherDir);
+        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+            // just create
+        }
+
+        GocryptFsProvider provider = new GocryptFsProvider();
+        try (FileSystem first = provider.newFileSystem(cipherDir, "pw".toCharArray())) {
+            assertNotNull(first);
+            assertThrows(FileSystemAlreadyExistsException.class,
+                    () -> provider.newFileSystem(cipherDir, "pw".toCharArray()));
+        }
+        // After closing, the same directory can be opened again.
+        try (FileSystem reopened = provider.newFileSystem(cipherDir, "pw".toCharArray())) {
+            assertNotNull(reopened);
+        }
     }
 
     /** Deterministic fake token: the HMAC secret only depends on the seed and the inputs. */

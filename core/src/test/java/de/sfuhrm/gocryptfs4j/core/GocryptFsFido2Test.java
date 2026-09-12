@@ -85,7 +85,8 @@ class GocryptFsFido2Test {
         }
 
         Fido2Token other = new FakeToken("seed-d".getBytes(StandardCharsets.UTF_8));
-        assertThrows(IOException.class, () -> GocryptFs.open(cipherDir, other));
+        IOException e = assertThrows(IOException.class, () -> GocryptFs.open(cipherDir, other));
+        assertTrue(e.getMessage().contains("FIDO2"), e.getMessage());
     }
 
     @Test

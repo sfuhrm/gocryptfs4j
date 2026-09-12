@@ -18,6 +18,7 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileStore;
 import java.nio.file.FileSystem;
+import java.nio.file.FileSystemAlreadyExistsException;
 import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.OpenOption;
@@ -96,7 +97,13 @@ public final class GocryptFsProvider extends FileSystemProvider {
     private FileSystem register(Path cipherDir, GocryptFs core) {
         String key = cipherDir.toAbsolutePath().normalize().toString();
         GocryptFsFileSystem fs = new GocryptFsFileSystem(this, core, key);
-        filesystems.put(key, fs);
+        GocryptFsFileSystem existing = filesystems.putIfAbsent(key, fs);
+        if (existing != null) {
+            // Do not leak the freshly opened key material for a filesystem that
+            // is already open under this provider.
+            core.close();
+            throw new FileSystemAlreadyExistsException(key);
+        }
         return fs;
     }
 

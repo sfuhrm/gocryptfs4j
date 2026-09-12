@@ -160,6 +160,12 @@ public final class GocryptFs implements AutoCloseable {
         try {
             byte[] masterKey = config.decryptMasterKey(secret);
             return new GocryptFs(cipherDir, config, masterKey);
+        } catch (IOException e) {
+            if (e.getCause() instanceof GeneralSecurityException) {
+                throw new IOException("FIDO2 HMAC secret did not unlock the master key "
+                        + "(wrong security key or credential?)", e);
+            }
+            throw e;
         } finally {
             Keys.wipe(secret);
         }
