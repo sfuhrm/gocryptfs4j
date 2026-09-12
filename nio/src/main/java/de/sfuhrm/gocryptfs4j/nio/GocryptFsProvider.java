@@ -3,6 +3,7 @@ package de.sfuhrm.gocryptfs4j.nio;
 import de.sfuhrm.gocryptfs4j.core.DirEntry;
 import de.sfuhrm.gocryptfs4j.core.GocryptFs;
 import de.sfuhrm.gocryptfs4j.core.CipherFile;
+import de.sfuhrm.gocryptfs4j.fido2.Fido2Token;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -47,7 +48,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>Register via {@code META-INF/services/java.nio.file.spi.FileSystemProvider}
  * to use {@code FileSystems.newFileSystem(URI.create("gocryptfs:///"), env)}, or
  * instantiate directly. The environment must contain {@code cipherDir} (a
- * {@link Path} or {@link String}) and {@code password} (a {@code char[]}).</p>
+ * {@link Path} or {@link String}) and either {@code password} (a {@code char[]})
+ * for password-protected filesystems or {@code fido2Token} (a
+ * {@link Fido2Token}) for FIDO2-protected ones.</p>
  */
 public final class GocryptFsProvider extends FileSystemProvider {
 
@@ -72,7 +75,25 @@ public final class GocryptFsProvider extends FileSystemProvider {
     public FileSystem newFileSystem(Path cipherDir, char[] password) throws IOException {
         Objects.requireNonNull(cipherDir, "cipherDir");
         Objects.requireNonNull(password, "password");
-        GocryptFs core = GocryptFs.open(cipherDir, password);
+        return register(cipherDir, GocryptFs.open(cipherDir, password));
+    }
+
+    /**
+     * Opens a FIDO2-protected filesystem directly, without a URI.
+     *
+     * @param cipherDir the ciphertext directory
+     * @param token     the FIDO2 token implementation to unlock the master key with
+     * @return the opened filesystem
+     * @throws IOException on filesystem errors or if the token interaction fails
+     * @throws NullPointerException if {@code cipherDir} or {@code token} is {@code null}
+     */
+    public FileSystem newFileSystem(Path cipherDir, Fido2Token token) throws IOException {
+        Objects.requireNonNull(cipherDir, "cipherDir");
+        Objects.requireNonNull(token, "token");
+        return register(cipherDir, GocryptFs.open(cipherDir, token));
+    }
+
+    private FileSystem register(Path cipherDir, GocryptFs core) {
         String key = cipherDir.toAbsolutePath().normalize().toString();
         GocryptFsFileSystem fs = new GocryptFsFileSystem(this, core, key);
         filesystems.put(key, fs);
@@ -87,10 +108,14 @@ public final class GocryptFsProvider extends FileSystemProvider {
     /**
      * Opens a filesystem from a {@code gocryptfs} URI.
      *
+     * <p>The environment must contain {@code cipherDir} and either {@code password}
+     * (a {@code char[]}) or {@code fido2Token} (a {@link Fido2Token}).</p>
+     *
      * @throws NullPointerException if {@code uri} is {@code null}
      * @throws IllegalArgumentException if the scheme is not {@code gocryptfs}, the
-     *                                  environment lacks {@code cipherDir}/{@code password},
-     *                                  or {@code password} is not a {@code char[]}
+     *                                  environment lacks {@code cipherDir}, lacks both
+     *                                  {@code password} and {@code fido2Token}, contains
+     *                                  both, or an option has the wrong type
      */
     @Override
     public FileSystem newFileSystem(URI uri, Map<String, ?> env) throws IOException {
@@ -100,16 +125,29 @@ public final class GocryptFsProvider extends FileSystemProvider {
         }
         Object cipherDir = env == null ? null : env.get("cipherDir");
         Object password = env == null ? null : env.get("password");
-        if (cipherDir == null || password == null) {
-            throw new IllegalArgumentException(
-                    "environment must contain 'cipherDir' and 'password'");
+        Object fido2Token = env == null ? null : env.get("fido2Token");
+        if (cipherDir == null) {
+            throw new IllegalArgumentException("environment must contain 'cipherDir'");
         }
         Path dir = cipherDir instanceof Path
                 ? (Path) cipherDir : Paths.get(cipherDir.toString());
-        if (!(password instanceof char[])) {
-            throw new IllegalArgumentException("password must be a char[]");
+        if (password != null && fido2Token != null) {
+            throw new IllegalArgumentException(
+                    "environment must contain either 'password' or 'fido2Token', not both");
         }
-        return newFileSystem(dir, (char[]) password);
+        if (password != null) {
+            if (!(password instanceof char[])) {
+                throw new IllegalArgumentException("password must be a char[]");
+            }
+            return newFileSystem(dir, (char[]) password);
+        }
+        if (fido2Token != null) {
+            if (!(fido2Token instanceof Fido2Token)) {
+                throw new IllegalArgumentException("fido2Token must be a Fido2Token");
+            }
+            return newFileSystem(dir, (Fido2Token) fido2Token);
+        }
+        throw new IllegalArgumentException("environment must contain 'password' or 'fido2Token'");
     }
 
     /**

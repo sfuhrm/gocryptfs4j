@@ -12,7 +12,7 @@
     <packaging>pom</packaging>
 
     <name>gocryptfs4j-coverage</name>
-    <description>Aggregates code coverage over the gocryptfs4j-core and gocryptfs4j-nio modules.</description>
+    <description>Aggregates code coverage over the gocryptfs4j-core, gocryptfs4j-nio and gocryptfs4j-libfido2 modules.</description>
 
     <properties>
         <!-- This module has no sources/tests and is not published. -->

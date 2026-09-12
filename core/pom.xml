@@ -46,6 +46,24 @@
     </dependencies>
 
     <build>
+        <resources>
+            <!-- Filter only version.properties so the Creator string matches the
+                 project version; all other resources stay byte-for-byte intact. -->
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>false</filtering>
+                <excludes>
+                    <exclude>de/sfuhrm/gocryptfs4j/config/version.properties</exclude>
+                </excludes>
+            </resource>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+                <includes>
+                    <include>de/sfuhrm/gocryptfs4j/config/version.properties</include>
+                </includes>
+            </resource>
+        </resources>
         <plugins>
             <!-- Add a real module descriptor as a multi-release JAR (Java 9+). -->
             <plugin>

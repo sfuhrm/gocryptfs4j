@@ -37,6 +37,10 @@
  * }</pre>
  *
  * <p>Alternatively, instantiate the provider directly with
- * {@link GocryptFsProvider#newFileSystem(Path, char[])}.</p>
+ * {@link GocryptFsProvider#newFileSystem(Path, char[])}. FIDO2-protected
+ * filesystems are opened the same way with
+ * {@link GocryptFsProvider#newFileSystem(Path, de.sfuhrm.gocryptfs4j.fido2.Fido2Token)},
+ * or by putting a {@code Fido2Token} under the {@code fido2Token} key of the
+ * environment map instead of {@code password}.</p>
  */
 package de.sfuhrm.gocryptfs4j.nio;

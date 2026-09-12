@@ -14,6 +14,7 @@ import de.sfuhrm.gocryptfs4j.crypto.XChaCha20Poly1305;
 import de.sfuhrm.gocryptfs4j.core.ContentCipherType;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -25,6 +26,7 @@ import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
 import java.util.Objects;
+import java.util.Properties;
 
 /**
  * Parses {@code gocryptfs.conf} and unlocks the master key from a password.
@@ -32,6 +34,13 @@ import java.util.Objects;
 public final class ConfigFile {
 
     private static final Gson GSON = new GsonBuilder().create();
+
+    /**
+     * The Creator string written to new config files, e.g.
+     * {@code gocryptfs4j 0.3.2-SNAPSHOT}. The version is taken from the Maven
+     * filtered {@code version.properties} resource.
+     */
+    private static final String CREATOR = loadCreator();
 
     /** The creator string written by gocryptfs. */
     @SerializedName("Creator")
@@ -126,6 +135,34 @@ public final class ConfigFile {
     }
 
     /**
+     * Builds the Creator string from the Maven filtered version resource.
+     *
+     * @return {@code gocryptfs4j <version>}, or just {@code gocryptfs4j} if the
+     *         resource cannot be read
+     */
+    private static String loadCreator() {
+        String version = readVersion();
+        return version == null ? "gocryptfs4j" : "gocryptfs4j " + version;
+    }
+
+    private static String readVersion() {
+        try (InputStream in = ConfigFile.class.getResourceAsStream("version.properties")) {
+            if (in == null) {
+                return null;
+            }
+            Properties properties = new Properties();
+            properties.load(in);
+            String version = properties.getProperty("version");
+            if (version == null || version.trim().isEmpty()) {
+                return null;
+            }
+            return version.trim();
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    /**
      * Returns true if the given feature flag is set.
      *
      * @param flag the feature flag name
@@ -173,12 +210,13 @@ public final class ConfigFile {
         }
         ScryptKdf s = scryptObject;
         byte[] scryptHash = Keys.scrypt(secret, decode(s.salt), s.n, s.r, s.p, s.keyLen);
+        byte[] contentKey = null;
         try {
             // gocryptfs always protects the master key with AES-256-GCM, even
             // when the content cipher is XChaCha20-Poly1305.
             boolean useHkdf = isFeatureFlagSet(Constants.FLAG_HKDF);
             int ivLen = useHkdf ? Constants.DEFAULT_IV_BITS / 8 : 96 / 8;
-            byte[] contentKey = useHkdf
+            contentKey = useHkdf
                     ? Hkdf.derive(scryptHash, Constants.HKDF_INFO_GCM_CONTENT, Constants.KEY_LEN)
                     : scryptHash;
 
@@ -195,6 +233,7 @@ public final class ConfigFile {
         } catch (GeneralSecurityException e) {
             throw new IOException("password incorrect", e);
         } finally {
+            Keys.wipe(contentKey);
             Keys.wipe(scryptHash);
         }
     }
@@ -236,15 +275,16 @@ public final class ConfigFile {
             throw new IllegalStateException("config has no scrypt object");
         }
 
+        byte[] passwordBytes = charsToBytes(password);
         byte[] salt = Keys.randomBytes(Constants.KEY_LEN);
-        byte[] scryptHash = Keys.scrypt(
-                charsToBytes(password), salt, s.n, s.r, s.p, s.keyLen);
+        byte[] scryptHash = Keys.scrypt(passwordBytes, salt, s.n, s.r, s.p, s.keyLen);
+        byte[] contentKey = null;
         try {
             // The master key is always protected with AES-256-GCM; the content
             // cipher selection only affects file content.
             boolean useHkdf = isFeatureFlagSet(Constants.FLAG_HKDF);
             int ivLen = useHkdf ? Constants.DEFAULT_IV_BITS / 8 : 96 / 8;
-            byte[] contentKey = useHkdf
+            contentKey = useHkdf
                     ? Hkdf.derive(scryptHash, Constants.HKDF_INFO_GCM_CONTENT, Constants.KEY_LEN)
                     : scryptHash;
 
@@ -260,7 +300,9 @@ public final class ConfigFile {
             // Invalidate any cached master key so the new password is verified.
             this.masterKey = null;
         } finally {
+            Keys.wipe(contentKey);
             Keys.wipe(scryptHash);
+            Keys.wipe(passwordBytes);
             Keys.wipe(salt);
         }
     }
@@ -486,7 +528,7 @@ public final class ConfigFile {
         Objects.requireNonNull(secret, "secret");
         Objects.requireNonNull(cipherType, "cipherType");
         ConfigFile cf = new ConfigFile();
-        cf.creator = "gocryptfs4j 0.1";
+        cf.creator = CREATOR;
         cf.version = Constants.CURRENT_VERSION;
 
         List<String> flags = new ArrayList<>();
@@ -530,10 +572,11 @@ public final class ConfigFile {
 
         byte[] scryptHash = Keys.scrypt(
                 secret, decode(sk.salt), sk.n, sk.r, sk.p, sk.keyLen);
+        byte[] contentKey = null;
         try {
             // The master key is always protected with AES-256-GCM; the content
             // cipher selection only affects file content.
-            byte[] contentKey = Hkdf.derive(scryptHash, Constants.HKDF_INFO_GCM_CONTENT, Constants.KEY_LEN);
+            contentKey = Hkdf.derive(scryptHash, Constants.HKDF_INFO_GCM_CONTENT, Constants.KEY_LEN);
             byte[] nonce = Keys.randomBytes(Constants.DEFAULT_IV_BITS / 8);
             byte[] aad = new byte[8];
             byte[] ct = new Gcm(contentKey).encrypt(masterKey, nonce, aad);
@@ -542,6 +585,7 @@ public final class ConfigFile {
             System.arraycopy(ct, 0, encrypted, nonce.length, ct.length);
             cf.encryptedKey = Base64.getEncoder().encodeToString(encrypted);
         } finally {
+            Keys.wipe(contentKey);
             Keys.wipe(scryptHash);
         }
         return cf;

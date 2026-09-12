@@ -51,6 +51,14 @@ class ConfigFileTest {
         assertFalse(cf.featureFlags.contains(Constants.FLAG_XCHACHA));
     }
 
+    @Test
+    void creatorCarriesProjectVersion() {
+        ConfigFile cf = ConfigFile.create(Keys.randomBytes(Constants.KEY_LEN), PASSWORD, false,
+                ContentCipherType.AES_GCM);
+        assertTrue(cf.creator.startsWith("gocryptfs4j "), cf.creator);
+        assertTrue(cf.creator.matches("gocryptfs4j \\d+\\.\\d+.*"), cf.creator);
+    }
+
     @ParameterizedTest
     @EnumSource(ContentCipherType.class)
     void masterKeyRoundTrip(ContentCipherType cipherType) throws Exception {

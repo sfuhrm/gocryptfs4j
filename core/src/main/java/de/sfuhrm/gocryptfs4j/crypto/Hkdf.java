@@ -38,12 +38,13 @@ public final class Hkdf {
         if (outLen < 0) {
             throw new IllegalArgumentException("negative output length: " + outLen);
         }
+        byte[] salt = new byte[HASH_LEN];
+        byte[] prk = null;
+        byte[] t = new byte[0];
         try {
-            byte[] salt = new byte[HASH_LEN];
-            byte[] prk = hmac(salt, ikm);
+            prk = hmac(salt, ikm);
 
             byte[] okm = new byte[outLen];
-            byte[] t = new byte[0];
             byte[] infoBytes = info.getBytes(StandardCharsets.UTF_8);
             int pos = 0;
             int counter = 1;
@@ -53,7 +54,9 @@ public final class Hkdf {
                 mac.update(t);
                 mac.update(infoBytes);
                 mac.update((byte) counter);
-                t = mac.doFinal();
+                byte[] next = mac.doFinal();
+                Keys.wipe(t);
+                t = next;
                 int copyLen = Math.min(t.length, outLen - pos);
                 System.arraycopy(t, 0, okm, pos, copyLen);
                 pos += copyLen;
@@ -62,6 +65,10 @@ public final class Hkdf {
             return okm;
         } catch (GeneralSecurityException e) {
             throw new IllegalStateException("HKDF failed", e);
+        } finally {
+            Keys.wipe(salt);
+            Keys.wipe(prk);
+            Keys.wipe(t);
         }
     }
 

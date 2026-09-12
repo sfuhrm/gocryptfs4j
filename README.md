@@ -223,6 +223,10 @@ try (FileSystem fs = new GocryptFsProvider()
 }
 ```
 
+FIDO2-protected filesystems work the same way: pass a `Fido2Token` to
+`newFileSystem(Path, Fido2Token)`, or put it under the `fido2Token` environment
+key (instead of `password`) when using the URI form.
+
 > Note: the NIO view currently exposes basic attributes (type, size, times).
 > POSIX permissions and ownership are not yet mapped.
 
