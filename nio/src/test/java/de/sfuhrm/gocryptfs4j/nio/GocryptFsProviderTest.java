@@ -13,8 +13,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileSystem;
 import java.nio.file.FileSystemAlreadyExistsException;
+import java.nio.file.FileSystemNotFoundException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -164,6 +166,59 @@ class GocryptFsProviderTest {
         try (FileSystem reopened = provider.newFileSystem(cipherDir, "pw".toCharArray())) {
             assertNotNull(reopened);
         }
+    }
+
+    @Test
+    void uriLookupRoundTrip() throws IOException {
+        Path cipherDir = tmp.resolve("cipher-uri");
+        Files.createDirectory(cipherDir);
+        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+            // just create
+        }
+
+        GocryptFsProvider provider = new GocryptFsProvider();
+        Map<String, Object> env = new HashMap<>();
+        env.put("cipherDir", cipherDir);
+        env.put("password", "pw".toCharArray());
+        try (FileSystem nio = provider.newFileSystem(URI.create("gocryptfs:///"), env)) {
+            URI uri = nio.getPath("/a/b").toUri();
+            assertSame(nio, provider.getFileSystem(uri));
+            assertEquals("/a/b", provider.getPath(uri).toString());
+            assertEquals("/", provider.getPath(URI.create(nio.toString().replaceAll("/$", "")))
+                    .toString());
+        }
+        assertThrows(FileSystemNotFoundException.class,
+                () -> provider.getFileSystem(URI.create("gocryptfs://missing/")));
+    }
+
+    @Test
+    void uriValidation() {
+        GocryptFsProvider provider = new GocryptFsProvider();
+        assertEquals("gocryptfs", provider.getScheme());
+
+        Map<String, Object> env = new HashMap<>();
+        assertThrows(IllegalArgumentException.class,
+                () -> provider.newFileSystem(URI.create("other:///"), env));
+        assertThrows(IllegalArgumentException.class,
+                () -> provider.newFileSystem(URI.create("gocryptfs:///"), env));
+
+        env.put("cipherDir", tmp);
+        assertThrows(IllegalArgumentException.class,
+                () -> provider.newFileSystem(URI.create("gocryptfs:///"), env));
+
+        env.put("password", "not-a-char-array");
+        assertThrows(IllegalArgumentException.class,
+                () -> provider.newFileSystem(URI.create("gocryptfs:///"), env));
+
+        env.remove("password");
+        env.put("fido2Token", "not-a-token");
+        assertThrows(IllegalArgumentException.class,
+                () -> provider.newFileSystem(URI.create("gocryptfs:///"), env));
+
+        assertThrows(FileSystemNotFoundException.class,
+                () -> provider.getFileSystem(URI.create("gocryptfs:///")));
+        assertThrows(IllegalArgumentException.class,
+                () -> provider.newDirectoryStream(Paths.get("/tmp"), null));
     }
 
     /** Deterministic fake token: the HMAC secret only depends on the seed and the inputs. */

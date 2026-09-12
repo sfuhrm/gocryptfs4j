@@ -165,9 +165,12 @@ public final class GocryptFsProvider extends FileSystemProvider {
     @Override
     public FileSystem getFileSystem(URI uri) {
         Objects.requireNonNull(uri, "uri");
-        String host = uri.getHost();
-        GocryptFsFileSystem fs = host == null
-                ? null : filesystems.get(GocryptFsFileSystem.urlDecode(host));
+        // The key is percent-encoded in the authority (it contains '/' for
+        // absolute cipher paths), so use the raw authority, not getHost()
+        // which returns null for percent-encoded authorities.
+        String authority = uri.getRawAuthority();
+        GocryptFsFileSystem fs = authority == null
+                ? null : filesystems.get(GocryptFsFileSystem.urlDecode(authority));
         if (fs == null) {
             throw new java.nio.file.FileSystemNotFoundException("no filesystem for " + uri);
         }
@@ -238,7 +241,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
         if (createNew && exists) {
             throw new FileAlreadyExistsException(p.toString());
         }
-        if (create && !exists) {
+        if ((create || createNew) && !exists) {
             fs.createFile(p.toString());
         } else if (!exists) {
             throw new NoSuchFileException(p.toString());

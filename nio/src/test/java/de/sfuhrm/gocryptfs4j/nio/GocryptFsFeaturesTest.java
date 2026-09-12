@@ -15,6 +15,7 @@ import java.nio.file.WatchKey;
 import java.nio.file.attribute.GroupPrincipal;
 import java.nio.file.attribute.UserPrincipal;
 import java.nio.file.attribute.UserPrincipalLookupService;
+import java.util.Collections;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -80,10 +81,23 @@ class GocryptFsFeaturesTest {
             UserPrincipal alice = s.lookupPrincipalByName("alice");
             assertEquals("alice", alice.getName());
             assertEquals(alice, s.lookupPrincipalByName("alice"));
+            assertEquals(alice, alice);
+            assertFalse(alice.equals("alice"));
+            assertNotEquals(alice, s.lookupPrincipalByName("bob"));
+            assertEquals("alice", alice.toString());
+            assertEquals("alice".hashCode(), alice.hashCode());
 
             GroupPrincipal staff = s.lookupPrincipalByGroupName("staff");
             assertEquals("staff", staff.getName());
         }
+    }
+
+    @Test
+    void directoryStreamRejectsIteratorAfterClose() throws IOException {
+        GocryptFsDirectoryStream stream =
+                new GocryptFsDirectoryStream(Collections.<Path>emptyList());
+        stream.close();
+        assertThrows(IllegalStateException.class, stream::iterator);
     }
 
     @Test

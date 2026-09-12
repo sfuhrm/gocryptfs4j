@@ -13,14 +13,17 @@ import java.nio.file.FileStore;
 import java.nio.file.FileSystem;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributeView;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileStoreAttributeView;
 import java.nio.file.attribute.FileTime;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFileAttributes;
+import java.util.EnumSet;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -206,6 +209,56 @@ class GocryptFsProviderOperationsTest {
     void creatingSymbolicLinkIsUnsupported() {
         assertThrows(UnsupportedOperationException.class,
                 () -> Files.createSymbolicLink(nio.getPath("/new-link"), nio.getPath("/file.txt")));
+    }
+
+    @Test
+    void createNewMissingAndAppend() throws IOException {
+        Path duplicate = nio.getPath("/duplicate.txt");
+        Files.createFile(duplicate);
+        assertThrows(FileAlreadyExistsException.class, () -> Files.createFile(duplicate));
+
+        assertThrows(NoSuchFileException.class, () -> Files.newByteChannel(
+                nio.getPath("/missing.txt"), EnumSet.of(StandardOpenOption.READ)));
+
+        Path append = nio.getPath("/append.txt");
+        Files.write(append, "a".getBytes(StandardCharsets.UTF_8),
+                StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+        Files.write(append, "b".getBytes(StandardCharsets.UTF_8), StandardOpenOption.APPEND);
+        assertEquals("ab", new String(Files.readAllBytes(append), StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void copySymbolicLink() throws IOException {
+        Path copy = nio.getPath("/link-copy");
+        Files.copy(nio.getPath("/link"), copy);
+        assertTrue(Files.isSymbolicLink(copy));
+        assertEquals("/file.txt", copy.toRealPath().toString());
+    }
+
+    @Test
+    void moveDirectoryRecursively() throws IOException {
+        Path src = nio.getPath("/move-src");
+        Files.createDirectory(src);
+        Files.write(src.resolve("f.txt"), "f".getBytes(StandardCharsets.UTF_8));
+
+        Path moved = nio.getPath("/move-dst");
+        Files.move(src, moved);
+        assertFalse(Files.exists(src));
+        assertEquals("f", new String(
+                Files.readAllBytes(moved.resolve("f.txt")), StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void moveSamePathIsNoOp() throws IOException {
+        Path file = nio.getPath("/file.txt");
+        Files.move(file, file);
+        assertTrue(Files.exists(file));
+    }
+
+    @Test
+    void fileKeyAttribute() throws IOException {
+        Map<String, Object> attrs = Files.readAttributes(nio.getPath("/file.txt"), "fileKey");
+        assertTrue(attrs.containsKey("fileKey"));
     }
 
     private static void deleteRecursively(Path path) throws IOException {
