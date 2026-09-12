@@ -124,6 +124,10 @@ not on `PATH`:
 * `GocryptfsToolingIT` — uses `gocryptfs -info`, `-fsck` and `-passwd` as an
   oracle against gocryptfs4j-written directories. `-info` and `-passwd` need
   only the binary; `-fsck` additionally needs FUSE.
+* `LibFido2GocryptFsIT` (in the `libfido2` module) — opens a real, pre-existing
+  gocryptfs `-fido2` cipher directory with a real security key. It is disabled
+  by default and only runs when `-Dgocryptfs.fido2.device=...` and
+  `-Dgocryptfs.fido2.cipherDir=...` are supplied.
 
 The `.github/workflows/gocryptfs-matrix.yml` workflow runs the same integration
 tests against a matrix of pinned gocryptfs releases (1.4, 1.8.0, 2.0 and the
