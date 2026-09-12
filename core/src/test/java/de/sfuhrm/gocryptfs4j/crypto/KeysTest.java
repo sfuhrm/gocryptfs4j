@@ -34,4 +34,42 @@ class KeysTest {
     void wipeAcceptsNull() {
         Keys.wipe(null);
     }
+
+    @Test
+    void randomBytesFillsExistingBuffer() {
+        byte[] buf = new byte[16];
+        Keys.randomBytes(buf);
+        assertFalse(Arrays.equals(buf, new byte[16]),
+                "a 16-byte random draw should not stay all-zero");
+    }
+
+    @Test
+    void randomBytesRejectsNegativeLength() {
+        assertThrows(IllegalArgumentException.class, () -> Keys.randomBytes(-1));
+    }
+
+    @Test
+    void randomBytesRejectsNullBuffer() {
+        assertThrows(NullPointerException.class, () -> Keys.randomBytes((byte[]) null));
+    }
+
+    @Test
+    void scryptRejectsNullArguments() {
+        assertThrows(NullPointerException.class,
+                () -> Keys.scrypt(null, new byte[8], 2, 1, 1, 16));
+        assertThrows(NullPointerException.class,
+                () -> Keys.scrypt(new byte[8], null, 2, 1, 1, 16));
+    }
+
+    @Test
+    void scryptRejectsInvalidParameters() {
+        assertThrows(IllegalArgumentException.class,
+                () -> Keys.scrypt(new byte[8], new byte[8], 0, 1, 1, 16));
+        assertThrows(IllegalArgumentException.class,
+                () -> Keys.scrypt(new byte[8], new byte[8], 2, 0, 1, 16));
+        assertThrows(IllegalArgumentException.class,
+                () -> Keys.scrypt(new byte[8], new byte[8], 2, 1, 0, 16));
+        assertThrows(IllegalArgumentException.class,
+                () -> Keys.scrypt(new byte[8], new byte[8], 2, 1, 1, -1));
+    }
 }

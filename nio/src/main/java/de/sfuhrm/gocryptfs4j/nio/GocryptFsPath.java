@@ -205,8 +205,11 @@ final class GocryptFsPath implements Path {
         if (o.startsWith("/")) {
             return new GocryptFsPath(fs, o, true);
         }
-        String base = absolute ? path : path;
+        String base = path;
         String joined = base.equals("/") || base.isEmpty() ? o : base + "/" + o;
+        if (absolute && !joined.startsWith("/")) {
+            joined = "/" + joined;
+        }
         return new GocryptFsPath(fs, joined, absolute);
     }
 
