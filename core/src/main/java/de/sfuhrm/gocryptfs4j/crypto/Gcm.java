@@ -100,4 +100,33 @@ public final class Gcm implements ContentCipher {
         }
         return cipher.doFinal(ciphertext);
     }
+
+    @Override
+    public int encrypt(byte[] in, int inOff, int inLen, byte[] nonce,
+                       byte[] aad, int aadOff, int aadLen, byte[] out, int outOff) {
+        try {
+            Cipher cipher = encryptCipher.get();
+            cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(key, "AES"),
+                    new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8, nonce));
+            if (aadLen > 0) {
+                cipher.updateAAD(aad, aadOff, aadLen);
+            }
+            return cipher.doFinal(in, inOff, inLen, out, outOff);
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException("AES-GCM encryption failed", e);
+        }
+    }
+
+    @Override
+    public int decrypt(byte[] in, int inOff, int inLen, byte[] nonce,
+                       byte[] aad, int aadOff, int aadLen, byte[] out, int outOff)
+            throws GeneralSecurityException {
+        Cipher cipher = decryptCipher.get();
+        cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "AES"),
+                new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8, nonce));
+        if (aadLen > 0) {
+            cipher.updateAAD(aad, aadOff, aadLen);
+        }
+        return cipher.doFinal(in, inOff, inLen, out, outOff);
+    }
 }

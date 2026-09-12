@@ -4,7 +4,6 @@ import de.sfuhrm.gocryptfs4j.crypto.Constants;
 import de.sfuhrm.gocryptfs4j.crypto.ContentEnc;
 import de.sfuhrm.gocryptfs4j.crypto.FileHeader;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.ClosedChannelException;
@@ -26,14 +25,40 @@ import java.util.Objects;
  */
 public final class CipherFile implements AutoCloseable {
 
+    private static final byte[] EMPTY = new byte[0];
+
     private final FileChannel channel;
     private final ContentEnc enc;
+    private final byte[] blockCipher;
+    private final byte[] blockPlain;
+    private byte[] bulkCipher;
+    private byte[] bulkPlain;
     private byte[] fileId;
     private boolean fileIdLoaded;
 
     private CipherFile(FileChannel channel, ContentEnc enc) {
         this.channel = channel;
         this.enc = enc;
+        this.blockCipher = new byte[(int) enc.cipherBS];
+        this.blockPlain = new byte[(int) enc.plainBS];
+    }
+
+    /**
+     * Ensures the reusable multi-block scratch buffers hold at least
+     * {@code blockCount} blocks. The buffers are only ever used by one
+     * synchronized operation at a time.
+     *
+     * @param blockCount the number of blocks the current operation needs
+     */
+    private void ensureBulk(int blockCount) {
+        int cipherLength = (int) (blockCount * enc.cipherBS);
+        int plainLength = (int) (blockCount * enc.plainBS);
+        if (bulkCipher == null || bulkCipher.length < cipherLength) {
+            bulkCipher = new byte[cipherLength];
+        }
+        if (bulkPlain == null || bulkPlain.length < plainLength) {
+            bulkPlain = new byte[plainLength];
+        }
     }
 
     /**
@@ -128,26 +153,26 @@ public final class CipherFile implements AutoCloseable {
         long firstBlock = plainOffset / enc.plainBS;
         int skip = (int) (plainOffset % enc.plainBS);
         long lastBlock = (plainOffset + length - 1) / enc.plainBS;
-        long blockCount = lastBlock - firstBlock + 1;
+        int blockCount = (int) (lastBlock - firstBlock + 1);
 
         long cipherOffset = enc.blockNoToCipherOff(firstBlock);
         int cipherLength = (int) (blockCount * enc.cipherBS);
-        byte[] ciphertext = readCipherRange(cipherOffset, cipherLength);
+        ensureBulk(blockCount);
+        int available = readCipherRange(cipherOffset, bulkCipher, cipherLength);
 
-        byte[] plaintext;
+        int plainLength;
         try {
-            plaintext = enc.decryptBlocks(ciphertext, firstBlock, fileId);
+            plainLength = enc.decryptBlocks(bulkCipher, 0, available, firstBlock, fileId, bulkPlain, 0);
         } catch (GeneralSecurityException e) {
             throw new IOException("corrupt block in file", e);
         }
 
-        int want = (int) length;
-        int available = plaintext.length - skip;
-        if (available <= 0) {
+        int readable = plainLength - skip;
+        if (readable <= 0) {
             return -1;
         }
-        int n = Math.min(want, available);
-        dst.put(plaintext, skip, n);
+        int n = Math.min((int) length, readable);
+        dst.put(bulkPlain, skip, n);
         return n;
     }
 
@@ -185,11 +210,11 @@ public final class CipherFile implements AutoCloseable {
         byte[] fileId = ensureFileId();
 
         long firstBlock = plainOffset / enc.plainBS;
-        int skip = (int) (plainOffset % enc.plainBS);
         long lastBlock = (plainOffset + length - 1) / enc.plainBS;
+        int blockCount = (int) (lastBlock - firstBlock + 1);
+        ensureBulk(blockCount);
 
-        ByteArrayOutputStream out = new ByteArrayOutputStream((int) ((lastBlock - firstBlock + 1) * enc.cipherBS));
-
+        int plainPos = 0;
         for (long b = firstBlock; b <= lastBlock; b++) {
             long blockStart = b * enc.plainBS;
             long lo = Math.max(plainOffset, blockStart);
@@ -197,24 +222,23 @@ public final class CipherFile implements AutoCloseable {
             int segLen = (int) (hi - lo);
             int segSkip = (int) (lo - blockStart);
 
-            byte[] seg = new byte[segLen];
-            src.get(seg);
-
-            byte[] plainBlock;
-            boolean partial = segSkip > 0 || segLen < enc.plainBS;
-            if (partial) {
-                byte[] old = readPlainBlock(b);
-                plainBlock = merge(old, seg, segSkip);
+            if (segSkip == 0 && segLen == enc.plainBS) {
+                src.get(bulkPlain, plainPos, segLen);
+                plainPos += segLen;
             } else {
-                plainBlock = seg;
+                byte[] old = readPlainBlock(b);
+                int blockPlainLen = Math.max(old.length, segSkip + segLen);
+                System.arraycopy(old, 0, bulkPlain, plainPos, old.length);
+                for (int i = old.length; i < segSkip; i++) {
+                    bulkPlain[plainPos + i] = 0;
+                }
+                src.get(bulkPlain, plainPos + segSkip, segLen);
+                plainPos += blockPlainLen;
             }
-
-            byte[] cipherBlock = enc.encryptBlock(plainBlock, b, fileId);
-            out.write(cipherBlock, 0, cipherBlock.length);
         }
 
-        long cipherOffset = enc.blockNoToCipherOff(firstBlock);
-        writeCipherRange(cipherOffset, out.toByteArray());
+        int cipherLength = enc.encryptBlocks(bulkPlain, 0, plainPos, firstBlock, fileId, bulkCipher, 0);
+        writeCipherRange(enc.blockNoToCipherOff(firstBlock), bulkCipher, 0, cipherLength);
         return length;
     }
 
@@ -293,12 +317,13 @@ public final class CipherFile implements AutoCloseable {
         long cipherOffset = enc.blockNoToCipherOff(blockNo);
         long cipherSize = channel.size();
         if (cipherOffset >= cipherSize) {
-            return new byte[0];
+            return EMPTY;
         }
         int len = (int) Math.min(enc.cipherBS, cipherSize - cipherOffset);
-        byte[] cBlock = readCipherRange(cipherOffset, len);
+        int read = readCipherRange(cipherOffset, blockCipher, len);
         try {
-            return enc.decryptBlock(cBlock, blockNo, fileId);
+            int n = enc.decryptBlocks(blockCipher, 0, read, blockNo, fileId, blockPlain, 0);
+            return Arrays.copyOf(blockPlain, n);
         } catch (GeneralSecurityException e) {
             throw new IOException("corrupt block in file", e);
         }
@@ -318,14 +343,6 @@ public final class CipherFile implements AutoCloseable {
         }
     }
 
-    private static byte[] merge(byte[] oldData, byte[] newData, int offset) {
-        int outLen = Math.max(oldData.length, offset + newData.length);
-        byte[] out = new byte[outLen];
-        System.arraycopy(oldData, 0, out, 0, oldData.length);
-        System.arraycopy(newData, 0, out, offset, newData.length);
-        return out;
-    }
-
     private byte[] readCipherRange(long offset, int length) throws IOException {
         byte[] buf = new byte[length];
         ByteBuffer bb = ByteBuffer.wrap(buf);
@@ -338,13 +355,31 @@ public final class CipherFile implements AutoCloseable {
             pos += n;
         }
         if (bb.position() == 0) {
-            return new byte[0];
+            return EMPTY;
         }
         return Arrays.copyOf(buf, bb.position());
     }
 
+    /** Reads up to {@code length} bytes into {@code buf} and returns the byte count. */
+    private int readCipherRange(long offset, byte[] buf, int length) throws IOException {
+        ByteBuffer bb = ByteBuffer.wrap(buf, 0, length);
+        long pos = offset;
+        while (bb.hasRemaining()) {
+            int n = channel.read(bb, pos);
+            if (n < 0) {
+                break;
+            }
+            pos += n;
+        }
+        return bb.position();
+    }
+
     private void writeCipherRange(long offset, byte[] data) throws IOException {
-        ByteBuffer bb = ByteBuffer.wrap(data);
+        writeCipherRange(offset, data, 0, data.length);
+    }
+
+    private void writeCipherRange(long offset, byte[] data, int dataOff, int dataLen) throws IOException {
+        ByteBuffer bb = ByteBuffer.wrap(data, dataOff, dataLen);
         long pos = offset;
         while (bb.hasRemaining()) {
             pos += channel.write(bb, pos);

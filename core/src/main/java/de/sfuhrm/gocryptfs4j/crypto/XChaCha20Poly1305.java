@@ -45,6 +45,13 @@ public final class XChaCha20Poly1305 implements ContentCipher {
         Arrays.fill(key, (byte) 0);
     }
 
+    private static void checkNonce(byte[] nonce) {
+        if (nonce.length != Constants.XCHACHA_NONCE_LEN) {
+            throw new IllegalArgumentException("XChaCha20-Poly1305 nonce must be "
+                    + Constants.XCHACHA_NONCE_LEN + " bytes");
+        }
+    }
+
     /**
      * Encrypts {@code plaintext}, returning ciphertext followed by a 16-byte tag.
      *
@@ -107,5 +114,44 @@ public final class XChaCha20Poly1305 implements ContentCipher {
             throw ex;
         }
         return out;
+    }
+
+    @Override
+    public int encrypt(byte[] in, int inOff, int inLen, byte[] nonce,
+                       byte[] aad, int aadOff, int aadLen, byte[] out, int outOff) {
+        checkNonce(nonce);
+        AEADCipher cipher = encryptCipher.get();
+        cipher.init(true, new AEADParameters(new KeyParameter(key), Constants.AUTH_TAG_LEN * 8, nonce));
+        if (aadLen > 0) {
+            cipher.processAADBytes(aad, aadOff, aadLen);
+        }
+        int len = cipher.processBytes(in, inOff, inLen, out, outOff);
+        try {
+            len += cipher.doFinal(out, outOff + len);
+        } catch (InvalidCipherTextException e) {
+            throw new IllegalStateException("XChaCha20-Poly1305 encryption failed", e);
+        }
+        return len;
+    }
+
+    @Override
+    public int decrypt(byte[] in, int inOff, int inLen, byte[] nonce,
+                       byte[] aad, int aadOff, int aadLen, byte[] out, int outOff)
+            throws GeneralSecurityException {
+        checkNonce(nonce);
+        AEADCipher cipher = decryptCipher.get();
+        cipher.init(false, new AEADParameters(new KeyParameter(key), Constants.AUTH_TAG_LEN * 8, nonce));
+        if (aadLen > 0) {
+            cipher.processAADBytes(aad, aadOff, aadLen);
+        }
+        int len = cipher.processBytes(in, inOff, inLen, out, outOff);
+        try {
+            len += cipher.doFinal(out, outOff + len);
+        } catch (InvalidCipherTextException e) {
+            AEADBadTagException ex = new AEADBadTagException("XChaCha20-Poly1305 authentication failed");
+            ex.initCause(e);
+            throw ex;
+        }
+        return len;
     }
 }

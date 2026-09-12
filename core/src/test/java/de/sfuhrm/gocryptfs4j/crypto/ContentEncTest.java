@@ -131,6 +131,92 @@ class ContentEncTest {
     }
 
     @Test
+    void bulkEncryptThenBulkDecryptRoundTrip() throws GeneralSecurityException {
+        for (boolean withFileId : new boolean[]{false, true}) {
+            ContentEnc enc = newEnc();
+            byte[] fileId = withFileId ? Keys.randomBytes(Constants.HEADER_ID_LEN) : null;
+            int full = (int) enc.plainBS;
+            byte[] data = new byte[full * 2 + 500];
+            for (int i = 0; i < data.length; i++) {
+                data[i] = (byte) (i * 13);
+            }
+
+            int overhead = enc.ivLen + Constants.AUTH_TAG_LEN;
+            byte[] cipher = new byte[data.length + 3 * overhead];
+            int cipherLen = enc.encryptBlocks(data, 0, data.length, 0, fileId, cipher, 0);
+
+            byte[] plain = new byte[data.length];
+            int n = enc.decryptBlocks(cipher, 0, cipherLen, 0, fileId, plain, 0);
+
+            assertEquals(data.length, n);
+            assertArrayEquals(data, Arrays.copyOf(plain, n));
+        }
+    }
+
+    @Test
+    void bulkDecryptAcceptsPerBlockCiphertext() throws GeneralSecurityException {
+        ContentEnc enc = newEnc();
+        byte[] fileId = Keys.randomBytes(Constants.HEADER_ID_LEN);
+        int full = (int) enc.plainBS;
+        byte[] data = new byte[full + 137];
+        for (int i = 0; i < data.length; i++) {
+            data[i] = (byte) (i * 29);
+        }
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] first = enc.encryptBlock(Arrays.copyOfRange(data, 0, full), 0, fileId);
+        out.write(first, 0, first.length);
+        byte[] second = enc.encryptBlock(Arrays.copyOfRange(data, full, data.length), 1, fileId);
+        out.write(second, 0, second.length);
+        byte[] cipher = out.toByteArray();
+
+        byte[] plain = new byte[data.length];
+        int n = enc.decryptBlocks(cipher, 0, cipher.length, 0, fileId, plain, 0);
+
+        assertEquals(data.length, n);
+        assertArrayEquals(data, Arrays.copyOf(plain, n));
+    }
+
+    @Test
+    void bulkDecryptTreatsAllZeroBlockAsHole() throws GeneralSecurityException {
+        ContentEnc enc = newEnc();
+        byte[] fileId = Keys.randomBytes(Constants.HEADER_ID_LEN);
+        byte[] cipher = new byte[(int) (2 * enc.cipherBS)];
+        byte[] real = enc.encryptBlock(new byte[(int) enc.plainBS], 0, fileId);
+        System.arraycopy(real, 0, cipher, 0, real.length);
+
+        byte[] plain = new byte[(int) (2 * enc.plainBS)];
+        int n = enc.decryptBlocks(cipher, 0, cipher.length, 0, fileId, plain, 0);
+
+        assertEquals(plain.length, n);
+        assertArrayEquals(new byte[plain.length], plain);
+    }
+
+    @Test
+    void bulkMethodsHonorOutputOffsets() throws GeneralSecurityException {
+        ContentEnc enc = newEnc();
+        byte[] fileId = Keys.randomBytes(Constants.HEADER_ID_LEN);
+        byte[] data = new byte[(int) enc.plainBS + 64];
+        for (int i = 0; i < data.length; i++) {
+            data[i] = (byte) (i * 17);
+        }
+        int overhead = enc.ivLen + Constants.AUTH_TAG_LEN;
+        int pad = 11;
+
+        byte[] cipher = new byte[pad + data.length + 2 * overhead];
+        int cipherLen = enc.encryptBlocks(data, 0, data.length, 0, fileId, cipher, pad);
+        assertEquals(cipher.length, cipherLen + pad);
+
+        byte[] plain = new byte[pad + data.length];
+        int n = enc.decryptBlocks(cipher, pad, cipherLen, 0, fileId, plain, pad);
+        assertEquals(data.length, n);
+        for (int i = 0; i < pad; i++) {
+            assertEquals(0, plain[i]);
+        }
+        assertArrayEquals(data, Arrays.copyOfRange(plain, pad, pad + n));
+    }
+
+    @Test
     void plainSizeToCipherSize() {
         ContentEnc enc = newEnc();
         assertEquals(0, enc.plainSizeToCipherSize(0));

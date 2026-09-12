@@ -1,7 +1,7 @@
 package de.sfuhrm.gocryptfs4j.crypto;
 
-import java.io.ByteArrayOutputStream;
 import java.security.GeneralSecurityException;
+import java.util.Arrays;
 import java.util.Objects;
 
 /**
@@ -11,6 +11,11 @@ import java.util.Objects;
  * encrypted with AES-256-GCM using a fresh random nonce; the 8-byte big-endian
  * block number and the 16-byte file id are used as additional authenticated
  * data. A block is stored as {@code nonce || ciphertext || tag}.</p>
+ *
+ * <p>The bulk methods {@link #encryptBlocks(byte[], int, int, long, byte[], byte[], int)}
+ * and {@link #decryptBlocks(byte[], int, int, long, byte[], byte[], int)} operate
+ * on a caller-supplied output buffer and reuse per-thread scratch buffers, so
+ * contiguous multi-block reads and writes allocate nothing per block.</p>
  */
 public final class ContentEnc {
 
@@ -22,7 +27,8 @@ public final class ContentEnc {
     public final int ivLen;
 
     private final ContentCipher cipher;
-    private final byte[] allZeroBlock;
+    private final ThreadLocal<byte[]> aadBuffer;
+    private final ThreadLocal<byte[]> nonceBuffer;
 
     /**
      * Creates a content-encryption helper using AES-256-GCM with the default
@@ -76,7 +82,8 @@ public final class ContentEnc {
         this.ivLen = ivLen;
         this.plainBS = plainBS;
         this.cipherBS = plainBS + ivLen + Constants.AUTH_TAG_LEN;
-        this.allZeroBlock = new byte[(int) cipherBS];
+        this.aadBuffer = ThreadLocal.withInitial(() -> new byte[8 + Constants.HEADER_ID_LEN]);
+        this.nonceBuffer = ThreadLocal.withInitial(() -> new byte[ivLen]);
     }
 
     /**
@@ -97,13 +104,25 @@ public final class ContentEnc {
 
     private static byte[] concatAD(long blockNo, byte[] fileId) {
         byte[] aad = new byte[8 + (fileId == null ? 0 : fileId.length)];
+        fillAad(blockNo, fileId, aad);
+        return aad;
+    }
+
+    /**
+     * Writes the additional authenticated data (8-byte big-endian block number,
+     * optionally followed by the file id) into {@code aad}.
+     *
+     * @return the number of bytes written
+     */
+    private static int fillAad(long blockNo, byte[] fileId, byte[] aad) {
         for (int i = 0; i < 8; i++) {
             aad[7 - i] = (byte) (blockNo >>> (i * 8));
         }
-        if (fileId != null) {
+        if (fileId != null && fileId.length > 0) {
             System.arraycopy(fileId, 0, aad, 8, fileId.length);
+            return 8 + fileId.length;
         }
-        return aad;
+        return 8;
     }
 
     /**
@@ -151,11 +170,61 @@ public final class ContentEnc {
             throw new IllegalArgumentException("wrong nonce length");
         }
         byte[] aad = concatAD(blockNo, fileId);
-        byte[] ct = cipher.encrypt(plaintext, nonce, aad);
-        byte[] out = new byte[nonce.length + ct.length];
+        byte[] out = new byte[nonce.length + plaintext.length + Constants.AUTH_TAG_LEN];
         System.arraycopy(nonce, 0, out, 0, nonce.length);
-        System.arraycopy(ct, 0, out, nonce.length, ct.length);
+        cipher.encrypt(plaintext, 0, plaintext.length, nonce, aad, 0, aad.length, out, nonce.length);
         return out;
+    }
+
+    /**
+     * Encrypts a sequence of plaintext blocks starting at {@code firstBlockNo}
+     * into {@code out}, without allocating per block.
+     *
+     * <p>The plaintext is stored contiguously in
+     * {@code plain[plainOff, plainOff + plainLen)} and is split into
+     * {@link #plainBS}-sized blocks; only the last block may be shorter. Each
+     * block is prefixed with a fresh random nonce exactly like
+     * {@link #encryptBlock(byte[], long, byte[])}.</p>
+     *
+     * @param plain        the plaintext buffer
+     * @param plainOff     the plaintext offset
+     * @param plainLen     the plaintext length in bytes
+     * @param firstBlockNo the block number of the first block
+     * @param fileId       the 16-byte file id, or {@code null}
+     * @param out          the output buffer
+     * @param outOff       the output offset
+     * @return the number of ciphertext bytes written to {@code out}
+     * @throws NullPointerException if {@code plain} or {@code out} is {@code null}
+     * @throws IllegalArgumentException if {@code plainLen} or {@code firstBlockNo} is negative
+     */
+    public int encryptBlocks(byte[] plain, int plainOff, int plainLen, long firstBlockNo,
+                             byte[] fileId, byte[] out, int outOff) {
+        Objects.requireNonNull(plain, "plain");
+        Objects.requireNonNull(out, "out");
+        if (plainLen < 0) {
+            throw new IllegalArgumentException("negative plaintext length: " + plainLen);
+        }
+        if (firstBlockNo < 0) {
+            throw new IllegalArgumentException("negative block number: " + firstBlockNo);
+        }
+        byte[] aad = aadBuffer.get();
+        byte[] nonce = nonceBuffer.get();
+        int pos = plainOff;
+        int remaining = plainLen;
+        int outPos = outOff;
+        long blockNo = firstBlockNo;
+        while (remaining > 0) {
+            int blockLen = (int) Math.min(plainBS, remaining);
+            Keys.randomBytes(nonce);
+            int aadLen = fillAad(blockNo, fileId, aad);
+            System.arraycopy(nonce, 0, out, outPos, ivLen);
+            outPos += ivLen;
+            outPos += cipher.encrypt(plain, pos, blockLen, nonce, aad, 0, aadLen, out, outPos);
+            pos += blockLen;
+            remaining -= blockLen;
+            blockNo++;
+        }
+        return outPos - outOff;
     }
 
     /**
@@ -189,10 +258,11 @@ public final class ContentEnc {
         if (isAllZero(nonce)) {
             throw new IllegalArgumentException("all-zero nonce");
         }
-        byte[] ct = new byte[ciphertext.length - ivLen];
-        System.arraycopy(ciphertext, ivLen, ct, 0, ct.length);
         byte[] aad = concatAD(blockNo, fileId);
-        return cipher.decrypt(ct, nonce, aad);
+        int inLen = ciphertext.length - ivLen;
+        byte[] out = new byte[Math.max(inLen - Constants.AUTH_TAG_LEN, 0)];
+        cipher.decrypt(ciphertext, ivLen, inLen, nonce, aad, 0, aad.length, out, 0);
+        return out;
     }
 
     /**
@@ -211,24 +281,85 @@ public final class ContentEnc {
         if (firstBlockNo < 0) {
             throw new IllegalArgumentException("negative block number: " + firstBlockNo);
         }
-        ByteArrayOutputStream out = new ByteArrayOutputStream(ciphertext.length);
-        int pos = 0;
+        if (ciphertext.length == 0) {
+            return ciphertext;
+        }
+        int blockCount = (int) ((ciphertext.length + cipherBS - 1) / cipherBS);
+        byte[] out = new byte[blockCount * (int) plainBS];
+        int n = decryptBlocks(ciphertext, 0, ciphertext.length, firstBlockNo, fileId, out, 0);
+        return Arrays.copyOf(out, n);
+    }
+
+    /**
+     * Decrypts a sequence of blocks starting at {@code firstBlockNo} into
+     * {@code out}, without allocating per block.
+     *
+     * <p>The ciphertext is stored contiguously in
+     * {@code cipher[cipherOff, cipherOff + cipherLen)} and is split into
+     * {@link #cipherBS}-sized blocks, except possibly the last one. All-zero
+     * full blocks are treated as sparse holes and decrypted to zero
+     * plaintext.</p>
+     *
+     * @param cipherBuf    the ciphertext buffer
+     * @param cipherOff    the ciphertext offset
+     * @param cipherLen    the ciphertext length in bytes
+     * @param firstBlockNo the block number of the first block
+     * @param fileId       the 16-byte file id, or {@code null}
+     * @param out          the output buffer
+     * @param outOff       the output offset
+     * @return the number of plaintext bytes written to {@code out}
+     * @throws GeneralSecurityException on authentication failure
+     * @throws NullPointerException if {@code cipherBuf} or {@code out} is {@code null}
+     * @throws IllegalArgumentException if {@code cipherLen} or {@code firstBlockNo} is negative or a block is malformed
+     */
+    public int decryptBlocks(byte[] cipherBuf, int cipherOff, int cipherLen, long firstBlockNo,
+                             byte[] fileId, byte[] out, int outOff) throws GeneralSecurityException {
+        Objects.requireNonNull(cipherBuf, "cipherBuf");
+        Objects.requireNonNull(out, "out");
+        if (cipherLen < 0) {
+            throw new IllegalArgumentException("negative ciphertext length: " + cipherLen);
+        }
+        if (firstBlockNo < 0) {
+            throw new IllegalArgumentException("negative block number: " + firstBlockNo);
+        }
+        byte[] aad = aadBuffer.get();
+        byte[] nonce = nonceBuffer.get();
+        int pos = cipherOff;
+        int remaining = cipherLen;
+        int outPos = outOff;
         long blockNo = firstBlockNo;
-        while (pos < ciphertext.length) {
-            int len = (int) Math.min(cipherBS, ciphertext.length - pos);
-            byte[] cBlock = new byte[len];
-            System.arraycopy(ciphertext, pos, cBlock, 0, len);
-            byte[] pBlock = decryptBlock(cBlock, blockNo, fileId);
-            out.write(pBlock, 0, pBlock.length);
-            pos += len;
+        while (remaining > 0) {
+            int blockLen = (int) Math.min(cipherBS, remaining);
+            if (blockLen == cipherBS && isAllZero(cipherBuf, pos, blockLen)) {
+                int zeroLen = (int) plainBS;
+                Arrays.fill(out, outPos, outPos + zeroLen, (byte) 0);
+                outPos += zeroLen;
+            } else {
+                if (blockLen < ivLen) {
+                    throw new IllegalArgumentException("block is too short");
+                }
+                if (isAllZero(cipherBuf, pos, ivLen)) {
+                    throw new IllegalArgumentException("all-zero nonce");
+                }
+                System.arraycopy(cipherBuf, pos, nonce, 0, ivLen);
+                int aadLen = fillAad(blockNo, fileId, aad);
+                outPos += cipher.decrypt(cipherBuf, pos + ivLen, blockLen - ivLen, nonce,
+                        aad, 0, aadLen, out, outPos);
+            }
+            pos += blockLen;
+            remaining -= blockLen;
             blockNo++;
         }
-        return out.toByteArray();
+        return outPos - outOff;
     }
 
     private static boolean isAllZero(byte[] b) {
-        for (byte v : b) {
-            if (v != 0) {
+        return isAllZero(b, 0, b.length);
+    }
+
+    private static boolean isAllZero(byte[] b, int off, int len) {
+        for (int i = 0; i < len; i++) {
+            if (b[off + i] != 0) {
                 return false;
             }
         }

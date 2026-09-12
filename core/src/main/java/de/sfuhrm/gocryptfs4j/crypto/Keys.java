@@ -60,6 +60,17 @@ public final class Keys {
     }
 
     /**
+     * Fills {@code buffer} with cryptographically secure random bytes.
+     *
+     * @param buffer the buffer to fill
+     * @throws NullPointerException if {@code buffer} is {@code null}
+     */
+    public static void randomBytes(byte[] buffer) {
+        Objects.requireNonNull(buffer, "buffer");
+        RANDOM.nextBytes(buffer);
+    }
+
+    /**
      * Wipes the contents of a sensitive buffer.
      *
      * @param buf the buffer to wipe, or {@code null}
