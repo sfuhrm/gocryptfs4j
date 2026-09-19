@@ -244,6 +244,14 @@ public final class GocryptFsProvider extends FileSystemProvider {
     /**
      * Opens or creates a byte channel.
      *
+     * <p>{@link StandardOpenOption#SYNC} and {@link StandardOpenOption#DSYNC}
+     * force the encrypted file after every write. {@link StandardOpenOption#DELETE_ON_CLOSE}
+     * deletes the plaintext file when the channel is closed. The creation
+     * {@code attrs} are applied to a newly created file.
+     * {@link StandardOpenOption#SPARSE} is accepted but ignored: the encrypted
+     * format always materializes whole blocks, so sparse files cannot be
+     * produced.</p>
+     *
      * @throws NullPointerException if {@code path} or {@code options} is {@code null}
      */
     @Override
@@ -257,17 +265,23 @@ public final class GocryptFsProvider extends FileSystemProvider {
 
         boolean create = options.contains(StandardOpenOption.CREATE);
         boolean createNew = options.contains(StandardOpenOption.CREATE_NEW);
-        boolean write = options.contains(StandardOpenOption.WRITE)
-                || options.contains(StandardOpenOption.APPEND);
-        boolean truncate = options.contains(StandardOpenOption.TRUNCATE_EXISTING);
+        boolean read = options.contains(StandardOpenOption.READ);
         boolean append = options.contains(StandardOpenOption.APPEND);
+        boolean write = options.contains(StandardOpenOption.WRITE) || append;
+        boolean truncate = options.contains(StandardOpenOption.TRUNCATE_EXISTING);
+        boolean deleteOnClose = options.contains(StandardOpenOption.DELETE_ON_CLOSE);
+        if (!read && !write) {
+            read = true;
+        }
 
         boolean exists = java.nio.file.Files.exists(r.cipherPath, LinkOption.NOFOLLOW_LINKS);
+        boolean created = false;
         if (createNew && exists) {
             throw new FileAlreadyExistsException(p.toString());
         }
         if ((create || createNew) && !exists) {
             fs.createFile(p.toString());
+            created = true;
         } else if (!exists) {
             throw new NoSuchFileException(p.toString());
         }
@@ -280,7 +294,46 @@ public final class GocryptFsProvider extends FileSystemProvider {
         if (append) {
             position = cf.plainSize();
         }
-        return new GocryptFsFileChannel(cf, write, position);
+        if (created) {
+            // Applied after opening so that restrictive modes (for example
+            // read-only permissions) do not prevent the channel from opening.
+            try {
+                applyAttributes(p, attrs);
+            } catch (IOException | RuntimeException e) {
+                cf.close();
+                throw e;
+            }
+        }
+        GocryptFsFileChannel.Sync sync = options.contains(StandardOpenOption.SYNC)
+                ? GocryptFsFileChannel.Sync.FULL
+                : options.contains(StandardOpenOption.DSYNC)
+                        ? GocryptFsFileChannel.Sync.DATA
+                        : GocryptFsFileChannel.Sync.NONE;
+        GocryptFsFileChannel.CloseAction onClose = deleteOnClose
+                ? () -> deleteOnClose(fs, p)
+                : null;
+        return new GocryptFsFileChannel(cf, read, write, position, sync, onClose);
+    }
+
+    /** Deletes {@code path}, ignoring an already-deleted file. */
+    private static void deleteOnClose(GocryptFs fs, GocryptFsPath path) throws IOException {
+        try {
+            fs.delete(path.toString());
+        } catch (NoSuchFileException e) {
+            // The file is already gone; delete-on-close is satisfied.
+        }
+    }
+
+    /**
+     * Applies the given file attributes to an existing path, best-effort (the
+     * encrypted format cannot set them atomically at creation time).
+     */
+    private static void applyAttributes(GocryptFsPath path, FileAttribute<?>... attrs)
+            throws IOException {
+        for (FileAttribute<?> attr : attrs) {
+            Objects.requireNonNull(attr, "attr");
+            setAttributeValue(path, attr.name(), attr.value());
+        }
     }
 
     /**
@@ -316,6 +369,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
         Objects.requireNonNull(dir, "dir");
         GocryptFsPath d = toAbsolute(dir);
         core(d).mkdir(d.toString());
+        applyAttributes(d, attrs);
     }
 
     /**
@@ -854,9 +908,14 @@ public final class GocryptFsProvider extends FileSystemProvider {
      * @throws IllegalArgumentException if the attribute is not recognized or is not settable
      */
     @Override
-    @SuppressWarnings("unchecked")
     public void setAttribute(Path path, String attribute, Object value, LinkOption... options)
             throws IOException {
+        setAttributeValue(path, attribute, value, options);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void setAttributeValue(Path path, String attribute, Object value,
+                                          LinkOption... options) throws IOException {
         Objects.requireNonNull(path, "path");
         Objects.requireNonNull(attribute, "attribute");
         int colon = attribute.indexOf(':');

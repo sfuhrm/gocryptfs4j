@@ -438,6 +438,16 @@ public final class CipherFile implements AutoCloseable {
         }
     }
 
+    /**
+     * Forces any updates to this file to be written to the storage device.
+     *
+     * @param metaData whether metadata updates should be forced as well
+     * @throws IOException on filesystem errors
+     */
+    public synchronized void force(boolean metaData) throws IOException {
+        channel.force(metaData);
+    }
+
     @Override
     public synchronized void close() throws IOException {
         channel.close();

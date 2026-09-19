@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.channels.NonReadableChannelException;
 import java.nio.channels.NonWritableChannelException;
 import java.nio.channels.SeekableByteChannel;
 import java.nio.charset.StandardCharsets;
@@ -89,6 +90,63 @@ class GocryptFsFileChannelTest {
             assertEquals(3, ch.size());
         }
         assertArrayEquals("012".getBytes(StandardCharsets.UTF_8), Files.readAllBytes(file));
+    }
+
+    @Test
+    void writeOnlyChannelRejectsRead() throws IOException {
+        try (SeekableByteChannel ch = Files.newByteChannel(nio.getPath("/data.txt"),
+                EnumSet.of(StandardOpenOption.WRITE))) {
+            assertThrows(NonReadableChannelException.class,
+                    () -> ch.read(ByteBuffer.allocate(1)));
+        }
+    }
+
+    @Test
+    void defaultChannelIsReadOnly() throws IOException {
+        try (SeekableByteChannel ch = Files.newByteChannel(nio.getPath("/data.txt"))) {
+            ByteBuffer buffer = ByteBuffer.allocate(1);
+            assertEquals(1, ch.read(buffer));
+            assertThrows(NonWritableChannelException.class,
+                    () -> ch.write(ByteBuffer.wrap(new byte[]{1})));
+        }
+    }
+
+    @Test
+    void deleteOnCloseRemovesFile() throws IOException {
+        Path file = nio.getPath("/delete-on-close.txt");
+        try (SeekableByteChannel ch = Files.newByteChannel(file,
+                StandardOpenOption.CREATE, StandardOpenOption.WRITE,
+                StandardOpenOption.DELETE_ON_CLOSE)) {
+            ch.write(ByteBuffer.wrap("x".getBytes(StandardCharsets.UTF_8)));
+        }
+        assertFalse(Files.exists(file, LinkOption.NOFOLLOW_LINKS));
+    }
+
+    @Test
+    void syncAndDsyncWrites() throws IOException {
+        Path file = nio.getPath("/synced.txt");
+        try (SeekableByteChannel ch = Files.newByteChannel(file,
+                StandardOpenOption.CREATE, StandardOpenOption.WRITE,
+                StandardOpenOption.SYNC)) {
+            ch.write(ByteBuffer.wrap("a".getBytes(StandardCharsets.UTF_8)));
+        }
+        try (SeekableByteChannel ch = Files.newByteChannel(file,
+                StandardOpenOption.WRITE, StandardOpenOption.DSYNC)) {
+            ch.position(1);
+            ch.write(ByteBuffer.wrap("b".getBytes(StandardCharsets.UTF_8)));
+        }
+        assertArrayEquals("ab".getBytes(StandardCharsets.UTF_8), Files.readAllBytes(file));
+    }
+
+    @Test
+    void sparseOptionIsAccepted() throws IOException {
+        Path file = nio.getPath("/sparse.txt");
+        try (SeekableByteChannel ch = Files.newByteChannel(file,
+                StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE,
+                StandardOpenOption.SPARSE)) {
+            ch.write(ByteBuffer.wrap("x".getBytes(StandardCharsets.UTF_8)));
+        }
+        assertArrayEquals("x".getBytes(StandardCharsets.UTF_8), Files.readAllBytes(file));
     }
 
     private static void deleteRecursively(Path path) throws IOException {

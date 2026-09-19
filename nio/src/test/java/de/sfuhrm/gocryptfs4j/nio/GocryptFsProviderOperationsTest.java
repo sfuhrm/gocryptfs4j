@@ -367,6 +367,42 @@ class GocryptFsProviderOperationsTest {
                 () -> Files.setAttribute(file, "basic:permissions", perms));
     }
 
+    @Test
+    void createFileWithAttributes() throws IOException {
+        assumeTrue(posixSupported());
+        Path file = nio.getPath("/attrs-createfile.txt");
+        Set<PosixFilePermission> permissions = PosixFilePermissions.fromString("rw-r--r--");
+        Files.createFile(file, PosixFilePermissions.asFileAttribute(permissions));
+        assertEquals(permissions, Files.getPosixFilePermissions(file));
+
+        Path readOnly = nio.getPath("/attrs-readonly.txt");
+        Set<PosixFilePermission> readOnlyPermissions = PosixFilePermissions.fromString("r--r--r--");
+        Files.createFile(readOnly, PosixFilePermissions.asFileAttribute(readOnlyPermissions));
+        assertEquals(readOnlyPermissions, Files.getPosixFilePermissions(readOnly));
+    }
+
+    @Test
+    void createChannelWithAttributes() throws IOException {
+        assumeTrue(posixSupported());
+        Path file = nio.getPath("/attrs-channel.txt");
+        Set<PosixFilePermission> permissions = PosixFilePermissions.fromString("rw-------");
+        try (java.nio.channels.SeekableByteChannel channel = Files.newByteChannel(file,
+                EnumSet.of(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE),
+                PosixFilePermissions.asFileAttribute(permissions))) {
+            channel.write(java.nio.ByteBuffer.wrap("x".getBytes(StandardCharsets.UTF_8)));
+        }
+        assertEquals(permissions, Files.getPosixFilePermissions(file));
+    }
+
+    @Test
+    void createDirectoryWithAttributes() throws IOException {
+        assumeTrue(posixSupported());
+        Path dir = nio.getPath("/attrs-dir");
+        Set<PosixFilePermission> permissions = PosixFilePermissions.fromString("rwx------");
+        Files.createDirectory(dir, PosixFilePermissions.asFileAttribute(permissions));
+        assertEquals(permissions, Files.getPosixFilePermissions(dir));
+    }
+
     private static boolean posixSupported() throws IOException {
         return Files.getFileStore(cipherDir).supportsFileAttributeView("posix");
     }
