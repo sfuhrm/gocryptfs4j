@@ -35,15 +35,29 @@ import java.util.Objects;
  */
 public final class ContentCipherBenchmark {
 
+    /** Prevents instantiation. */
     private ContentCipherBenchmark() {
     }
 
     /** The measured throughput of a single content cipher. */
     public static final class Result {
+
+        /** The cipher this result was measured for. */
         private final ContentCipherType type;
+
+        /** The encryption throughput in mebibytes per second. */
         private final double encryptMiBPerSec;
+
+        /** The decryption throughput in mebibytes per second. */
         private final double decryptMiBPerSec;
 
+        /**
+         * Creates a result.
+         *
+         * @param type             the cipher type
+         * @param encryptMiBPerSec the encryption throughput in MiB/s
+         * @param decryptMiBPerSec the decryption throughput in MiB/s
+         */
         Result(ContentCipherType type, double encryptMiBPerSec, double decryptMiBPerSec) {
             this.type = type;
             this.encryptMiBPerSec = encryptMiBPerSec;
@@ -77,6 +91,11 @@ public final class ContentCipherBenchmark {
             return decryptMiBPerSec;
         }
 
+        /**
+         * Returns a human-readable summary of this result.
+         *
+         * @return the formatted result
+         */
         @Override
         public String toString() {
             return String.format(Locale.ROOT, "%s: encrypt %.1f MiB/s, decrypt %.1f MiB/s",
@@ -126,7 +145,14 @@ public final class ContentCipherBenchmark {
         return results;
     }
 
-    /** Builds the {@link ContentEnc} for a cipher type, mirroring {@code ConfigFile#contentEnc}. */
+    /**
+     * Builds the {@link ContentEnc} for a cipher type, mirroring
+     * {@code ConfigFile#contentEnc}.
+     *
+     * @param type      the cipher type
+     * @param masterKey the 32-byte master key
+     * @return the content-encryption helper
+     */
     private static ContentEnc contentEnc(ContentCipherType type, byte[] masterKey) {
         switch (type) {
             case AES_GCM: {
@@ -167,6 +193,12 @@ public final class ContentCipherBenchmark {
     /**
      * Runs encryption (or decryption) of 4 KiB blocks for {@code nanos}
      * nanoseconds and returns the achieved throughput in MiB/s.
+     *
+     * @param enc     the content-encryption helper
+     * @param fileId  the 16-byte file id
+     * @param nanos   the measurement duration in nanoseconds
+     * @param encrypt {@code true} to measure encryption, {@code false} for decryption
+     * @return the throughput in MiB/s
      */
     private static double run(ContentEnc enc, byte[] fileId, long nanos, boolean encrypt) {
         byte[] plain = new byte[(int) enc.plainBS];

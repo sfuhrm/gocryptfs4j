@@ -7,6 +7,7 @@ package de.sfuhrm.gocryptfs4j.crypto;
  */
 public final class Constants {
 
+    /** Prevents instantiation. */
     private Constants() {
     }
 

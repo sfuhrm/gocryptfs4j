@@ -25,21 +25,45 @@ import java.util.concurrent.TimeUnit;
  */
 final class GocryptFsWatchService implements WatchService {
 
+    /** An empty event kind array, used before a key is registered. */
     static final WatchEvent.Kind<?>[] NO_EVENTS = new WatchEvent.Kind<?>[0];
 
+    /** The default interval, in milliseconds, between directory scans. */
     private static final long DEFAULT_POLL_INTERVAL_MILLIS = 1000L;
 
+    /** The filesystem whose directories are watched. */
     private final GocryptFsFileSystem fs;
+
+    /** The interval, in milliseconds, between directory scans. */
     private final long pollIntervalMillis;
+
+    /** The registered keys, keyed by their directory. */
     private final Map<GocryptFsPath, GocryptFsWatchKey> keys = new HashMap<>();
+
+    /** The keys that have pending events and await retrieval. */
     private final BlockingQueue<GocryptFsWatchKey> pending = new LinkedBlockingQueue<>();
+
+    /** The scheduler that performs the periodic scans. */
     private final ScheduledExecutorService scheduler;
+
+    /** Whether the service has been closed. */
     private volatile boolean closed;
 
+    /**
+     * Creates a service with the default poll interval.
+     *
+     * @param fs the filesystem whose directories are watched
+     */
     GocryptFsWatchService(GocryptFsFileSystem fs) {
         this(fs, DEFAULT_POLL_INTERVAL_MILLIS);
     }
 
+    /**
+     * Creates a service with the given poll interval.
+     *
+     * @param fs                 the filesystem whose directories are watched
+     * @param pollIntervalMillis the interval, in milliseconds, between directory scans
+     */
     GocryptFsWatchService(GocryptFsFileSystem fs, long pollIntervalMillis) {
         this.fs = fs;
         this.pollIntervalMillis = pollIntervalMillis;
@@ -52,14 +76,35 @@ final class GocryptFsWatchService implements WatchService {
                 TimeUnit.MILLISECONDS);
     }
 
+    /**
+     * Returns the filesystem whose directories are watched.
+     *
+     * @return the watched filesystem
+     */
     GocryptFsFileSystem fileSystem() {
         return fs;
     }
 
+    /**
+     * Returns whether the service has been closed.
+     *
+     * @return {@code true} if the service is closed
+     */
     boolean isClosed() {
         return closed;
     }
 
+    /**
+     * Registers a directory for the given event kinds, reusing an existing key
+     * if the directory is already registered.
+     *
+     * @param dir       the directory to register
+     * @param events    the event kinds to watch for
+     * @param modifiers the watch event modifiers; ignored
+     * @return the watch key for the directory
+     * @throws ClosedWatchServiceException if the service is closed
+     * @throws IOException on filesystem errors while snapshotting the directory
+     */
     WatchKey register(GocryptFsPath dir, WatchEvent.Kind<?>[] events,
                       WatchEvent.Modifier... modifiers) throws IOException {
         if (closed) {
@@ -77,16 +122,31 @@ final class GocryptFsWatchService implements WatchService {
         }
     }
 
+    /**
+     * Removes a cancelled key.
+     *
+     * @param key the key to remove
+     */
     void cancelKey(GocryptFsWatchKey key) {
         synchronized (keys) {
             keys.remove(key.directory());
         }
     }
 
+    /**
+     * Queues a key for retrieval, unless the service is closed.
+     *
+     * @param key the key to queue
+     * @return {@code true} if the key was queued
+     */
     boolean offer(GocryptFsWatchKey key) {
         return !closed && pending.offer(key);
     }
 
+    /**
+     * Scans all valid registered keys for changes. Called periodically by the
+     * scheduler.
+     */
     void scan() {
         List<GocryptFsWatchKey> snapshot;
         synchronized (keys) {
@@ -99,6 +159,13 @@ final class GocryptFsWatchService implements WatchService {
         }
     }
 
+    /**
+     * Retrieves and removes the next key with pending events, or returns
+     * {@code null} if none is available.
+     *
+     * @return the next key, or {@code null}
+     * @throws ClosedWatchServiceException if the service is closed
+     */
     @Override
     public WatchKey poll() {
         if (closed) {
@@ -107,6 +174,16 @@ final class GocryptFsWatchService implements WatchService {
         return pending.poll();
     }
 
+    /**
+     * Retrieves and removes the next key with pending events, waiting up to the
+     * given timeout.
+     *
+     * @param timeout the maximum time to wait
+     * @param unit    the time unit of the timeout
+     * @return the next key, or {@code null} if the timeout elapses
+     * @throws ClosedWatchServiceException if the service is closed
+     * @throws InterruptedException if interrupted while waiting
+     */
     @Override
     public WatchKey poll(long timeout, TimeUnit unit) throws InterruptedException {
         if (closed) {
@@ -115,6 +192,14 @@ final class GocryptFsWatchService implements WatchService {
         return pending.poll(timeout, unit);
     }
 
+    /**
+     * Retrieves and removes the next key with pending events, waiting
+     * indefinitely until one is available.
+     *
+     * @return the next key
+     * @throws ClosedWatchServiceException if the service is closed
+     * @throws InterruptedException if interrupted while waiting
+     */
     @Override
     public WatchKey take() throws InterruptedException {
         if (closed) {
@@ -129,6 +214,10 @@ final class GocryptFsWatchService implements WatchService {
         throw new ClosedWatchServiceException();
     }
 
+    /**
+     * Closes the service, invalidates all keys and stops the scheduler. Closing
+     * an already-closed service has no effect.
+     */
     @Override
     public void close() {
         if (closed) {

@@ -25,17 +25,39 @@ import java.util.Objects;
  */
 public final class CipherFile implements AutoCloseable {
 
+    /** A shared, immutable empty byte array. */
     private static final byte[] EMPTY = new byte[0];
 
+    /** The underlying cipher file channel. */
     private final FileChannel channel;
+
+    /** The content-encryption helper. */
     private final ContentEnc enc;
+
+    /** Scratch buffer for a single ciphertext block. */
     private final byte[] blockCipher;
+
+    /** Scratch buffer for a single plaintext block. */
     private final byte[] blockPlain;
+
+    /** Scratch buffer for multiple ciphertext blocks, grown on demand. */
     private byte[] bulkCipher;
+
+    /** Scratch buffer for multiple plaintext blocks, grown on demand. */
     private byte[] bulkPlain;
+
+    /** The file id from the header, or {@code null} for an empty file. */
     private byte[] fileId;
+
+    /** Whether the file id has been loaded from the header. */
     private boolean fileIdLoaded;
 
+    /**
+     * Creates an instance over an open channel.
+     *
+     * @param channel the underlying file channel
+     * @param enc     the content-encryption helper
+     */
     private CipherFile(FileChannel channel, ContentEnc enc) {
         this.channel = channel;
         this.enc = enc;
@@ -288,6 +310,13 @@ public final class CipherFile implements AutoCloseable {
         }
     }
 
+    /**
+     * Returns the file id, minting and writing a fresh header if the file is
+     * empty.
+     *
+     * @return the 16-byte file id
+     * @throws IOException on filesystem errors
+     */
     private byte[] ensureFileId() throws IOException {
         if (!fileIdLoaded) {
             long size = channel.size();
@@ -311,7 +340,14 @@ public final class CipherFile implements AutoCloseable {
         return fileId;
     }
 
-    /** Reads and decrypts a whole plaintext block. Empty beyond EOF (gocryptfs semantics). */
+    /**
+     * Reads and decrypts a whole plaintext block. Empty beyond EOF (gocryptfs
+     * semantics).
+     *
+     * @param blockNo the block number
+     * @return the decrypted block, or an empty array past the end of the file
+     * @throws IOException on filesystem or decryption errors
+     */
     private byte[] readPlainBlock(long blockNo) throws IOException {
         byte[] fileId = fileId();
         long cipherOffset = enc.blockNoToCipherOff(blockNo);
@@ -329,7 +365,13 @@ public final class CipherFile implements AutoCloseable {
         }
     }
 
-    /** Zero-fills the plaintext range {@code [offset, offset+length)}. */
+    /**
+     * Zero-fills the plaintext range {@code [offset, offset+length)}.
+     *
+     * @param offset the plaintext start offset
+     * @param length the number of bytes to zero
+     * @throws IOException on filesystem or encryption errors
+     */
     private void writeZeros(long offset, long length) throws IOException {
         byte[] zeros = new byte[(int) enc.plainBS];
         long remaining = length;
@@ -343,6 +385,14 @@ public final class CipherFile implements AutoCloseable {
         }
     }
 
+    /**
+     * Reads up to {@code length} ciphertext bytes into a new array.
+     *
+     * @param offset the ciphertext start offset
+     * @param length the maximum number of bytes to read
+     * @return the bytes read, possibly fewer than requested or empty at EOF
+     * @throws IOException on filesystem errors
+     */
     private byte[] readCipherRange(long offset, int length) throws IOException {
         byte[] buf = new byte[length];
         ByteBuffer bb = ByteBuffer.wrap(buf);
@@ -360,7 +410,16 @@ public final class CipherFile implements AutoCloseable {
         return Arrays.copyOf(buf, bb.position());
     }
 
-    /** Reads up to {@code length} bytes into {@code buf} and returns the byte count. */
+    /**
+     * Reads up to {@code length} ciphertext bytes into {@code buf} and returns
+     * the byte count.
+     *
+     * @param offset the ciphertext start offset
+     * @param buf    the destination buffer
+     * @param length the maximum number of bytes to read
+     * @return the number of bytes read
+     * @throws IOException on filesystem errors
+     */
     private int readCipherRange(long offset, byte[] buf, int length) throws IOException {
         ByteBuffer bb = ByteBuffer.wrap(buf, 0, length);
         long pos = offset;
@@ -374,10 +433,26 @@ public final class CipherFile implements AutoCloseable {
         return bb.position();
     }
 
+    /**
+     * Writes all of {@code data} at the ciphertext {@code offset}.
+     *
+     * @param offset the ciphertext start offset
+     * @param data   the data to write
+     * @throws IOException on filesystem errors
+     */
     private void writeCipherRange(long offset, byte[] data) throws IOException {
         writeCipherRange(offset, data, 0, data.length);
     }
 
+    /**
+     * Writes a range of {@code data} at the ciphertext {@code offset}.
+     *
+     * @param offset  the ciphertext start offset
+     * @param data    the data buffer
+     * @param dataOff the offset within {@code data}
+     * @param dataLen the number of bytes to write
+     * @throws IOException on filesystem errors
+     */
     private void writeCipherRange(long offset, byte[] data, int dataOff, int dataLen) throws IOException {
         ByteBuffer bb = ByteBuffer.wrap(data, dataOff, dataLen);
         long pos = offset;
@@ -406,14 +481,35 @@ public final class CipherFile implements AutoCloseable {
         return new WriteChannel(plainOffset);
     }
 
+    /**
+     * A streaming, encrypting {@link WritableByteChannel} positioned at a
+     * plaintext offset. Closing it closes the enclosing cipher file.
+     */
     private final class WriteChannel implements WritableByteChannel {
+
+        /** The current plaintext position. */
         private long position;
+
+        /** Whether the channel is open. */
         private boolean open = true;
 
+        /**
+         * Creates a channel starting at the given plaintext position.
+         *
+         * @param position the initial plaintext position
+         */
         WriteChannel(long position) {
             this.position = position;
         }
 
+        /**
+         * Writes plaintext bytes at the current position.
+         *
+         * @param src the source buffer
+         * @return the number of bytes written
+         * @throws IOException on filesystem or encryption errors
+         * @throws ClosedChannelException if the channel is closed
+         */
         @Override
         public int write(ByteBuffer src) throws IOException {
             if (!open) {
@@ -424,11 +520,21 @@ public final class CipherFile implements AutoCloseable {
             return n;
         }
 
+        /**
+         * Returns whether the channel is open.
+         *
+         * @return {@code true} if the channel is open
+         */
         @Override
         public boolean isOpen() {
             return open;
         }
 
+        /**
+         * Closes the channel and the enclosing cipher file.
+         *
+         * @throws IOException on filesystem errors
+         */
         @Override
         public void close() throws IOException {
             if (open) {
@@ -448,6 +554,11 @@ public final class CipherFile implements AutoCloseable {
         channel.force(metaData);
     }
 
+    /**
+     * Closes the underlying channel.
+     *
+     * @throws IOException on filesystem errors
+     */
     @Override
     public synchronized void close() throws IOException {
         channel.close();

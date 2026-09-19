@@ -12,6 +12,7 @@ import java.util.Objects;
  */
 public final class Eme {
 
+    /** The underlying block cipher. */
     private final BlockCipher bc;
 
     /**
@@ -66,6 +67,15 @@ public final class Eme {
         return transform(tweak, input, false);
     }
 
+    /**
+     * Runs the EME transform in the given direction.
+     *
+     * @param tweak   the 16-byte tweak
+     * @param p       the input (a positive multiple of 16 bytes)
+     * @param encrypt {@code true} to encrypt, {@code false} to decrypt
+     * @return the transformed data
+     * @throws IllegalArgumentException if the tweak or input length is invalid
+     */
     private byte[] transform(byte[] tweak, byte[] p, boolean encrypt) {
         if (tweak.length != Constants.AES_BLOCK_SIZE) {
             throw new IllegalArgumentException("Tweak must be 16 bytes long");
@@ -128,7 +138,12 @@ public final class Eme {
         return c;
     }
 
-    /** L[0] = 2*AES(0); L[i] = 2*L[i-1]. */
+    /**
+     * Tabulates the L values used by EME: L[0] = 2*AES(0); L[i] = 2*L[i-1].
+     *
+     * @param m the number of blocks
+     * @return the L table with {@code m} entries
+     */
     private byte[][] tabulateL(int m) {
         byte[] li = new byte[Constants.AES_BLOCK_SIZE];
         byte[] zero = new byte[Constants.AES_BLOCK_SIZE];
@@ -141,6 +156,15 @@ public final class Eme {
         return table;
     }
 
+    /**
+     * Applies the block cipher in the given direction to one 16-byte block.
+     *
+     * @param out     the output buffer
+     * @param outOff  the output offset
+     * @param in      the input buffer
+     * @param inOff   the input offset
+     * @param encrypt {@code true} to encrypt, {@code false} to decrypt
+     */
     private void block(byte[] out, int outOff, byte[] in, int inOff, boolean encrypt) {
         if (encrypt) {
             bc.encrypt(in, inOff, out, outOff);
@@ -149,19 +173,41 @@ public final class Eme {
         }
     }
 
+    /**
+     * XORs two 16-byte blocks into a third.
+     *
+     * @param out    the output buffer
+     * @param outOff the output offset
+     * @param a      the first input buffer
+     * @param aOff   the first input offset
+     * @param b      the second input buffer
+     * @param bOff   the second input offset
+     */
     private static void xor(byte[] out, int outOff, byte[] a, int aOff, byte[] b, int bOff) {
         for (int i = 0; i < 16; i++) {
             out[outOff + i] = (byte) (a[aOff + i] ^ b[bOff + i]);
         }
     }
 
+    /**
+     * XORs a 16-byte block into another in place.
+     *
+     * @param a    the destination buffer
+     * @param aOff the destination offset
+     * @param b    the source buffer
+     * @param bOff the source offset
+     */
     private static void xorInPlace(byte[] a, int aOff, byte[] b, int bOff) {
         for (int i = 0; i < 16; i++) {
             a[aOff + i] ^= b[bOff + i];
         }
     }
 
-    /** GF(2^128) multiplication by two, reduction polynomial 0x87. In-place. */
+    /**
+     * GF(2^128) multiplication by two, reduction polynomial 0x87. In-place.
+     *
+     * @param x the 16-byte block to multiply by two
+     */
     private static void multByTwo(byte[] x) {
         byte[] in = x.clone();
         int carry = 0;

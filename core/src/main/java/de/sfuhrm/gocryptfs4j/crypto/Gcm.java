@@ -17,11 +17,21 @@ import java.util.Objects;
  */
 public final class Gcm implements ContentCipher {
 
+    /** A copy of the AES key, kept so it can be wiped. */
     private final byte[] key;
 
+    /** A thread-local cipher for encryption, reused because {@link Cipher} is not thread-safe. */
     private final ThreadLocal<Cipher> encryptCipher = ThreadLocal.withInitial(Gcm::newCipher);
+
+    /** A thread-local cipher for decryption, reused because {@link Cipher} is not thread-safe. */
     private final ThreadLocal<Cipher> decryptCipher = ThreadLocal.withInitial(Gcm::newCipher);
 
+    /**
+     * Creates a new AES/GCM/NoPadding cipher.
+     *
+     * @return the cipher
+     * @throws IllegalStateException if AES-GCM is unavailable
+     */
     private static Cipher newCipher() {
         try {
             return Cipher.getInstance("AES/GCM/NoPadding");
@@ -101,6 +111,20 @@ public final class Gcm implements ContentCipher {
         return cipher.doFinal(ciphertext);
     }
 
+    /**
+     * Encrypts a range, writing the ciphertext and tag into {@code out}.
+     *
+     * @param in     the input buffer
+     * @param inOff  the input offset
+     * @param inLen  the number of input bytes
+     * @param nonce  the nonce (12 or 16 bytes)
+     * @param aad    the additional authenticated data buffer
+     * @param aadOff the AAD offset
+     * @param aadLen the AAD length
+     * @param out    the output buffer
+     * @param outOff the output offset
+     * @return the number of bytes written (ciphertext plus tag)
+     */
     @Override
     public int encrypt(byte[] in, int inOff, int inLen, byte[] nonce,
                        byte[] aad, int aadOff, int aadLen, byte[] out, int outOff) {
@@ -117,6 +141,21 @@ public final class Gcm implements ContentCipher {
         }
     }
 
+    /**
+     * Decrypts a range, writing the plaintext into {@code out}.
+     *
+     * @param in     the input buffer (ciphertext plus tag)
+     * @param inOff  the input offset
+     * @param inLen  the number of input bytes
+     * @param nonce  the nonce used during encryption
+     * @param aad    the additional authenticated data buffer
+     * @param aadOff the AAD offset
+     * @param aadLen the AAD length
+     * @param out    the output buffer
+     * @param outOff the output offset
+     * @return the number of plaintext bytes written
+     * @throws GeneralSecurityException on authentication failure
+     */
     @Override
     public int decrypt(byte[] in, int inOff, int inLen, byte[] nonce,
                        byte[] aad, int aadOff, int aadLen, byte[] out, int outOff)

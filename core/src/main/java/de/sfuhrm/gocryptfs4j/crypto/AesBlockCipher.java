@@ -12,8 +12,13 @@ import java.util.Objects;
  */
 public final class AesBlockCipher implements BlockCipher {
 
+    /** The AES engine used for encryption. */
     private final AESEngine encrypt = new AESEngine();
+
+    /** The AES engine used for decryption. */
     private final AESEngine decrypt = new AESEngine();
+
+    /** A copy of the AES key, kept so it can be wiped. */
     private final byte[] key;
 
     /**

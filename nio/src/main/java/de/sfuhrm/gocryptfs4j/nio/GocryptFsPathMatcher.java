@@ -13,8 +13,17 @@ import java.util.regex.PatternSyntaxException;
  */
 final class GocryptFsPathMatcher implements PathMatcher {
 
+    /** The compiled pattern. */
     private final Pattern pattern;
 
+    /**
+     * Creates a matcher for a {@code syntax:pattern} specification.
+     *
+     * @param syntaxAndPattern the syntax and pattern, for example {@code "glob:*.txt"}
+     * @return the matcher
+     * @throws IllegalArgumentException if the syntax is missing or unknown
+     * @throws PatternSyntaxException if the pattern is invalid
+     */
     static GocryptFsPathMatcher create(String syntaxAndPattern) {
         int colon = syntaxAndPattern.indexOf(':');
         if (colon <= 0 || colon == syntaxAndPattern.length() - 1) {
@@ -36,15 +45,33 @@ final class GocryptFsPathMatcher implements PathMatcher {
         return new GocryptFsPathMatcher(Pattern.compile(regex));
     }
 
+    /**
+     * Creates a matcher from a compiled pattern.
+     *
+     * @param pattern the compiled pattern
+     */
     private GocryptFsPathMatcher(Pattern pattern) {
         this.pattern = pattern;
     }
 
+    /**
+     * Tests whether the given path matches this matcher.
+     *
+     * @param path the path to test
+     * @return {@code true} if the path matches
+     */
     @Override
     public boolean matches(Path path) {
         return pattern.matcher(path.toString()).matches();
     }
 
+    /**
+     * Translates a glob expression to an equivalent regular expression.
+     *
+     * @param glob the glob expression
+     * @return the regular expression
+     * @throws PatternSyntaxException if the glob expression is malformed
+     */
     private static String globToRegex(String glob) {
         StringBuilder sb = new StringBuilder("^");
         int n = glob.length();
@@ -135,6 +162,13 @@ final class GocryptFsPathMatcher implements PathMatcher {
         return sb.append('$').toString();
     }
 
+    /**
+     * Returns whether the given character has special meaning in a regular
+     * expression.
+     *
+     * @param c the character
+     * @return {@code true} if the character is a regular-expression metacharacter
+     */
     private static boolean isRegexMeta(char c) {
         switch (c) {
             case '.':

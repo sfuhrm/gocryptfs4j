@@ -21,11 +21,22 @@ public final class NameTransform {
     /** Value returned by {@link #nameType} for an ordinary (non-long) name. */
     public static final int LONG_NAME_NONE = 2;
 
+    /** The EME wide-block cipher. */
     private final Eme eme;
+
+    /** The long-name limit in bytes. */
     private final int longNameMax;
+
+    /** Whether long names are hashed. */
     private final boolean longNames;
+
+    /** The base64url encoder. */
     private final Base64.Encoder b64Encoder;
+
+    /** The base64url decoder. */
     private final Base64.Decoder b64Decoder;
+
+    /** Whether deterministic (all-zero) dirivs are used. */
     private final boolean deterministicNames;
 
     /**
@@ -225,7 +236,12 @@ public final class NameTransform {
         return deterministicNames;
     }
 
-    /** PKCS#7 padding to a multiple of the AES block size. */
+    /**
+     * Applies PKCS#7 padding to a multiple of the AES block size.
+     *
+     * @param orig the unpadded data
+     * @return the padded data
+     */
     static byte[] pad16(byte[] orig) {
         int padLen = Constants.AES_BLOCK_SIZE - orig.length % Constants.AES_BLOCK_SIZE;
         byte[] padded = new byte[orig.length + padLen];
@@ -236,7 +252,13 @@ public final class NameTransform {
         return padded;
     }
 
-    /** Removes PKCS#7 padding. */
+    /**
+     * Removes PKCS#7 padding.
+     *
+     * @param padded the padded data
+     * @return the unpadded data
+     * @throws IllegalArgumentException if the padding is malformed
+     */
     static byte[] unpad16(byte[] padded) {
         if (padded.length == 0) {
             throw new IllegalArgumentException("empty input");
@@ -261,6 +283,13 @@ public final class NameTransform {
         return out;
     }
 
+    /**
+     * Computes the SHA-256 digest of the given data.
+     *
+     * @param data the data to hash
+     * @return the 32-byte digest
+     * @throws IllegalStateException if SHA-256 is unavailable
+     */
     private static byte[] sha256(byte[] data) {
         try {
             return MessageDigest.getInstance("SHA-256").digest(data);

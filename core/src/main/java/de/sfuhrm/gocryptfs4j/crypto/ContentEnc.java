@@ -26,8 +26,13 @@ public final class ContentEnc {
     /** Nonce length in bytes. */
     public final int ivLen;
 
+    /** The authenticated-encryption cipher. */
     private final ContentCipher cipher;
+
+    /** A thread-local scratch buffer for the additional authenticated data. */
     private final ThreadLocal<byte[]> aadBuffer;
+
+    /** A thread-local scratch buffer for the nonce. */
     private final ThreadLocal<byte[]> nonceBuffer;
 
     /**
@@ -102,6 +107,13 @@ public final class ContentEnc {
         cipher.wipe();
     }
 
+    /**
+     * Allocates and fills the additional authenticated data for a block.
+     *
+     * @param blockNo the block number
+     * @param fileId  the 16-byte file id, or {@code null}
+     * @return the additional authenticated data
+     */
     private static byte[] concatAD(long blockNo, byte[] fileId) {
         byte[] aad = new byte[8 + (fileId == null ? 0 : fileId.length)];
         fillAad(blockNo, fileId, aad);
@@ -112,6 +124,9 @@ public final class ContentEnc {
      * Writes the additional authenticated data (8-byte big-endian block number,
      * optionally followed by the file id) into {@code aad}.
      *
+     * @param blockNo the block number
+     * @param fileId  the 16-byte file id, or {@code null}
+     * @param aad     the destination buffer
      * @return the number of bytes written
      */
     private static int fillAad(long blockNo, byte[] fileId, byte[] aad) {
@@ -353,10 +368,24 @@ public final class ContentEnc {
         return outPos - outOff;
     }
 
+    /**
+     * Returns whether the whole array is all zero.
+     *
+     * @param b the array
+     * @return {@code true} if every byte is zero
+     */
     private static boolean isAllZero(byte[] b) {
         return isAllZero(b, 0, b.length);
     }
 
+    /**
+     * Returns whether the given range is all zero.
+     *
+     * @param b   the array
+     * @param off the start offset
+     * @param len the number of bytes
+     * @return {@code true} if every byte in the range is zero
+     */
     private static boolean isAllZero(byte[] b, int off, int len) {
         for (int i = 0; i < len; i++) {
             if (b[off + i] != 0) {

@@ -17,10 +17,14 @@ import java.util.Objects;
  */
 public final class XChaCha20Poly1305 implements ContentCipher {
 
+    /** A copy of the 32-byte key, kept so it can be wiped. */
     private final byte[] key;
 
+    /** A thread-local cipher for encryption, reused because it is not thread-safe. */
     private final ThreadLocal<AEADCipher> encryptCipher = ThreadLocal.withInitial(
             org.bouncycastle.crypto.modes.XChaCha20Poly1305::new);
+
+    /** A thread-local cipher for decryption, reused because it is not thread-safe. */
     private final ThreadLocal<AEADCipher> decryptCipher = ThreadLocal.withInitial(
             org.bouncycastle.crypto.modes.XChaCha20Poly1305::new);
 
@@ -45,6 +49,11 @@ public final class XChaCha20Poly1305 implements ContentCipher {
         Arrays.fill(key, (byte) 0);
     }
 
+    /**
+     * Validates that {@code nonce} is 24 bytes long.
+     *
+     * @param nonce the nonce to validate
+     */
     private static void checkNonce(byte[] nonce) {
         if (nonce.length != Constants.XCHACHA_NONCE_LEN) {
             throw new IllegalArgumentException("XChaCha20-Poly1305 nonce must be "
@@ -116,6 +125,20 @@ public final class XChaCha20Poly1305 implements ContentCipher {
         return out;
     }
 
+    /**
+     * Encrypts a range, writing the ciphertext and tag into {@code out}.
+     *
+     * @param in     the input buffer
+     * @param inOff  the input offset
+     * @param inLen  the number of input bytes
+     * @param nonce  the 24-byte nonce
+     * @param aad    the additional authenticated data buffer
+     * @param aadOff the AAD offset
+     * @param aadLen the AAD length
+     * @param out    the output buffer
+     * @param outOff the output offset
+     * @return the number of bytes written (ciphertext plus tag)
+     */
     @Override
     public int encrypt(byte[] in, int inOff, int inLen, byte[] nonce,
                        byte[] aad, int aadOff, int aadLen, byte[] out, int outOff) {
@@ -134,6 +157,21 @@ public final class XChaCha20Poly1305 implements ContentCipher {
         return len;
     }
 
+    /**
+     * Decrypts a range, writing the plaintext into {@code out}.
+     *
+     * @param in     the input buffer (ciphertext plus tag)
+     * @param inOff  the input offset
+     * @param inLen  the number of input bytes
+     * @param nonce  the 24-byte nonce used during encryption
+     * @param aad    the additional authenticated data buffer
+     * @param aadOff the AAD offset
+     * @param aadLen the AAD length
+     * @param out    the output buffer
+     * @param outOff the output offset
+     * @return the number of plaintext bytes written
+     * @throws GeneralSecurityException on authentication failure
+     */
     @Override
     public int decrypt(byte[] in, int inOff, int inLen, byte[] nonce,
                        byte[] aad, int aadOff, int aadLen, byte[] out, int outOff)

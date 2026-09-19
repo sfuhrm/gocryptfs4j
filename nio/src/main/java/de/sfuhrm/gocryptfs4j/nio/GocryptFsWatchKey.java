@@ -20,36 +20,81 @@ import java.util.Objects;
 
 /**
  * A {@link WatchKey} for a single registered gocryptfs directory.
+ *
+ * <p>Changes are detected by comparing a snapshot of the directory taken when
+ * the key was registered (or last reset) with the directory contents on each
+ * scan. Pending events are held in a queue until they are retrieved.</p>
  */
 final class GocryptFsWatchKey implements WatchKey {
 
+    /** The service this key belongs to. */
     private final GocryptFsWatchService service;
+
+    /** The watched directory. */
     private final GocryptFsPath dir;
+
+    /** Guards the snapshot, the event queue and the signalling state. */
     private final Object lock = new Object();
 
+    /** The event kinds this key is interested in. */
     private WatchEvent.Kind<?>[] events = GocryptFsWatchService.NO_EVENTS;
+
+    /** The last known state of the watched directory. */
     private Map<String, SnapshotEntry> snapshot = Collections.emptyMap();
+
+    /** The pending events. */
     private final Deque<WatchEvent<?>> queue = new ArrayDeque<>();
+
+    /** Whether the key is valid. */
     private volatile boolean valid = true;
+
+    /** Whether the key is currently queued in the service. */
     private volatile boolean signalled;
 
+    /**
+     * Creates a key.
+     *
+     * @param service the owning service
+     * @param dir     the watched directory
+     */
     GocryptFsWatchKey(GocryptFsWatchService service, GocryptFsPath dir) {
         this.service = service;
         this.dir = dir;
     }
 
+    /**
+     * Returns the watched directory.
+     *
+     * @return the watched directory
+     */
     GocryptFsPath directory() {
         return dir;
     }
 
+    /**
+     * Sets the event kinds this key is interested in.
+     *
+     * @param events the event kinds
+     */
     void setEvents(WatchEvent.Kind<?>[] events) {
         this.events = events.clone();
     }
 
+    /**
+     * Replaces the snapshot with the current state of the directory.
+     *
+     * @throws IOException on filesystem errors
+     */
     void snapshot() throws IOException {
         this.snapshot = listSnapshot();
     }
 
+    /**
+     * Lists the watched directory as a map of entry name to snapshot.
+     *
+     * @return the current snapshot
+     * @throws IOException on filesystem errors
+     */
     private Map<String, SnapshotEntry> listSnapshot() throws IOException {
         Map<String, SnapshotEntry> map = new HashMap<>();
         for (DirEntry e : service.fileSystem().core().list(dir.toString())) {
@@ -58,6 +103,12 @@ final class GocryptFsWatchKey implements WatchKey {
         return map;
     }
 
+    /**
+     * Returns whether this key is interested in the given event kind.
+     *
+     * @param kind the event kind
+     * @return {@code true} if the kind is watched
+     */
     private boolean wants(WatchEvent.Kind<?> kind) {
         for (WatchEvent.Kind<?> k : events) {
             if (k == kind) {
@@ -67,6 +118,11 @@ final class GocryptFsWatchKey implements WatchKey {
         return false;
     }
 
+    /**
+     * Compares the directory against the snapshot, queues the resulting events
+     * and updates the snapshot. On a listing failure an {@code OVERFLOW} event
+     * is queued and the key is cancelled.
+     */
     void scan() {
         Map<String, SnapshotEntry> current;
         try {
@@ -103,6 +159,12 @@ final class GocryptFsWatchKey implements WatchKey {
         }
     }
 
+    /**
+     * Adds a single event to the queue and signals the key.
+     *
+     * @param kind the event kind
+     * @param name the affected entry name, or {@code null}
+     */
     private void enqueue(WatchEvent.Kind<?> kind, String name) {
         synchronized (lock) {
             queue.add(event(kind, name));
@@ -110,6 +172,9 @@ final class GocryptFsWatchKey implements WatchKey {
         }
     }
 
+    /**
+     * Queues this key in the service, if it is not already queued.
+     */
     private void signal() {
         if (!signalled) {
             signalled = true;
@@ -117,6 +182,13 @@ final class GocryptFsWatchKey implements WatchKey {
         }
     }
 
+    /**
+     * Creates a watch event with a path context.
+     *
+     * @param kind the event kind
+     * @param name the affected entry name, or {@code null} for no context
+     * @return the watch event
+     */
     @SuppressWarnings("unchecked")
     private WatchEvent<Path> event(WatchEvent.Kind<?> kind, String name) {
         Path context = name == null ? null : dir.resolve(name);
@@ -138,11 +210,21 @@ final class GocryptFsWatchKey implements WatchKey {
         };
     }
 
+    /**
+     * Returns whether the key is valid.
+     *
+     * @return {@code true} if the key is valid
+     */
     @Override
     public boolean isValid() {
         return valid;
     }
 
+    /**
+     * Retrieves and removes the pending events.
+     *
+     * @return the pending events
+     */
     @Override
     public List<WatchEvent<?>> pollEvents() {
         synchronized (lock) {
@@ -152,6 +234,12 @@ final class GocryptFsWatchKey implements WatchKey {
         }
     }
 
+    /**
+     * Resets the key, clearing the signalled state and taking a fresh snapshot.
+     *
+     * @return {@code true} if the key was reset, {@code false} if it is no
+     *         longer valid or the snapshot could not be taken
+     */
     @Override
     public boolean reset() {
         synchronized (lock) {
@@ -170,6 +258,9 @@ final class GocryptFsWatchKey implements WatchKey {
         }
     }
 
+    /**
+     * Cancels the key and removes it from the service.
+     */
     @Override
     public void cancel() {
         synchronized (lock) {
@@ -181,27 +272,57 @@ final class GocryptFsWatchKey implements WatchKey {
         service.cancelKey(this);
     }
 
+    /**
+     * Returns the watched directory.
+     *
+     * @return the watched directory
+     */
     @Override
     public Watchable watchable() {
         return dir;
     }
 
+    /**
+     * Invalidates the key without notifying the service, used when the service
+     * closes.
+     */
     void invalidate() {
         valid = false;
     }
 
-    /** A single entry snapshot used to detect changes between scans. */
+    /**
+     * A single entry snapshot used to detect changes between scans.
+     */
     private static final class SnapshotEntry {
+
+        /** The entry kind. */
         private final DirEntry.Kind kind;
+
+        /** The entry size. */
         private final long size;
+
+        /** The entry last-modified time. */
         private final FileTime lastModifiedTime;
 
+        /**
+         * Creates a snapshot entry.
+         *
+         * @param kind             the entry kind
+         * @param size             the entry size
+         * @param lastModifiedTime the entry last-modified time
+         */
         SnapshotEntry(DirEntry.Kind kind, long size, FileTime lastModifiedTime) {
             this.kind = kind;
             this.size = size;
             this.lastModifiedTime = lastModifiedTime;
         }
 
+        /**
+         * Compares this entry with another object.
+         *
+         * @param o the object to compare to
+         * @return {@code true} if kind, size and last-modified time are equal
+         */
         @Override
         public boolean equals(Object o) {
             if (this == o) {
@@ -215,6 +336,11 @@ final class GocryptFsWatchKey implements WatchKey {
                     && lastModifiedTime.equals(that.lastModifiedTime);
         }
 
+        /**
+         * Returns a hash code consistent with {@link #equals(Object)}.
+         *
+         * @return the hash code
+         */
         @Override
         public int hashCode() {
             return Objects.hash(kind, size, lastModifiedTime);

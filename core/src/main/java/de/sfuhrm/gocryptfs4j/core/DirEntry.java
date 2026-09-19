@@ -21,14 +21,31 @@ public final class DirEntry {
         OTHER
     }
 
+    /** The plaintext (decrypted) name. */
     private final String plainName;
+
+    /** The ciphertext (encrypted) name. */
     private final String cipherName;
+
+    /** The ciphertext-side path. */
     private final Path cipherPath;
+
+    /** The entry kind. */
     private final Kind kind;
+
+    /** The plaintext size in bytes. */
     private final long size;
+
+    /** The last-modified time. */
     private final FileTime lastModifiedTime;
+
+    /** The last-access time. */
     private final FileTime lastAccessTime;
+
+    /** The creation time. */
     private final FileTime creationTime;
+
+    /** The file key, or {@code null} if there is none. */
     private final Object fileKey;
 
     /**

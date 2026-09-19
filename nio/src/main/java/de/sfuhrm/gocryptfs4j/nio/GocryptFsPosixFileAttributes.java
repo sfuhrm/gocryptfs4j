@@ -22,11 +22,27 @@ import java.util.Set;
  */
 final class GocryptFsPosixFileAttributes implements PosixFileAttributes {
 
+    /** The basic attributes (and plaintext size) of the path. */
     private final BasicFileAttributes basic;
+
+    /** The owner of the backing file, or {@code null} if unknown. */
     private final UserPrincipal owner;
+
+    /** The group of the backing file, or {@code null} if unknown. */
     private final GroupPrincipal group;
+
+    /** The permissions of the backing file; never {@code null}. */
     private final Set<PosixFilePermission> permissions;
 
+    /**
+     * Creates the attributes.
+     *
+     * @param basic       the basic attributes (and plaintext size)
+     * @param owner       the owner, or {@code null}
+     * @param group       the group, or {@code null}
+     * @param permissions the permissions, or {@code null} for none
+     * @throws NullPointerException if {@code basic} is {@code null}
+     */
     GocryptFsPosixFileAttributes(BasicFileAttributes basic, UserPrincipal owner,
                                  GroupPrincipal group, Set<PosixFilePermission> permissions) {
         this.basic = Objects.requireNonNull(basic, "basic");
@@ -37,61 +53,121 @@ final class GocryptFsPosixFileAttributes implements PosixFileAttributes {
                 : Collections.unmodifiableSet(new LinkedHashSet<>(permissions));
     }
 
+    /**
+     * Returns the last-modified time.
+     *
+     * @return the last-modified time
+     */
     @Override
     public FileTime lastModifiedTime() {
         return basic.lastModifiedTime();
     }
 
+    /**
+     * Returns the last-access time.
+     *
+     * @return the last-access time
+     */
     @Override
     public FileTime lastAccessTime() {
         return basic.lastAccessTime();
     }
 
+    /**
+     * Returns the creation time.
+     *
+     * @return the creation time
+     */
     @Override
     public FileTime creationTime() {
         return basic.creationTime();
     }
 
+    /**
+     * Returns whether the path is a regular file.
+     *
+     * @return {@code true} if the path is a regular file
+     */
     @Override
     public boolean isRegularFile() {
         return basic.isRegularFile();
     }
 
+    /**
+     * Returns whether the path is a directory.
+     *
+     * @return {@code true} if the path is a directory
+     */
     @Override
     public boolean isDirectory() {
         return basic.isDirectory();
     }
 
+    /**
+     * Returns whether the path is a symbolic link.
+     *
+     * @return {@code true} if the path is a symbolic link
+     */
     @Override
     public boolean isSymbolicLink() {
         return basic.isSymbolicLink();
     }
 
+    /**
+     * Returns whether the path is of some other kind.
+     *
+     * @return {@code true} if the path is neither a regular file, directory nor symbolic link
+     */
     @Override
     public boolean isOther() {
         return basic.isOther();
     }
 
+    /**
+     * Returns the plaintext size.
+     *
+     * @return the plaintext size in bytes
+     */
     @Override
     public long size() {
         return basic.size();
     }
 
+    /**
+     * Returns the file key, or {@code null} if there is none.
+     *
+     * @return the file key, or {@code null}
+     */
     @Override
     public Object fileKey() {
         return basic.fileKey();
     }
 
+    /**
+     * Returns the owner of the backing file.
+     *
+     * @return the owner, or {@code null} if unknown
+     */
     @Override
     public UserPrincipal owner() {
         return owner;
     }
 
+    /**
+     * Returns the group of the backing file.
+     *
+     * @return the group, or {@code null} if unknown
+     */
     @Override
     public GroupPrincipal group() {
         return group;
     }
 
+    /**
+     * Returns the permissions of the backing file.
+     *
+     * @return an unmodifiable set of permissions
+     */
     @Override
     public Set<PosixFilePermission> permissions() {
         return permissions;

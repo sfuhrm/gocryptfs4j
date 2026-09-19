@@ -9,7 +9,10 @@ import java.util.Objects;
  */
 public final class FileHeader {
 
+    /** The on-disk format version. */
     private final int version;
+
+    /** The 16-byte random file id. */
     private final byte[] id;
 
     /**

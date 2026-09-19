@@ -52,16 +52,40 @@ import java.util.Objects;
  */
 public final class GocryptFs implements AutoCloseable {
 
+    /** The absolute, normalized ciphertext root directory. */
     private final Path cipherRoot;
+
+    /** The parsed configuration file. */
     private final ConfigFile config;
+
+    /** The 32-byte master key. */
     private final byte[] masterKey;
+
+    /** The EME name-encryption helper. */
     private final Eme eme;
+
+    /** The content-encryption helper. */
     private final ContentEnc contentEnc;
+
+    /** The name-transform helper. */
     private final NameTransform nameTransform;
+
+    /** Whether file names are stored unencrypted. */
     private final boolean plaintextNames;
+
+    /** Whether per-directory IVs are used for name encryption. */
     private final boolean dirIvFlag;
+
+    /** Whether deterministic (no per-directory IV) name encryption is used. */
     private final boolean deterministicNames;
 
+    /**
+     * Creates an instance, called after the master key has been unlocked.
+     *
+     * @param cipherRoot the ciphertext root directory
+     * @param config     the parsed configuration
+     * @param masterKey  the 32-byte master key
+     */
     private GocryptFs(Path cipherRoot, ConfigFile config, byte[] masterKey) {
         this.cipherRoot = cipherRoot.toAbsolutePath().normalize();
         this.config = config;
@@ -491,6 +515,15 @@ public final class GocryptFs implements AutoCloseable {
         /** The plaintext (decrypted) name. */
         public final String plainName;
 
+        /**
+         * Creates a resolution result.
+         *
+         * @param cipherPath   the ciphertext-side path
+         * @param cipherParent the ciphertext-side parent directory
+         * @param parentDirIV  the 16-byte IV of the parent directory
+         * @param cipherName   the ciphertext (encrypted) name
+         * @param plainName    the plaintext (decrypted) name
+         */
         Resolved(Path cipherPath, Path cipherParent, byte[] parentDirIV, String cipherName, String plainName) {
             this.cipherPath = cipherPath;
             this.cipherParent = cipherParent;
@@ -501,7 +534,8 @@ public final class GocryptFs implements AutoCloseable {
     }
 
     /**
-     * Resolves a plaintext absolute path (e.g. {@code "/a/b.txt"}) to its cipher path.
+     * Resolves a plaintext absolute path (for example {@code "/a/b.txt"}) to its
+     * cipher path.
      *
      * @param plainPath the plaintext absolute path
      * @return the resolution result
@@ -527,7 +561,13 @@ public final class GocryptFs implements AutoCloseable {
         return new Resolved(cur.resolve(cName), cur, curIV, cName, plainName);
     }
 
-    /** Resolves the parent directory and basename of a plaintext path. */
+    /**
+     * Resolves the parent directory and basename of a plaintext path.
+     *
+     * @param plainPath the plaintext path
+     * @return the resolution result for the path's final component
+     * @throws IOException if the path is empty or the parent cannot be resolved
+     */
     private Resolved resolveParent(String plainPath) throws IOException {
         List<String> comps = normalize(plainPath);
         if (comps.isEmpty()) {
@@ -545,6 +585,13 @@ public final class GocryptFs implements AutoCloseable {
         return new Resolved(cur.resolve(cName), cur, curIV, cName, plainName);
     }
 
+    /**
+     * Splits and normalizes a plaintext path into its components.
+     *
+     * @param path the plaintext path
+     * @return the path components, without empty, {@code "."} or {@code ".."} parts
+     * @throws IllegalArgumentException if the path contains a {@code ".."} component
+     */
     private static List<String> normalize(String path) {
         List<String> out = new ArrayList<>();
         if (path == null || path.isEmpty() || path.equals("/")) {
@@ -716,6 +763,13 @@ public final class GocryptFs implements AutoCloseable {
         return statResolved(r);
     }
 
+    /**
+     * Reads the attributes of an already-resolved path.
+     *
+     * @param r the resolved path
+     * @return the directory entry
+     * @throws IOException on filesystem errors
+     */
     private DirEntry statResolved(Resolved r) throws IOException {
         BasicFileAttributes attrs = Files.readAttributes(r.cipherPath, BasicFileAttributes.class,
                 LinkOption.NOFOLLOW_LINKS);
@@ -898,18 +952,47 @@ public final class GocryptFs implements AutoCloseable {
         view.setTimes(lastModifiedTime, lastAccessTime, createTime);
     }
 
+    /**
+     * A streaming, decrypting {@link InputStream} over a {@link CipherFile}.
+     *
+     * <p>Buffers decrypted data so that {@link java.io.InputStream#read()}
+     * works efficiently. Closing the stream closes the underlying cipher file.</p>
+     */
     private static final class CipherInputStream extends InputStream {
+
+        /** The size of the decrypted read-ahead buffer. */
         private static final int BUFFER_SIZE = 8192;
+
+        /** The cipher file being read. */
         private final CipherFile cf;
+
+        /** The current plaintext position. */
         private long pos;
+
+        /** The read-ahead buffer, lazily created. */
         private byte[] buf;
+
+        /** The current position within the read-ahead buffer. */
         private int bufPos;
+
+        /** The number of valid bytes in the read-ahead buffer. */
         private int bufLen;
 
+        /**
+         * Creates a stream over the given cipher file.
+         *
+         * @param cf the cipher file to read from
+         */
         CipherInputStream(CipherFile cf) {
             this.cf = cf;
         }
 
+        /**
+         * Reads a single plaintext byte.
+         *
+         * @return the byte, or {@code -1} at the end of the stream
+         * @throws IOException on filesystem errors
+         */
         @Override
         public int read() throws IOException {
             if (bufPos >= bufLen && !fill()) {
@@ -919,6 +1002,15 @@ public final class GocryptFs implements AutoCloseable {
             return buf[bufPos++] & 0xFF;
         }
 
+        /**
+         * Reads plaintext bytes into a range of an array.
+         *
+         * @param b   the destination buffer
+         * @param off the destination offset
+         * @param len the maximum number of bytes
+         * @return the number of bytes read, or {@code -1} at the end of the stream
+         * @throws IOException on filesystem errors
+         */
         @Override
         public int read(byte[] b, int off, int len) throws IOException {
             if (len == 0) {
@@ -943,6 +1035,12 @@ public final class GocryptFs implements AutoCloseable {
             return copied + n;
         }
 
+        /**
+         * Refills the read-ahead buffer.
+         *
+         * @return {@code true} if more data was read
+         * @throws IOException on filesystem errors
+         */
         private boolean fill() throws IOException {
             if (buf == null) {
                 buf = new byte[BUFFER_SIZE];
@@ -957,6 +1055,11 @@ public final class GocryptFs implements AutoCloseable {
             return true;
         }
 
+        /**
+         * Closes the underlying cipher file.
+         *
+         * @throws IOException on filesystem errors
+         */
         @Override
         public void close() throws IOException {
             cf.close();
@@ -1039,7 +1142,12 @@ public final class GocryptFs implements AutoCloseable {
         Files.createSymbolicLink(r.cipherPath, Paths.get(cTarget));
     }
 
-    /** Writes the long-name support file if the cipher name is a long name. */
+    /**
+     * Writes the long-name support file if the cipher name is a long name.
+     *
+     * @param r the resolved path whose long-name support file may be needed
+     * @throws IOException on filesystem errors
+     */
     private void prepareLongName(Resolved r) throws IOException {
         if (plaintextNames || !nameTransform.isLongContent(r.cipherName)) {
             return;

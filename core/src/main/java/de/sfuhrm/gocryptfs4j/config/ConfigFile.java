@@ -33,10 +33,11 @@ import java.util.Properties;
  */
 public final class ConfigFile {
 
+    /** Gson instance used to parse and serialize configuration files. */
     private static final Gson GSON = new GsonBuilder().create();
 
     /**
-     * The Creator string written to new config files, e.g.
+     * The Creator string written to new config files, for example
      * {@code gocryptfs4j 0.3.2-SNAPSHOT}. The version is taken from the Maven
      * filtered {@code version.properties} resource.
      */
@@ -70,6 +71,7 @@ public final class ConfigFile {
     @SerializedName("FIDO2")
     public Fido2Params fido2;
 
+    /** The cached decrypted master key, or {@code null} until it is unlocked. */
     private transient byte[] masterKey;
 
     /** Creates an empty config file (used by Gson and {@link #create}). */
@@ -95,6 +97,12 @@ public final class ConfigFile {
         return cf;
     }
 
+    /**
+     * Validates the parsed configuration.
+     *
+     * @throws IOException if the format version is unsupported, a feature flag
+     *                     is unknown or the FIDO2 data is incomplete
+     */
     private void validate() throws IOException {
         if (version != Constants.CURRENT_VERSION) {
             throw new IOException("unsupported on-disk format version " + version
@@ -120,6 +128,12 @@ public final class ConfigFile {
         }
     }
 
+    /**
+     * Returns whether the given feature flag is known to this implementation.
+     *
+     * @param flag the feature flag name
+     * @return {@code true} if the flag is known
+     */
     private static boolean isKnownFlag(String flag) {
         return flag.equals(Constants.FLAG_PLAINTEXT_NAMES)
                 || flag.equals(Constants.FLAG_DIR_IV)
@@ -145,6 +159,12 @@ public final class ConfigFile {
         return version == null ? "gocryptfs4j" : "gocryptfs4j " + version;
     }
 
+    /**
+     * Reads the project version from the filtered {@code version.properties}
+     * resource.
+     *
+     * @return the version string, or {@code null} if it cannot be read
+     */
     private static String readVersion() {
         try (InputStream in = ConfigFile.class.getResourceAsStream("version.properties")) {
             if (in == null) {
@@ -238,6 +258,13 @@ public final class ConfigFile {
         }
     }
 
+    /**
+     * Converts a character array to a byte array, keeping the low byte of each
+     * character.
+     *
+     * @param chars the characters
+     * @return the converted bytes
+     */
     private static byte[] charsToBytes(char[] chars) {
         byte[] out = new byte[chars.length];
         for (int i = 0; i < chars.length; i++) {
@@ -307,6 +334,12 @@ public final class ConfigFile {
         }
     }
 
+    /**
+     * Decodes a Base64 string.
+     *
+     * @param b64 the Base64 string
+     * @return the decoded bytes
+     */
     private static byte[] decode(String b64) {
         return Base64.getDecoder().decode(b64);
     }

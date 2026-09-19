@@ -63,6 +63,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
     /** The URI scheme handled by this provider. */
     public static final String SCHEME = "gocryptfs";
 
+    /** The filesystems registered by this provider, keyed by cipher directory. */
     private final Map<String, GocryptFsFileSystem> filesystems = new ConcurrentHashMap<>();
 
     /** Creates a gocryptfs filesystem provider. */
@@ -99,6 +100,15 @@ public final class GocryptFsProvider extends FileSystemProvider {
         return register(cipherDir, GocryptFs.open(cipherDir, token));
     }
 
+    /**
+     * Registers a freshly opened core instance, failing if the cipher directory
+     * is already open under this provider.
+     *
+     * @param cipherDir the ciphertext directory
+     * @param core      the freshly opened core instance
+     * @return the registered filesystem
+     * @throws FileSystemAlreadyExistsException if the cipher directory is already open
+     */
     private FileSystem register(Path cipherDir, GocryptFs core) {
         String key = cipherDir.toAbsolutePath().normalize().toString();
         GocryptFsFileSystem fs = new GocryptFsFileSystem(this, core, key);
@@ -112,6 +122,11 @@ public final class GocryptFsProvider extends FileSystemProvider {
         return fs;
     }
 
+    /**
+     * Returns the URI scheme handled by this provider.
+     *
+     * @return the string {@code "gocryptfs"}
+     */
     @Override
     public String getScheme() {
         return SCHEME;
@@ -198,6 +213,11 @@ public final class GocryptFsProvider extends FileSystemProvider {
         return fs.getPath(path);
     }
 
+    /**
+     * Unregisters a closed filesystem.
+     *
+     * @param fs the filesystem to remove
+     */
     void remove(GocryptFsFileSystem fs) {
         filesystems.remove(fs.key(), fs);
     }
@@ -206,6 +226,13 @@ public final class GocryptFsProvider extends FileSystemProvider {
     // Helpers
     // ------------------------------------------------------------------
 
+    /**
+     * Returns the absolute form of a gocryptfs path.
+     *
+     * @param path the path
+     * @return the absolute path
+     * @throws IllegalArgumentException if {@code path} is not a gocryptfs path
+     */
     private static GocryptFsPath toAbsolute(Path path) {
         if (!(path instanceof GocryptFsPath)) {
             throw new IllegalArgumentException("not a gocryptfs path: " + path);
@@ -213,11 +240,23 @@ public final class GocryptFsProvider extends FileSystemProvider {
         return (GocryptFsPath) path.toAbsolutePath();
     }
 
+    /**
+     * Returns the core gocryptfs instance of the filesystem a path belongs to.
+     *
+     * @param path the path
+     * @return the core gocryptfs instance
+     */
     private static GocryptFs core(Path path) {
         return ((GocryptFsFileSystem) path.getFileSystem()).core();
     }
 
-    /** Returns whether the given options request that symbolic links not be followed. */
+    /**
+     * Returns whether the given options request that symbolic links not be
+     * followed.
+     *
+     * @param options the link options
+     * @return {@code true} if {@link LinkOption#NOFOLLOW_LINKS} is present
+     */
     private static boolean noFollow(LinkOption... options) {
         for (LinkOption option : options) {
             if (option == LinkOption.NOFOLLOW_LINKS) {
@@ -230,6 +269,12 @@ public final class GocryptFsProvider extends FileSystemProvider {
     /**
      * Resolves {@code path} to an absolute path, following symbolic links unless
      * {@link LinkOption#NOFOLLOW_LINKS} is given.
+     *
+     * @param path    the path to resolve
+     * @param options the link options
+     * @return the resolved absolute path
+     * @throws IOException on filesystem errors while resolving links
+     * @throws IllegalArgumentException if {@code path} is not a gocryptfs path
      */
     private static GocryptFsPath resolve(Path path, LinkOption... options) throws IOException {
         GocryptFsPath p = toAbsolute(path);
@@ -251,7 +296,14 @@ public final class GocryptFsProvider extends FileSystemProvider {
      * format always materializes whole blocks, so sparse files cannot be
      * produced.</p>
      *
+     * @param path    the path to open or create
+     * @param options the open options
+     * @param attrs   attributes to apply to a newly created file
+     * @return the opened channel
      * @throws NullPointerException if {@code path} or {@code options} is {@code null}
+     * @throws FileAlreadyExistsException if {@code CREATE_NEW} is given and the file exists
+     * @throws NoSuchFileException if the file does not exist and it is not to be created
+     * @throws IOException on filesystem errors
      */
     @Override
     public SeekableByteChannel newByteChannel(Path path, Set<? extends OpenOption> options,
@@ -314,7 +366,13 @@ public final class GocryptFsProvider extends FileSystemProvider {
         return new GocryptFsFileChannel(cf, read, write, position, sync, onClose);
     }
 
-    /** Deletes {@code path}, ignoring an already-deleted file. */
+    /**
+     * Deletes {@code path}, ignoring an already-deleted file.
+     *
+     * @param fs   the filesystem
+     * @param path the plaintext path to delete
+     * @throws IOException on filesystem errors other than the file being absent
+     */
     private static void deleteOnClose(GocryptFs fs, GocryptFsPath path) throws IOException {
         try {
             fs.delete(path.toString());
@@ -326,6 +384,11 @@ public final class GocryptFsProvider extends FileSystemProvider {
     /**
      * Applies the given file attributes to an existing path, best-effort (the
      * encrypted format cannot set them atomically at creation time).
+     *
+     * @param path  the plaintext path to apply the attributes to
+     * @param attrs the attributes to apply
+     * @throws IOException on filesystem errors
+     * @throws NullPointerException if an attribute is {@code null}
      */
     private static void applyAttributes(GocryptFsPath path, FileAttribute<?>... attrs)
             throws IOException {
@@ -338,7 +401,14 @@ public final class GocryptFsProvider extends FileSystemProvider {
     /**
      * Opens a directory stream.
      *
+     * <p>Symbolic links are followed. The returned stream reads the directory
+     * eagerly and supports the given filter.</p>
+     *
+     * @param dir    the directory to list
+     * @param filter a filter for the entries, or {@code null} to accept all
+     * @return the directory stream
      * @throws NullPointerException if {@code dir} is {@code null}
+     * @throws IOException on filesystem errors
      */
     @Override
     public DirectoryStream<Path> newDirectoryStream(Path dir,
@@ -359,9 +429,12 @@ public final class GocryptFsProvider extends FileSystemProvider {
     }
 
     /**
-     * Creates a directory.
+     * Creates a directory and applies the given attributes.
      *
+     * @param dir   the directory to create
+     * @param attrs attributes to apply to the new directory
      * @throws NullPointerException if {@code dir} is {@code null}
+     * @throws IOException on filesystem errors
      */
     @Override
     public void createDirectory(Path dir, FileAttribute<?>... attrs) throws IOException {
@@ -374,7 +447,9 @@ public final class GocryptFsProvider extends FileSystemProvider {
     /**
      * Deletes a file, symlink or empty directory.
      *
+     * @param path the path to delete
      * @throws NullPointerException if {@code path} is {@code null}
+     * @throws IOException if the path does not exist or the directory is not empty
      */
     @Override
     public void delete(Path path) throws IOException {
@@ -393,7 +468,11 @@ public final class GocryptFsProvider extends FileSystemProvider {
      * <p>The target is stored as given and need not exist; a relative target is
      * resolved against the link's parent directory when the link is followed.</p>
      *
+     * @param link   the link to create
+     * @param target the link target
+     * @param attrs  attributes to apply to the link; ignored
      * @throws NullPointerException if {@code link} or {@code target} is {@code null}
+     * @throws IOException on filesystem errors
      */
     @Override
     public void createSymbolicLink(Path link, Path target, FileAttribute<?>... attrs)
@@ -407,8 +486,11 @@ public final class GocryptFsProvider extends FileSystemProvider {
     /**
      * Reads the target of a symbolic link.
      *
+     * @param link the symbolic link
+     * @return the link target
      * @throws NullPointerException if {@code link} is {@code null}
      * @throws java.nio.file.NotLinkException if {@code link} is not a symbolic link
+     * @throws IOException on filesystem errors
      */
     @Override
     public Path readSymbolicLink(Path link) throws IOException {
@@ -430,7 +512,13 @@ public final class GocryptFsProvider extends FileSystemProvider {
      * POSIX systems, the permissions, owner and group are copied to the target.
      * Symbolic links are reproduced as links and never receive attributes.</p>
      *
+     * @param source  the path to copy
+     * @param target  the copy target
+     * @param options the copy options
      * @throws NullPointerException if {@code source} or {@code target} is {@code null}
+     * @throws FileAlreadyExistsException if the target exists and
+     *                                    {@link StandardCopyOption#REPLACE_EXISTING} is not given
+     * @throws IOException on filesystem errors
      */
     @Override
     public void copy(Path source, Path target, CopyOption... options) throws IOException {
@@ -491,7 +579,10 @@ public final class GocryptFsProvider extends FileSystemProvider {
      * not affect them. Permissions are not copied for symbolic links, whose
      * permissions are not settable; owner, group and times are.
      *
+     * @param source  the path to copy attributes from
+     * @param target  the path to copy attributes to
      * @param symlink whether both paths are symbolic links
+     * @throws IOException on filesystem errors
      */
     private static void copyAttributes(GocryptFsPath source, GocryptFsPath target,
                                        boolean symlink) throws IOException {
@@ -517,6 +608,9 @@ public final class GocryptFsProvider extends FileSystemProvider {
      * Best-effort copy of symbolic-link attributes. Some platforms (for example
      * JDK 11 on Linux) cannot set symbolic-link timestamps or ownership; like the
      * JDK's own copy, such failures are ignored so that the link is still copied.
+     *
+     * @param source the symbolic link to copy attributes from
+     * @param target the symbolic link to copy attributes to
      */
     private static void copySymlinkAttributes(GocryptFsPath source, GocryptFsPath target) {
         try {
@@ -532,7 +626,12 @@ public final class GocryptFsProvider extends FileSystemProvider {
      * <p>The move never follows symbolic links: a symbolic link is moved as a
      * link. {@link StandardCopyOption#COPY_ATTRIBUTES} is honored.</p>
      *
+     * @param source  the path to move
+     * @param target  the move target
+     * @param options the move options
      * @throws NullPointerException if {@code source} or {@code target} is {@code null}
+     * @throws AtomicMoveNotSupportedException if {@link StandardCopyOption#ATOMIC_MOVE} is given
+     * @throws IOException on filesystem errors
      */
     @Override
     public void move(Path source, Path target, CopyOption... options) throws IOException {
@@ -554,6 +653,12 @@ public final class GocryptFsProvider extends FileSystemProvider {
         deleteRecursively(toAbsolute(source));
     }
 
+    /**
+     * Deletes a path and, if it is a directory, all of its descendants.
+     *
+     * @param p the plaintext path to delete recursively
+     * @throws IOException on filesystem errors
+     */
     private void deleteRecursively(Path p) throws IOException {
         GocryptFs fs = core(p);
         DirEntry e = fs.stat(p.toString());
@@ -565,6 +670,13 @@ public final class GocryptFsProvider extends FileSystemProvider {
         fs.delete(p.toString());
     }
 
+    /**
+     * Returns whether a path exists, without following symbolic links.
+     *
+     * @param p the plaintext path
+     * @return {@code true} if the path exists
+     * @throws IOException on filesystem errors other than the path being absent
+     */
     private static boolean exists(Path p) throws IOException {
         try {
             core(p).stat(p.toString());
@@ -581,7 +693,14 @@ public final class GocryptFsProvider extends FileSystemProvider {
     /**
      * Tests whether two paths locate the same file.
      *
+     * <p>Equal paths belonging to the same filesystem are considered the same
+     * without accessing the file. Otherwise the file keys are compared.</p>
+     *
+     * @param path  the first path
+     * @param path2 the second path
+     * @return {@code true} if the paths locate the same file
      * @throws NullPointerException if {@code path} or {@code path2} is {@code null}
+     * @throws IOException on filesystem errors
      */
     @Override
     public boolean isSameFile(Path path, Path path2) throws IOException {
@@ -601,8 +720,11 @@ public final class GocryptFsProvider extends FileSystemProvider {
     }
 
     /**
-     * Tests whether a path is considered hidden.
+     * Tests whether a path is considered hidden. This implementation treats
+     * names starting with {@code "."} as hidden.
      *
+     * @param path the path
+     * @return {@code true} if the path is hidden
      * @throws NullPointerException if {@code path} is {@code null}
      */
     @Override
@@ -615,6 +737,8 @@ public final class GocryptFsProvider extends FileSystemProvider {
     /**
      * Returns the file store of a path.
      *
+     * @param path the path
+     * @return the file store
      * @throws NullPointerException if {@code path} is {@code null}
      */
     @Override
@@ -630,7 +754,11 @@ public final class GocryptFsProvider extends FileSystemProvider {
      * permissions are exposed as the plaintext permissions, so {@code READ},
      * {@code WRITE} and {@code EXECUTE} are all honored.</p>
      *
+     * @param path  the path to check
+     * @param modes the access modes to check, or none to check existence
      * @throws NullPointerException if {@code path} is {@code null}
+     * @throws java.nio.file.AccessDeniedException if access is denied
+     * @throws IOException on filesystem errors
      */
     @Override
     public void checkAccess(Path path, AccessMode... modes) throws IOException {
@@ -643,6 +771,11 @@ public final class GocryptFsProvider extends FileSystemProvider {
     /**
      * Returns a file attribute view.
      *
+     * @param <V>     the view type
+     * @param path    the path
+     * @param type    the view type requested
+     * @param options the link options
+     * @return the view, or {@code null} if the view is not supported
      * @throws NullPointerException if {@code path} or {@code type} is {@code null}
      */
     @Override
@@ -672,8 +805,14 @@ public final class GocryptFsProvider extends FileSystemProvider {
     /**
      * Reads a file's attributes.
      *
+     * @param <A>     the attribute type
+     * @param path    the path
+     * @param type    the attribute type requested
+     * @param options the link options
+     * @return the attributes
      * @throws NullPointerException if {@code path} or {@code type} is {@code null}
      * @throws UnsupportedOperationException if the attribute type is not supported
+     * @throws IOException on filesystem errors
      */
     @Override
     @SuppressWarnings("unchecked")
@@ -701,9 +840,14 @@ public final class GocryptFsProvider extends FileSystemProvider {
      * all attributes of the view. The {@code basic}, {@code posix} and
      * {@code owner} views are supported.</p>
      *
+     * @param path       the path
+     * @param attributes the {@code [view:]attribute-list} specification
+     * @param options    the link options
+     * @return the requested attribute values, keyed by their bare names
      * @throws NullPointerException if {@code path} or {@code attributes} is {@code null}
      * @throws UnsupportedOperationException if the requested attribute view is not available
      * @throws IllegalArgumentException if no attribute or an unrecognized attribute is specified
+     * @throws IOException on filesystem errors
      */
     @Override
     public Map<String, Object> readAttributes(Path path, String attributes, LinkOption... options)
@@ -734,6 +878,12 @@ public final class GocryptFsProvider extends FileSystemProvider {
     /** The names of all attributes of the POSIX view: the basic names plus owner/group/permissions. */
     private static final List<String> POSIX_ATTRIBUTES = posixAttributeNames();
 
+    /**
+     * Returns the names of all attributes of the POSIX view: the basic names
+     * plus owner, group and permissions.
+     *
+     * @return an unmodifiable list of attribute names
+     */
     private static List<String> posixAttributeNames() {
         List<String> names = new ArrayList<>(BASIC_ATTRIBUTES);
         names.add("owner");
@@ -755,6 +905,16 @@ public final class GocryptFsProvider extends FileSystemProvider {
         return basicAttributes(new GocryptFsFileAttributes(entry), attributes);
     }
 
+    /**
+     * Reads basic attributes from the given attributes by their specification
+     * string.
+     *
+     * @param attrs       the attributes to read from
+     * @param specification the {@code [view:]attribute-list} specification
+     * @return the requested attribute values, keyed by their bare names
+     * @throws UnsupportedOperationException if the requested view is not the basic view
+     * @throws IllegalArgumentException if no attribute or an unrecognized attribute is specified
+     */
     private static Map<String, Object> basicAttributes(BasicFileAttributes attrs,
                                                        String specification) {
         String names = stripView(specification, "basic");
@@ -839,6 +999,14 @@ public final class GocryptFsProvider extends FileSystemProvider {
         return specification.substring(colon + 1);
     }
 
+    /**
+     * Returns the value of a named basic attribute.
+     *
+     * @param attrs the attributes to read from
+     * @param name  the attribute name
+     * @return the attribute value
+     * @throws IllegalArgumentException if the attribute is not recognized
+     */
     private static Object basicAttribute(BasicFileAttributes attrs, String name) {
         switch (name) {
             case "size":
@@ -864,6 +1032,15 @@ public final class GocryptFsProvider extends FileSystemProvider {
         }
     }
 
+    /**
+     * Returns the value of a named POSIX attribute, falling back to the basic
+     * attributes for the names shared with the basic view.
+     *
+     * @param attrs the POSIX attributes to read from
+     * @param name  the attribute name
+     * @return the attribute value
+     * @throws IllegalArgumentException if the attribute is not recognized
+     */
     private static Object posixAttribute(GocryptFsPosixFileAttributes attrs, String name) {
         switch (name) {
             case "owner":
@@ -882,7 +1059,10 @@ public final class GocryptFsProvider extends FileSystemProvider {
      * (and thus the plaintext size) from the gocryptfs view and owner, group and
      * permissions from the backing cipher file.
      *
+     * @param path the plaintext path
+     * @return the POSIX attributes
      * @throws UnsupportedOperationException if the backing filesystem has no POSIX support
+     * @throws IOException on filesystem errors
      */
     static GocryptFsPosixFileAttributes readPosixAttributes(GocryptFsPath path) throws IOException {
         DirEntry entry = core(path).stat(path.toString());
@@ -894,7 +1074,10 @@ public final class GocryptFsProvider extends FileSystemProvider {
     /**
      * Returns the POSIX attribute view of a backing cipher file.
      *
+     * @param cipherPath the cipher-side path
+     * @return the POSIX attribute view
      * @throws UnsupportedOperationException if the backing filesystem has no POSIX support
+     * @throws IOException on filesystem errors
      */
     static PosixFileAttributeView posixView(Path cipherPath) throws IOException {
         PosixFileAttributeView view = java.nio.file.Files.getFileAttributeView(cipherPath,
@@ -925,6 +1108,18 @@ public final class GocryptFsProvider extends FileSystemProvider {
         setAttributeValue(path, attribute, value, options);
     }
 
+    /**
+     * Sets a file attribute by name.
+     *
+     * @param path      the path
+     * @param attribute the {@code [view:]attribute-name} specification
+     * @param value     the new attribute value
+     * @param options   the link options
+     * @throws NullPointerException if {@code path} or {@code attribute} is {@code null}
+     * @throws UnsupportedOperationException if the requested attribute view is not available
+     * @throws IllegalArgumentException if the attribute is not recognized or is not settable
+     * @throws IOException on filesystem errors
+     */
     @SuppressWarnings("unchecked")
     private static void setAttributeValue(Path path, String attribute, Object value,
                                           LinkOption... options) throws IOException {
@@ -951,6 +1146,16 @@ public final class GocryptFsProvider extends FileSystemProvider {
         }
     }
 
+    /**
+     * Sets a basic attribute of a path.
+     *
+     * @param path    the path
+     * @param name    the bare attribute name
+     * @param value   the new value, a {@link FileTime}
+     * @param options the link options
+     * @throws IllegalArgumentException if the attribute is not settable
+     * @throws IOException on filesystem errors
+     */
     private static void setBasicAttribute(Path path, String name, Object value,
                                           LinkOption... options) throws IOException {
         boolean lastModified = name.equals("lastModifiedTime");
@@ -966,6 +1171,17 @@ public final class GocryptFsProvider extends FileSystemProvider {
                 created ? (FileTime) value : null);
     }
 
+    /**
+     * Sets a POSIX attribute of a path.
+     *
+     * @param path    the path
+     * @param name    the bare attribute name
+     * @param value   the new value
+     * @param options the link options
+     * @throws IllegalArgumentException if the attribute is not settable
+     * @throws IOException on filesystem errors
+     */
+    @SuppressWarnings("unchecked")
     private static void setPosixAttribute(Path path, String name, Object value,
                                           LinkOption... options) throws IOException {
         GocryptFsPosixFileAttributeView view = newPosixView(path, options);
@@ -993,12 +1209,26 @@ public final class GocryptFsProvider extends FileSystemProvider {
         }
     }
 
+    /**
+     * Creates a POSIX attribute view for a path.
+     *
+     * @param path    the path
+     * @param options the link options
+     * @return the POSIX attribute view
+     */
     private static GocryptFsPosixFileAttributeView newPosixView(Path path,
                                                                 LinkOption... options) {
         GocryptFsFileSystem fs = (GocryptFsFileSystem) path.getFileSystem();
         return new GocryptFsPosixFileAttributeView(fs, toAbsolute(path), !noFollow(options));
     }
 
+    /**
+     * Creates an owner attribute view for a path.
+     *
+     * @param path    the path
+     * @param options the link options
+     * @return the owner attribute view
+     */
     private static GocryptFsOwnerFileAttributeView newOwnerView(Path path,
                                                                 LinkOption... options) {
         GocryptFsFileSystem fs = (GocryptFsFileSystem) path.getFileSystem();

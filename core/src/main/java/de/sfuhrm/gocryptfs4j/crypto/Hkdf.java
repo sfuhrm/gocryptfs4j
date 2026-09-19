@@ -12,12 +12,14 @@ import java.util.Objects;
  * master key.
  *
  * gocryptfs calls {@code hkdf.Key(sha256.New, masterkey, nil, info, outLen)},
- * i.e. with an empty (all-zero) salt.
+ * that is, with an empty (all-zero) salt.
  */
 public final class Hkdf {
 
+    /** The SHA-256 output length in bytes. */
     private static final int HASH_LEN = 32; // SHA-256
 
+    /** Prevents instantiation. */
     private Hkdf() {
     }
 
@@ -72,6 +74,14 @@ public final class Hkdf {
         }
     }
 
+    /**
+     * Computes HMAC-SHA256.
+     *
+     * @param key  the HMAC key
+     * @param data the data to authenticate
+     * @return the 32-byte MAC
+     * @throws GeneralSecurityException if HMAC-SHA256 is unavailable
+     */
     private static byte[] hmac(byte[] key, byte[] data) throws GeneralSecurityException {
         Mac mac = Mac.getInstance("HmacSHA256");
         mac.init(new SecretKeySpec(key, "HmacSHA256"));

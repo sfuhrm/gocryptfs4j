@@ -10,8 +10,10 @@ import java.util.Objects;
  */
 public final class Keys {
 
+    /** The shared source of cryptographically secure random bytes. */
     private static final SecureRandom RANDOM = new SecureRandom();
 
+    /** Prevents instantiation. */
     private Keys() {
     }
 

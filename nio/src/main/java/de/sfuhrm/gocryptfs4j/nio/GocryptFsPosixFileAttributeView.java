@@ -18,10 +18,22 @@ import java.util.Set;
  */
 final class GocryptFsPosixFileAttributeView implements PosixFileAttributeView {
 
+    /** The filesystem the path belongs to. */
     private final GocryptFsFileSystem fs;
+
+    /** The absolute plaintext path. */
     private final GocryptFsPath path;
+
+    /** Whether symbolic links are followed. */
     private final boolean followLinks;
 
+    /**
+     * Creates the view.
+     *
+     * @param fs          the filesystem the path belongs to
+     * @param path        the absolute plaintext path
+     * @param followLinks whether symbolic links should be followed
+     */
     GocryptFsPosixFileAttributeView(GocryptFsFileSystem fs, GocryptFsPath path,
                                     boolean followLinks) {
         this.fs = fs;
@@ -29,51 +41,111 @@ final class GocryptFsPosixFileAttributeView implements PosixFileAttributeView {
         this.followLinks = followLinks;
     }
 
+    /**
+     * Returns the view name.
+     *
+     * @return the string {@code "posix"}
+     */
     @Override
     public String name() {
         return "posix";
     }
 
-    /** The path whose attributes are accessed, following links when requested. */
+    /**
+     * Returns the path whose attributes are accessed, following links if
+     * requested.
+     *
+     * @return the resolved path
+     * @throws IOException on filesystem errors while resolving links
+     */
     private GocryptFsPath target() throws IOException {
         return followLinks ? (GocryptFsPath) path.toRealPath() : path;
     }
 
-    /** The backing cipher path of the target. */
+    /**
+     * Returns the backing cipher path of the target.
+     *
+     * @return the cipher path
+     * @throws IOException on filesystem errors
+     */
     private Path cipherPath() throws IOException {
         return fs.core().resolve(target().toString()).cipherPath;
     }
 
-    /** The POSIX view of the backing cipher file. */
+    /**
+     * Returns the POSIX view of the backing cipher file.
+     *
+     * @return the backing POSIX view
+     * @throws IOException on filesystem errors
+     * @throws UnsupportedOperationException if the backing filesystem has no POSIX support
+     */
     private PosixFileAttributeView delegate() throws IOException {
         return GocryptFsProvider.posixView(cipherPath());
     }
 
+    /**
+     * Reads the POSIX attributes of the target.
+     *
+     * @return the attributes
+     * @throws IOException on filesystem errors
+     */
     @Override
     public PosixFileAttributes readAttributes() throws IOException {
         return GocryptFsProvider.readPosixAttributes(target());
     }
 
+    /**
+     * Sets the permissions of the backing cipher file.
+     *
+     * @param perms the new permissions
+     * @throws IOException on filesystem errors
+     */
     @Override
     public void setPermissions(Set<PosixFilePermission> perms) throws IOException {
         delegate().setPermissions(perms);
     }
 
+    /**
+     * Sets the group of the backing cipher file.
+     *
+     * @param group the new group
+     * @throws IOException on filesystem errors
+     */
     @Override
     public void setGroup(GroupPrincipal group) throws IOException {
         delegate().setGroup(group);
     }
 
+    /**
+     * Returns the owner of the backing cipher file.
+     *
+     * @return the owner
+     * @throws IOException on filesystem errors
+     */
     @Override
     public UserPrincipal getOwner() throws IOException {
         return delegate().getOwner();
     }
 
+    /**
+     * Sets the owner of the backing cipher file.
+     *
+     * @param owner the new owner
+     * @throws IOException on filesystem errors
+     */
     @Override
     public void setOwner(UserPrincipal owner) throws IOException {
         delegate().setOwner(owner);
     }
 
+    /**
+     * Sets the times of the backing cipher file.
+     *
+     * @param lastModifiedTime the new last-modified time, or {@code null} to leave unchanged
+     * @param lastAccessTime   the new last-access time, or {@code null} to leave unchanged
+     * @param createTime       the new creation time, or {@code null} to leave unchanged
+     * @throws IOException on filesystem errors
+     */
     @Override
     public void setTimes(FileTime lastModifiedTime, FileTime lastAccessTime, FileTime createTime)
             throws IOException {

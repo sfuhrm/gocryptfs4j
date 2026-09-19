@@ -24,11 +24,17 @@ import java.util.Objects;
  */
 public final class AesSiv implements ContentCipher {
 
+    /** The S2V/CMAC sub-key, the first half of the 64-byte key. */
     private final byte[] k1;
+
+    /** The CTR sub-key, the second half of the 64-byte key. */
     private final byte[] k2;
 
+    /** A thread-local CMAC instance, reused because CMAC is not thread-safe. */
     private static final ThreadLocal<CMac> CMAC = ThreadLocal.withInitial(
             () -> new CMac(new AESEngine()));
+
+    /** A thread-local SIC (CTR) cipher instance, reused because it is not thread-safe. */
     private static final ThreadLocal<SICBlockCipher> CTR = ThreadLocal.withInitial(
             () -> new SICBlockCipher(new AESEngine()));
 
