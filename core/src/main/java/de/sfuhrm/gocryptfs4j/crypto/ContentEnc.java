@@ -103,10 +103,23 @@ public final class ContentEnc {
     }
 
     /**
-     * Wipes the underlying cipher's key material.
+     * Wipes the underlying cipher's key material and this instance's scratch
+     * buffers, and makes the underlying cipher unusable.
+     *
+     * <p>The scratch buffers are thread-local, so only the calling thread's
+     * copies are cleared; other threads rebuild them lazily on their next
+     * operation.</p>
      */
     public void wipe() {
         cipher.wipe();
+        // Overwrite the calling thread's scratch buffers with zeros, then drop
+        // them so they can be garbage-collected.
+        byte[] aad = aadBuffer.get();
+        Arrays.fill(aad, (byte) 0);
+        aadBuffer.remove();
+        byte[] nonce = nonceBuffer.get();
+        Arrays.fill(nonce, (byte) 0);
+        nonceBuffer.remove();
     }
 
     /**

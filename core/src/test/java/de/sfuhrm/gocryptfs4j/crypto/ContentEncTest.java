@@ -60,6 +60,24 @@ class ContentEncTest {
     }
 
     @Test
+    void wipeMakesCipherUnusable() throws GeneralSecurityException {
+        ContentEnc enc = newEnc();
+        byte[] fileId = Keys.randomBytes(Constants.HEADER_ID_LEN);
+        byte[] data = new byte[16];
+        Arrays.fill(data, (byte) 0x11);
+
+        // Populate the thread-local scratch buffers first.
+        byte[] ct = enc.encryptBlock(data, 0, fileId);
+        assertArrayEquals(data, enc.decryptBlock(ct, 0, fileId));
+
+        enc.wipe();
+        enc.wipe();
+
+        assertThrows(IllegalStateException.class, () -> enc.encryptBlock(data, 0, fileId));
+        assertThrows(IllegalStateException.class, () -> enc.decryptBlock(ct, 0, fileId));
+    }
+
+    @Test
     void allZeroBlockDecryptsToZeroPlaintext() throws GeneralSecurityException {
         ContentEnc enc = newEnc();
         byte[] zero = new byte[(int) enc.cipherBS];
