@@ -212,6 +212,25 @@ public final class GocryptFsProvider extends FileSystemProvider {
         return ((GocryptFsFileSystem) path.getFileSystem()).core();
     }
 
+    /** Returns whether the given options request that symbolic links not be followed. */
+    private static boolean noFollow(LinkOption... options) {
+        for (LinkOption option : options) {
+            if (option == LinkOption.NOFOLLOW_LINKS) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Resolves {@code path} to an absolute path, following symbolic links unless
+     * {@link LinkOption#NOFOLLOW_LINKS} is given.
+     */
+    private static GocryptFsPath resolve(Path path, LinkOption... options) throws IOException {
+        GocryptFsPath p = toAbsolute(path);
+        return noFollow(options) ? p : (GocryptFsPath) p.toRealPath();
+    }
+
     // ------------------------------------------------------------------
     // Channels, streams
     // ------------------------------------------------------------------
@@ -226,7 +245,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
                                               FileAttribute<?>... attrs) throws IOException {
         Objects.requireNonNull(path, "path");
         Objects.requireNonNull(options, "options");
-        GocryptFsPath p = toAbsolute(path);
+        GocryptFsPath p = resolve(path);
         GocryptFs fs = core(p);
         GocryptFs.Resolved r = fs.resolve(p.toString());
 
@@ -269,9 +288,10 @@ public final class GocryptFsProvider extends FileSystemProvider {
             throws IOException {
         Objects.requireNonNull(dir, "dir");
         GocryptFsPath d = toAbsolute(dir);
-        GocryptFs fs = core(d);
+        GocryptFsPath target = (GocryptFsPath) d.toRealPath();
+        GocryptFs fs = core(target);
         List<Path> entries = new ArrayList<>();
-        for (DirEntry e : fs.list(d.toString())) {
+        for (DirEntry e : fs.list(target.toString())) {
             Path child = d.resolve(e.plainName());
             if (filter == null || filter.accept(child)) {
                 entries.add(child);
@@ -443,10 +463,13 @@ public final class GocryptFsProvider extends FileSystemProvider {
     public boolean isSameFile(Path path, Path path2) throws IOException {
         Objects.requireNonNull(path, "path");
         Objects.requireNonNull(path2, "path2");
-        GocryptFsPath a = toAbsolute(path);
-        GocryptFsPath b = toAbsolute(path2);
+        GocryptFsPath a = resolve(path);
+        GocryptFsPath b = resolve(path2);
         if (a.getFileSystem() != b.getFileSystem()) {
             return false;
+        }
+        if (a.equals(b)) {
+            return true;
         }
         Object ka = core(a).stat(a.toString()).fileKey();
         Object kb = core(b).stat(b.toString()).fileKey();
@@ -484,7 +507,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
     @Override
     public void checkAccess(Path path, AccessMode... modes) throws IOException {
         Objects.requireNonNull(path, "path");
-        GocryptFsPath p = toAbsolute(path);
+        GocryptFsPath p = resolve(path);
         DirEntry e = core(p).stat(p.toString());
         for (AccessMode mode : modes) {
             if (mode == AccessMode.EXECUTE && !e.isDirectory()) {
@@ -506,7 +529,8 @@ public final class GocryptFsProvider extends FileSystemProvider {
         Objects.requireNonNull(type, "type");
         if (type == BasicFileAttributeView.class) {
             return (V) new GocryptFsBasicFileAttributeView(
-                    (GocryptFsFileSystem) path.getFileSystem(), toAbsolute(path));
+                    (GocryptFsFileSystem) path.getFileSystem(), toAbsolute(path),
+                    !noFollow(options));
         }
         return null;
     }
@@ -524,7 +548,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
         Objects.requireNonNull(path, "path");
         Objects.requireNonNull(type, "type");
         if (type == BasicFileAttributes.class) {
-            GocryptFsPath p = toAbsolute(path);
+            GocryptFsPath p = resolve(path, options);
             return (A) new GocryptFsFileAttributes(core(p).stat(p.toString()));
         }
         throw new UnsupportedOperationException("unsupported attribute type: " + type);
@@ -541,7 +565,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
             throws IOException {
         Objects.requireNonNull(path, "path");
         Objects.requireNonNull(attributes, "attributes");
-        GocryptFsPath p = toAbsolute(path);
+        GocryptFsPath p = resolve(path, options);
         DirEntry e = core(p).stat(p.toString());
         Map<String, Object> result = new HashMap<>();
         for (String token : attributes.split(",")) {
@@ -592,7 +616,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
             throws IOException {
         Objects.requireNonNull(path, "path");
         Objects.requireNonNull(attribute, "attribute");
-        GocryptFsPath p = toAbsolute(path);
+        GocryptFsPath p = resolve(path, options);
         String name = attribute.contains(":") ? attribute.substring(attribute.indexOf(':') + 1)
                 : attribute;
         switch (name) {

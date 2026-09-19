@@ -118,12 +118,109 @@ class GocryptFsProviderOperationsTest {
         Map<String, Object> prefixed = Files.readAttributes(file, "basic:size");
         assertEquals(3L, prefixed.get("basic:size"));
 
-        Map<String, Object> link = Files.readAttributes(nio.getPath("/link"),
+        Map<String, Object> followed = Files.readAttributes(nio.getPath("/link"),
                 "isSymbolicLink,isRegularFile");
+        assertEquals(Boolean.FALSE, followed.get("isSymbolicLink"));
+        assertEquals(Boolean.TRUE, followed.get("isRegularFile"));
+
+        Map<String, Object> link = Files.readAttributes(nio.getPath("/link"),
+                "isSymbolicLink,isRegularFile", LinkOption.NOFOLLOW_LINKS);
         assertEquals(Boolean.TRUE, link.get("isSymbolicLink"));
         assertEquals(Boolean.FALSE, link.get("isRegularFile"));
 
         assertThrows(IllegalArgumentException.class, () -> Files.readAttributes(file, "bogus"));
+    }
+
+    @Test
+    void readAttributesFollowsSymbolicLink() throws IOException {
+        Path link = nio.getPath("/link");
+
+        BasicFileAttributes followed = Files.readAttributes(link, BasicFileAttributes.class);
+        assertTrue(followed.isRegularFile());
+        assertFalse(followed.isSymbolicLink());
+        assertEquals(3L, followed.size());
+
+        BasicFileAttributes notFollowed = Files.readAttributes(link, BasicFileAttributes.class,
+                LinkOption.NOFOLLOW_LINKS);
+        assertTrue(notFollowed.isSymbolicLink());
+        assertFalse(notFollowed.isRegularFile());
+    }
+
+    @Test
+    void fileChecksFollowSymbolicLink() throws IOException {
+        Path link = nio.getPath("/link");
+        assertTrue(Files.isRegularFile(link));
+        assertFalse(Files.isDirectory(link));
+        assertEquals(3L, Files.size(link));
+        assertTrue(Files.exists(link));
+        assertFalse(Files.isRegularFile(link, LinkOption.NOFOLLOW_LINKS));
+        assertTrue(Files.isSymbolicLink(link));
+        assertTrue(Files.isSameFile(link, nio.getPath("/file.txt")));
+    }
+
+    @Test
+    void directorySymlinkIsFollowed() throws IOException {
+        Path dir = nio.getPath("/follow-dir");
+        Files.createDirectory(dir);
+        Files.write(dir.resolve("inside.txt"), "x".getBytes(StandardCharsets.UTF_8));
+        Path link = nio.getPath("/follow-dir-link");
+        Files.createSymbolicLink(link, dir);
+
+        assertTrue(Files.isDirectory(link));
+        assertTrue(Files.isExecutable(link));
+        assertEquals("x", new String(
+                Files.readAllBytes(link.resolve("inside.txt")), StandardCharsets.UTF_8));
+        try (java.util.stream.Stream<Path> children = Files.list(link)) {
+            assertEquals(1, children.count());
+        }
+    }
+
+    @Test
+    void newByteChannelFollowsSymbolicLink() throws IOException {
+        Path link = nio.getPath("/link");
+        try (java.nio.channels.SeekableByteChannel channel = Files.newByteChannel(
+                link, StandardOpenOption.READ)) {
+            java.nio.ByteBuffer buffer = java.nio.ByteBuffer.allocate(8);
+            assertEquals(3, channel.read(buffer));
+            assertEquals("abc", new String(buffer.array(), 0, 3, StandardCharsets.UTF_8));
+        }
+    }
+
+    @Test
+    void attributeViewFollowsSymbolicLink() throws IOException {
+        Path link = nio.getPath("/link");
+
+        BasicFileAttributeView followed = Files.getFileAttributeView(
+                link, BasicFileAttributeView.class);
+        assertFalse(followed.readAttributes().isSymbolicLink());
+        assertTrue(followed.readAttributes().isRegularFile());
+
+        BasicFileAttributeView notFollowed = Files.getFileAttributeView(
+                link, BasicFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
+        assertTrue(notFollowed.readAttributes().isSymbolicLink());
+        assertFalse(notFollowed.readAttributes().isRegularFile());
+    }
+
+    @Test
+    void setAttributeFollowsSymbolicLink() throws IOException {
+        Path link = nio.getPath("/link");
+        FileTime time = FileTime.fromMillis(System.currentTimeMillis() - 300_000);
+        Files.setAttribute(link, "lastModifiedTime", time);
+
+        assertEquals(time.toMillis(),
+                Files.getLastModifiedTime(nio.getPath("/file.txt")).toMillis());
+    }
+
+    @Test
+    void danglingSymbolicLinkIsFollowed() throws IOException {
+        Path link = nio.getPath("/dangling-follow");
+        Files.createSymbolicLink(link, nio.getPath("/nowhere"));
+
+        assertFalse(Files.exists(link));
+        assertTrue(Files.exists(link, LinkOption.NOFOLLOW_LINKS));
+        assertTrue(Files.isSymbolicLink(link));
+        assertThrows(NoSuchFileException.class,
+                () -> Files.readAttributes(link, BasicFileAttributes.class));
     }
 
     @Test
