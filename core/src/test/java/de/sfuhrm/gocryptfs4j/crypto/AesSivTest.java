@@ -5,6 +5,9 @@ import org.junit.jupiter.api.Test;
 import javax.crypto.AEADBadTagException;
 import java.security.GeneralSecurityException;
 import java.util.Arrays;
+import org.bouncycastle.crypto.engines.AESEngine;
+import org.bouncycastle.crypto.macs.CMac;
+import org.bouncycastle.crypto.modes.SICBlockCipher;
 import org.bouncycastle.util.encoders.Hex;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -24,10 +27,12 @@ class AesSivTest {
                 "101112131415161718191a1b1c1d1e1f2021222324252627");
         byte[] plaintext = Hex.decode("112233445566778899aabbccddee");
 
-        byte[] siv = AesSiv.s2v(k1, new byte[][]{ad}, plaintext);
+        CMac mac = new CMac(new AESEngine());
+        byte[] siv = AesSiv.s2v(k1, new byte[][]{ad}, plaintext, mac);
         assertArrayEquals(Hex.decode("85632d07c6e8f37f950acd320a2ecc93"), siv);
 
-        byte[] ct = AesSiv.ctr(k2, siv, plaintext);
+        SICBlockCipher ctr = new SICBlockCipher(new AESEngine());
+        byte[] ct = AesSiv.ctr(k2, siv, plaintext, ctr);
         assertArrayEquals(Hex.decode("40c02b9690c4dc04daef7f6afe5c"), ct);
     }
 
@@ -91,6 +96,48 @@ class AesSivTest {
         AesSiv cipher = new AesSiv(Keys.randomBytes(Constants.SIV_KEY_LEN));
         assertThrows(IllegalArgumentException.class, () -> cipher.encrypt(new byte[1], new byte[12], null));
         assertThrows(IllegalArgumentException.class, () -> cipher.decrypt(new byte[17], new byte[12], null));
+    }
+
+    @Test
+    void wipeMakesCipherUnusable() throws GeneralSecurityException {
+        byte[] key = Keys.randomBytes(Constants.SIV_KEY_LEN);
+        AesSiv cipher = new AesSiv(key);
+        byte[] nonce = Keys.randomBytes(Constants.AES_BLOCK_SIZE);
+        byte[] plaintext = Keys.randomBytes(16);
+
+        // Exercise the per-thread scratch ciphers first.
+        byte[] ct = cipher.encrypt(plaintext, nonce, null);
+        assertArrayEquals(plaintext, cipher.decrypt(ct, nonce, null));
+
+        cipher.wipe();
+        cipher.wipe();
+
+        assertThrows(IllegalStateException.class, () -> cipher.encrypt(plaintext, nonce, null));
+        assertThrows(IllegalStateException.class, () -> cipher.decrypt(ct, nonce, null));
+
+        // The thread-local scratch was dropped, not left broken: a fresh
+        // instance on the same thread still works.
+        AesSiv fresh = new AesSiv(key);
+        byte[] freshCt = fresh.encrypt(plaintext, nonce, null);
+        assertArrayEquals(plaintext, fresh.decrypt(freshCt, nonce, null));
+    }
+
+    @Test
+    void wipeDoesNotAffectOtherInstances() throws GeneralSecurityException {
+        AesSiv first = new AesSiv(Keys.randomBytes(Constants.SIV_KEY_LEN));
+        AesSiv second = new AesSiv(Keys.randomBytes(Constants.SIV_KEY_LEN));
+        byte[] nonce = Keys.randomBytes(Constants.AES_BLOCK_SIZE);
+        byte[] plaintext = Keys.randomBytes(64);
+
+        // Interleave so both instances use the same thread's scratch.
+        byte[] secondCt = second.encrypt(plaintext, nonce, null);
+        first.encrypt(plaintext, nonce, null);
+
+        first.wipe();
+
+        // Wiping one instance must not disturb the other.
+        assertArrayEquals(plaintext, second.decrypt(secondCt, nonce, null));
+        assertArrayEquals(secondCt, second.encrypt(plaintext, nonce, null));
     }
 
     /**
