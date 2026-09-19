@@ -370,7 +370,12 @@ public final class GocryptFsProvider extends FileSystemProvider {
     // ------------------------------------------------------------------
 
     /**
-     * Copies a file or directory tree.
+     * Copies a file, symbolic link or directory tree.
+     *
+     * <p>Symbolic links are followed unless {@link LinkOption#NOFOLLOW_LINKS} is
+     * given. With {@link StandardCopyOption#COPY_ATTRIBUTES} the times and, on
+     * POSIX systems, the permissions, owner and group are copied to the target.
+     * Symbolic links are reproduced as links and never receive attributes.</p>
      *
      * @throws NullPointerException if {@code source} or {@code target} is {@code null}
      */
@@ -378,13 +383,18 @@ public final class GocryptFsProvider extends FileSystemProvider {
     public void copy(Path source, Path target, CopyOption... options) throws IOException {
         Objects.requireNonNull(source, "source");
         Objects.requireNonNull(target, "target");
-        GocryptFsPath s = toAbsolute(source);
-        GocryptFsPath t = toAbsolute(target);
-        GocryptFs fs = core(s);
         Set<CopyOption> opts = options.length == 0
                 ? Collections.<CopyOption>emptySet()
                 : new HashSet<>(Arrays.asList(options));
         boolean replace = opts.contains(StandardCopyOption.REPLACE_EXISTING);
+        boolean copyAttributes = opts.contains(StandardCopyOption.COPY_ATTRIBUTES);
+
+        GocryptFsPath s = toAbsolute(source);
+        if (!opts.contains(LinkOption.NOFOLLOW_LINKS)) {
+            s = (GocryptFsPath) s.toRealPath();
+        }
+        GocryptFsPath t = toAbsolute(target);
+        GocryptFs fs = core(s);
 
         if (replace && exists(t)) {
             deleteRecursively(t);
@@ -398,8 +408,14 @@ public final class GocryptFsProvider extends FileSystemProvider {
             for (DirEntry child : fs.list(s.toString())) {
                 copy(s.resolve(child.plainName()), t.resolve(child.plainName()), options);
             }
+            if (copyAttributes) {
+                copyAttributes(s, t, false);
+            }
         } else if (se.isSymbolicLink()) {
             fs.createSymlink(t.toString(), fs.readSymlinkTarget(s.toString()));
+            if (copyAttributes) {
+                copyAttributes(s, t, true);
+            }
         } else {
             fs.createFile(t.toString());
             try (InputStream in = fs.openRead(s.toString());
@@ -410,11 +426,45 @@ public final class GocryptFsProvider extends FileSystemProvider {
                     out.write(buf, 0, n);
                 }
             }
+            if (copyAttributes) {
+                copyAttributes(s, t, false);
+            }
         }
     }
 
     /**
+     * Copies the basic (and, if available, POSIX) attributes of {@code source} to
+     * {@code target}. The times are set last so that earlier metadata changes do
+     * not affect them. Permissions are not copied for symbolic links, whose
+     * permissions are not settable; owner, group and times are.
+     *
+     * @param symlink whether both paths are symbolic links
+     */
+    private static void copyAttributes(GocryptFsPath source, GocryptFsPath target,
+                                       boolean symlink) throws IOException {
+        BasicFileAttributes basic = java.nio.file.Files.readAttributes(source,
+                BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+        PosixFileAttributeView posixView = java.nio.file.Files.getFileAttributeView(target,
+                PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
+        if (posixView != null) {
+            PosixFileAttributes posix = java.nio.file.Files.readAttributes(source,
+                    PosixFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            posixView.setOwner(posix.owner());
+            posixView.setGroup(posix.group());
+            if (!symlink) {
+                posixView.setPermissions(posix.permissions());
+            }
+        }
+        java.nio.file.Files.getFileAttributeView(target, BasicFileAttributeView.class,
+                        LinkOption.NOFOLLOW_LINKS)
+                .setTimes(basic.lastModifiedTime(), basic.lastAccessTime(), basic.creationTime());
+    }
+
+    /**
      * Moves a file or directory tree.
+     *
+     * <p>The move never follows symbolic links: a symbolic link is moved as a
+     * link. {@link StandardCopyOption#COPY_ATTRIBUTES} is honored.</p>
      *
      * @throws NullPointerException if {@code source} or {@code target} is {@code null}
      */
@@ -432,7 +482,9 @@ public final class GocryptFsProvider extends FileSystemProvider {
         if (toAbsolute(source).equals(toAbsolute(target))) {
             return;
         }
-        copy(source, target, options);
+        List<CopyOption> copyOptions = new ArrayList<>(opts);
+        copyOptions.add(LinkOption.NOFOLLOW_LINKS);
+        copy(source, target, copyOptions.toArray(new CopyOption[0]));
         deleteRecursively(toAbsolute(source));
     }
 

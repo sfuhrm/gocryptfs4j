@@ -429,6 +429,44 @@ class GocryptFsProviderOperationsTest {
     }
 
     @Test
+    void copyFileAttributes() throws IOException {
+        Path source = nio.getPath("/attr-src.txt");
+        Files.write(source, "data".getBytes(StandardCharsets.UTF_8));
+        FileTime time = FileTime.fromMillis(System.currentTimeMillis() - 90_000);
+        Files.setLastModifiedTime(source, time);
+
+        Path plain = nio.getPath("/attr-plain.txt");
+        Files.copy(source, plain);
+        assertNotEquals(time.toMillis(), Files.getLastModifiedTime(plain).toMillis());
+
+        Path copied = nio.getPath("/attr-copied.txt");
+        Files.copy(source, copied, StandardCopyOption.COPY_ATTRIBUTES);
+        assertEquals(time.toMillis(), Files.getLastModifiedTime(copied).toMillis());
+
+        assumeTrue(posixSupported());
+        Set<PosixFilePermission> permissions = PosixFilePermissions.fromString("rw-r-----");
+        Files.setPosixFilePermissions(source, permissions);
+        Path permissionCopy = nio.getPath("/attr-permission-copy.txt");
+        Files.copy(source, permissionCopy, StandardCopyOption.COPY_ATTRIBUTES);
+        assertEquals(permissions, Files.getPosixFilePermissions(permissionCopy));
+    }
+
+    @Test
+    void copyDirectoryAttributes() throws IOException {
+        Path dir = nio.getPath("/attr-tree");
+        Files.createDirectory(dir);
+        Files.write(dir.resolve("f.txt"), "f".getBytes(StandardCharsets.UTF_8));
+        FileTime time = FileTime.fromMillis(System.currentTimeMillis() - 90_000);
+        Files.setLastModifiedTime(dir, time);
+
+        Path copy = nio.getPath("/attr-tree-copy");
+        Files.copy(dir, copy, StandardCopyOption.COPY_ATTRIBUTES);
+        assertTrue(Files.isDirectory(copy));
+        assertTrue(Files.exists(copy.resolve("f.txt")));
+        assertEquals(time.toMillis(), Files.getLastModifiedTime(copy).toMillis());
+    }
+
+    @Test
     void createAndReadSymbolicLink() throws IOException {
         Path target = nio.getPath("/file.txt");
         Path link = nio.getPath("/created-link");
@@ -503,10 +541,51 @@ class GocryptFsProviderOperationsTest {
 
     @Test
     void copySymbolicLink() throws IOException {
+        Path followed = nio.getPath("/link-followed-copy");
+        Files.copy(nio.getPath("/link"), followed);
+        assertFalse(Files.isSymbolicLink(followed));
+        assertTrue(Files.isRegularFile(followed));
+        assertEquals("abc", new String(
+                Files.readAllBytes(followed), StandardCharsets.UTF_8));
+
         Path copy = nio.getPath("/link-copy");
-        Files.copy(nio.getPath("/link"), copy);
+        Files.copy(nio.getPath("/link"), copy, LinkOption.NOFOLLOW_LINKS);
         assertTrue(Files.isSymbolicLink(copy));
+        assertEquals(nio.getPath("/file.txt"), Files.readSymbolicLink(copy));
         assertEquals("/file.txt", copy.toRealPath().toString());
+    }
+
+    @Test
+    void copySymbolicLinkAttributes() throws IOException {
+        Path link = nio.getPath("/attr-link");
+        Files.createSymbolicLink(link, nio.getPath("/file.txt"));
+        FileTime time = FileTime.fromMillis(System.currentTimeMillis() - 120_000);
+        Files.getFileAttributeView(link, BasicFileAttributeView.class, LinkOption.NOFOLLOW_LINKS)
+                .setTimes(time, time, time);
+
+        Path copied = nio.getPath("/attr-link-copy");
+        Files.copy(link, copied, LinkOption.NOFOLLOW_LINKS, StandardCopyOption.COPY_ATTRIBUTES);
+        assertTrue(Files.isSymbolicLink(copied));
+        assertEquals(time.toMillis(),
+                Files.getLastModifiedTime(copied, LinkOption.NOFOLLOW_LINKS).toMillis());
+
+        Path plain = nio.getPath("/attr-link-plain");
+        Files.copy(link, plain, LinkOption.NOFOLLOW_LINKS);
+        assertNotEquals(time.toMillis(),
+                Files.getLastModifiedTime(plain, LinkOption.NOFOLLOW_LINKS).toMillis());
+    }
+
+    @Test
+    void moveSymbolicLink() throws IOException {
+        Path link = nio.getPath("/move-link");
+        Files.createSymbolicLink(link, nio.getPath("/file.txt"));
+
+        Path moved = nio.getPath("/move-link-moved");
+        Files.move(link, moved);
+
+        assertFalse(Files.exists(link, LinkOption.NOFOLLOW_LINKS));
+        assertTrue(Files.isSymbolicLink(moved));
+        assertEquals(nio.getPath("/file.txt"), Files.readSymbolicLink(moved));
     }
 
     @Test
