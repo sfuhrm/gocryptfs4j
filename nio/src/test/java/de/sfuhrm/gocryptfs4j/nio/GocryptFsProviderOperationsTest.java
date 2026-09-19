@@ -116,7 +116,8 @@ class GocryptFsProviderOperationsTest {
         assertNotNull(attrs.get("lastAccessTime"));
 
         Map<String, Object> prefixed = Files.readAttributes(file, "basic:size");
-        assertEquals(3L, prefixed.get("basic:size"));
+        assertEquals(3L, prefixed.get("size"));
+        assertFalse(prefixed.containsKey("basic:size"));
 
         Map<String, Object> followed = Files.readAttributes(nio.getPath("/link"),
                 "isSymbolicLink,isRegularFile");
@@ -129,6 +130,29 @@ class GocryptFsProviderOperationsTest {
         assertEquals(Boolean.FALSE, link.get("isRegularFile"));
 
         assertThrows(IllegalArgumentException.class, () -> Files.readAttributes(file, "bogus"));
+    }
+
+    @Test
+    void readAttributesWildcardAndViews() throws IOException {
+        Path file = nio.getPath("/file.txt");
+
+        Map<String, Object> all = Files.readAttributes(file, "*");
+        assertEquals(3L, all.get("size"));
+        assertTrue(all.containsKey("fileKey"));
+        assertTrue(all.containsKey("isRegularFile"));
+        assertEquals(Boolean.FALSE, all.get("isDirectory"));
+
+        Map<String, Object> basicAll = Files.readAttributes(file, "basic:*");
+        assertEquals(all.keySet(), basicAll.keySet());
+
+        assertThrows(UnsupportedOperationException.class,
+                () -> Files.readAttributes(file, "posix:size"));
+        assertThrows(UnsupportedOperationException.class,
+                () -> Files.readAttributes(file, "bogus:*"));
+        assertThrows(IllegalArgumentException.class,
+                () -> Files.readAttributes(file, "size,bogus"));
+        assertThrows(IllegalArgumentException.class,
+                () -> Files.readAttributes(file, "basic:"));
     }
 
     @Test
@@ -234,8 +258,16 @@ class GocryptFsProviderOperationsTest {
         Files.setAttribute(file, "basic:creationTime", time);
         assertEquals(time.toMillis(), Files.getLastModifiedTime(file).toMillis());
 
-        assertThrows(UnsupportedOperationException.class,
+        assertThrows(IllegalArgumentException.class,
                 () -> Files.setAttribute(file, "bogus", time));
+        assertThrows(IllegalArgumentException.class,
+                () -> Files.setAttribute(file, "basic:bogus", time));
+        assertThrows(IllegalArgumentException.class,
+                () -> Files.setAttribute(file, "size", 1L));
+        assertThrows(UnsupportedOperationException.class,
+                () -> Files.setAttribute(file, "posix:lastModifiedTime", time));
+        assertThrows(ClassCastException.class,
+                () -> Files.setAttribute(file, "lastModifiedTime", "not-a-time"));
     }
 
     @Test

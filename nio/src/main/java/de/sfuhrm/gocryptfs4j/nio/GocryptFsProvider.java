@@ -557,8 +557,14 @@ public final class GocryptFsProvider extends FileSystemProvider {
     /**
      * Reads a set of attributes by name.
      *
+     * <p>The {@code attributes} string has the form {@code [view:]attribute-list}
+     * where {@code view} defaults to {@code basic} and {@code attribute-list} is a
+     * comma separated list of attribute names. The special name {@code *} selects
+     * all basic attributes.</p>
+     *
      * @throws NullPointerException if {@code path} or {@code attributes} is {@code null}
-     * @throws IllegalArgumentException if an attribute is not supported
+     * @throws UnsupportedOperationException if the requested attribute view is not available
+     * @throws IllegalArgumentException if no attribute or an unrecognized attribute is specified
      */
     @Override
     public Map<String, Object> readAttributes(Path path, String attributes, LinkOption... options)
@@ -566,22 +572,59 @@ public final class GocryptFsProvider extends FileSystemProvider {
         Objects.requireNonNull(path, "path");
         Objects.requireNonNull(attributes, "attributes");
         GocryptFsPath p = resolve(path, options);
-        DirEntry e = core(p).stat(p.toString());
+        return basicAttributes(core(p).stat(p.toString()), attributes);
+    }
+
+    /** The names of all attributes of the basic view, in a stable order. */
+    private static final List<String> BASIC_ATTRIBUTES = Arrays.asList(
+            "size", "creationTime", "lastModifiedTime", "lastAccessTime",
+            "isRegularFile", "isDirectory", "isSymbolicLink", "isOther", "fileKey");
+
+    /**
+     * Reads basic attributes from a directory entry by their specification string.
+     *
+     * @param entry      the directory entry to read from
+     * @param attributes the {@code [view:]attribute-list} specification
+     * @return the requested attribute values, keyed by their bare names
+     * @throws UnsupportedOperationException if the requested view is not the basic view
+     * @throws IllegalArgumentException if no attribute or an unrecognized attribute is specified
+     */
+    static Map<String, Object> basicAttributes(DirEntry entry, String attributes) {
+        String names = stripBasicView(attributes);
         Map<String, Object> result = new HashMap<>();
-        for (String token : attributes.split(",")) {
-            String attr = token.trim();
-            String key = attr;
-            String name = attr.contains(":") ? attr.substring(attr.indexOf(':') + 1) : attr;
-            Object value = attributeValue(e, name);
-            if (value == null) {
-                throw new IllegalArgumentException("unsupported attribute: " + attr);
+        for (String token : names.split(",")) {
+            if (token.equals("*")) {
+                for (String attribute : BASIC_ATTRIBUTES) {
+                    result.put(attribute, basicAttribute(entry, attribute));
+                }
+            } else {
+                result.put(token, basicAttribute(entry, token));
             }
-            result.put(key, value);
         }
         return result;
     }
 
-    private static Object attributeValue(DirEntry e, String name) {
+    /**
+     * Strips the optional {@code view:} prefix from an attribute specification
+     * and validates that the named view is the basic view.
+     *
+     * @param specification the {@code [view:]name} or {@code [view:]name-list} string
+     * @return the part after the optional {@code view:} prefix
+     * @throws UnsupportedOperationException if a view other than {@code basic} is named
+     */
+    private static String stripBasicView(String specification) {
+        int colon = specification.indexOf(':');
+        if (colon < 0) {
+            return specification;
+        }
+        String view = specification.substring(0, colon);
+        if (!"basic".equals(view)) {
+            throw new UnsupportedOperationException("view '" + view + "' is not supported");
+        }
+        return specification.substring(colon + 1);
+    }
+
+    private static Object basicAttribute(DirEntry e, String name) {
         switch (name) {
             case "size":
                 return e.size();
@@ -602,35 +645,38 @@ public final class GocryptFsProvider extends FileSystemProvider {
             case "fileKey":
                 return e.fileKey();
             default:
-                return null;
+                throw new IllegalArgumentException("'" + name + "' is not recognized");
         }
     }
 
     /**
      * Sets a file attribute by name.
      *
+     * <p>The {@code attribute} string has the form {@code [view:]attribute-name}
+     * where {@code view} defaults to {@code basic}. Only the settable basic
+     * attributes {@code lastModifiedTime}, {@code lastAccessTime} and
+     * {@code creationTime} are supported.</p>
+     *
      * @throws NullPointerException if {@code path} or {@code attribute} is {@code null}
+     * @throws UnsupportedOperationException if the requested attribute view is not available
+     * @throws IllegalArgumentException if the attribute is not recognized or is not settable
      */
     @Override
     public void setAttribute(Path path, String attribute, Object value, LinkOption... options)
             throws IOException {
         Objects.requireNonNull(path, "path");
         Objects.requireNonNull(attribute, "attribute");
-        GocryptFsPath p = resolve(path, options);
-        String name = attribute.contains(":") ? attribute.substring(attribute.indexOf(':') + 1)
-                : attribute;
-        switch (name) {
-            case "lastModifiedTime":
-                core(p).setTimes(p.toString(), (FileTime) value, null, null);
-                return;
-            case "lastAccessTime":
-                core(p).setTimes(p.toString(), null, (FileTime) value, null);
-                return;
-            case "creationTime":
-                core(p).setTimes(p.toString(), null, null, (FileTime) value);
-                return;
-            default:
-                throw new UnsupportedOperationException("unsupported attribute: " + attribute);
+        String name = stripBasicView(attribute);
+        boolean lastModified = "lastModifiedTime".equals(name);
+        boolean lastAccessed = "lastAccessTime".equals(name);
+        boolean created = "creationTime".equals(name);
+        if (!lastModified && !lastAccessed && !created) {
+            throw new IllegalArgumentException("'basic:" + name + "' is not recognized");
         }
+        GocryptFsPath p = resolve(path, options);
+        core(p).setTimes(p.toString(),
+                lastModified ? (FileTime) value : null,
+                lastAccessed ? (FileTime) value : null,
+                created ? (FileTime) value : null);
     }
 }
