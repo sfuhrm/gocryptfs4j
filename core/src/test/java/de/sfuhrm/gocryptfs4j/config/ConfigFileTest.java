@@ -128,9 +128,9 @@ class ConfigFileTest {
             ConfigFile reloaded = ConfigFile.load(conf);
             assertArrayEquals(masterKey, reloaded.decryptMasterKey("new-password".toCharArray()));
 
-            // Use a second instance: decryptMasterKey caches the result per instance.
-            ConfigFile reloaded2 = ConfigFile.load(conf);
-            assertThrows(IOException.class, () -> reloaded2.decryptMasterKey(PASSWORD));
+            // The master key is not cached: the same instance still rejects
+            // the old password.
+            assertThrows(IOException.class, () -> reloaded.decryptMasterKey(PASSWORD));
         } finally {
             Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
             Files.deleteIfExists(dir);

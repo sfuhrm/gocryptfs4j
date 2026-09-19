@@ -31,6 +31,10 @@ import java.util.Properties;
 
 /**
  * Parses {@code gocryptfs.conf} and unlocks the master key from a password.
+ *
+ * <p>The decrypted master key is not stored by this class; the caller (for
+ * example {@code de.sfuhrm.gocryptfs4j.core.GocryptFs}) is responsible for
+ * holding and eventually wiping it.</p>
  */
 public final class ConfigFile {
 
@@ -71,9 +75,6 @@ public final class ConfigFile {
     /** FIDO2 key-protection data, or {@code null} if unused. */
     @SerializedName("FIDO2")
     public @Nullable Fido2Params fido2;
-
-    /** The cached decrypted master key, or {@code null} until it is unlocked. */
-    private transient byte @Nullable [] masterKey;
 
     /** Creates an empty config file (used by Gson and {@link #create}). */
     @SuppressWarnings("NullAway.Init")
@@ -220,6 +221,9 @@ public final class ConfigFile {
      * <p>This is the FIDO2 code path: gocryptfs uses the raw bytes returned by
      * the token's {@code hmac-secret} extension as the scrypt password.</p>
      *
+     * <p>The returned key is freshly decrypted on every call; this class does not
+     * cache or retain it.</p>
+     *
      * @param secret the raw secret to unlock the master key with
      * @return the 32-byte master key
      * @throws IOException if the secret is wrong or the config is malformed
@@ -227,9 +231,6 @@ public final class ConfigFile {
      */
     public byte[] decryptMasterKey(byte[] secret) throws IOException {
         Objects.requireNonNull(secret, "secret");
-        if (masterKey != null) {
-            return masterKey;
-        }
         ScryptKdf s = scryptObject;
         byte[] scryptHash = Keys.scrypt(secret, decode(s.salt), s.n, s.r, s.p, s.keyLen);
         byte[] contentKey = null;
@@ -247,7 +248,7 @@ public final class ConfigFile {
             byte[] ct = Arrays.copyOfRange(encryptedKeyBytes, ivLen, encryptedKeyBytes.length);
             // blockNo = 0, fileID = nil -> AAD is eight zero bytes
             byte[] aad = new byte[8];
-            masterKey = new Gcm(contentKey).decrypt(ct, nonce, aad);
+            byte[] masterKey = new Gcm(contentKey).decrypt(ct, nonce, aad);
             if (masterKey.length != Constants.KEY_LEN) {
                 throw new IOException("unexpected master key length " + masterKey.length);
             }
@@ -326,8 +327,6 @@ public final class ConfigFile {
 
             encryptedKey = Base64.getEncoder().encodeToString(encrypted);
             s.salt = Base64.getEncoder().encodeToString(salt);
-            // Invalidate any cached master key so the new password is verified.
-            this.masterKey = null;
         } finally {
             Keys.wipe(contentKey);
             Keys.wipe(scryptHash);
