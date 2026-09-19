@@ -30,7 +30,7 @@ class GocryptFsFileSystemTest {
         Path cipherDir = createCipherDir("props");
         try (FileSystem fs = new GocryptFsProvider().newFileSystem(cipherDir, "pw".toCharArray())) {
             assertTrue(fs.isOpen());
-            assertFalse(fs.isReadOnly());
+            assertEquals(Files.getFileStore(cipherDir).isReadOnly(), fs.isReadOnly());
             assertEquals("/", fs.getSeparator());
             assertNotNull(fs.provider());
 

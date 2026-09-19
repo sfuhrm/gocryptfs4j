@@ -12,16 +12,21 @@ final class GocryptFsDirectoryStream implements DirectoryStream<Path> {
 
     private final List<Path> entries;
     private volatile boolean closed;
+    private boolean iteratorObtained;
 
     GocryptFsDirectoryStream(List<Path> entries) {
         this.entries = new ArrayList<>(entries);
     }
 
     @Override
-    public Iterator<Path> iterator() {
+    public synchronized Iterator<Path> iterator() {
         if (closed) {
             throw new IllegalStateException("directory stream is closed");
         }
+        if (iteratorObtained) {
+            throw new IllegalStateException("iterator can only be obtained once");
+        }
+        iteratorObtained = true;
         return entries.iterator();
     }
 

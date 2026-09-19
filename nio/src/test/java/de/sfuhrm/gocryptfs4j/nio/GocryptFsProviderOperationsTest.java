@@ -36,6 +36,7 @@ import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
@@ -73,7 +74,7 @@ class GocryptFsProviderOperationsTest {
         FileStore store = Files.getFileStore(nio.getPath("/"));
         assertEquals("gocryptfs", store.name());
         assertEquals("gocryptfs", store.type());
-        assertFalse(store.isReadOnly());
+        assertEquals(Files.getFileStore(cipherDir).isReadOnly(), store.isReadOnly());
         assertTrue(store.supportsFileAttributeView(BasicFileAttributeView.class));
         assertTrue(store.supportsFileAttributeView("basic"));
         boolean posix = Files.getFileStore(cipherDir).supportsFileAttributeView("posix");
@@ -421,8 +422,21 @@ class GocryptFsProviderOperationsTest {
         Files.write(hidden, new byte[0]);
         assertTrue(Files.isHidden(hidden));
 
-        assertDoesNotThrow(() -> Files.isSameFile(file, file));
+        assertTrue(Files.isSameFile(file, file));
         assertFalse(Files.isSameFile(file, dir));
+    }
+
+    @Test
+    void checkAccessReflectsPermissions() throws IOException {
+        assumeTrue(posixSupported());
+        assumeFalse("root".equals(System.getProperty("user.name")));
+        Path file = nio.getPath("/access-ro.txt");
+        Files.write(file, "x".getBytes(StandardCharsets.UTF_8));
+        Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("r--r--r--"));
+
+        assertTrue(Files.isReadable(file));
+        assertFalse(Files.isWritable(file));
+        assertFalse(Files.isExecutable(file));
     }
 
     @Test

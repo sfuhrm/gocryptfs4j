@@ -63,6 +63,24 @@ class GocryptFsProviderTest {
     }
 
     @Test
+    void directoryStreamIteratorIsSingleUse() throws IOException {
+        Path cipherDir = tmp.resolve("cipher-ds");
+        Files.createDirectory(cipherDir);
+        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+            fs.createFile("/a.txt");
+        }
+
+        GocryptFsProvider provider = new GocryptFsProvider();
+        try (FileSystem nio = provider.newFileSystem(cipherDir, "pw".toCharArray())) {
+            DirectoryStream<Path> stream = Files.newDirectoryStream(nio.getPath("/"));
+            assertTrue(stream.iterator().hasNext());
+            assertThrows(IllegalStateException.class, stream::iterator);
+            stream.close();
+            assertThrows(IllegalStateException.class, stream::iterator);
+        }
+    }
+
+    @Test
     void nioReadWriteViaFilesApi() throws IOException {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);

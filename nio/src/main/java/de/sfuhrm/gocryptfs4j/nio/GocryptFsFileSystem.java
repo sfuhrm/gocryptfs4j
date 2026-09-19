@@ -32,6 +32,7 @@ public final class GocryptFsFileSystem extends FileSystem {
     private final GocryptFsPath root;
     private final GocryptFsUserPrincipalLookupService userPrincipalLookupService;
     private final boolean supportsPosix;
+    private final boolean readOnly;
     private volatile boolean open = true;
 
     GocryptFsFileSystem(GocryptFsProvider provider, GocryptFs core, String key) {
@@ -41,16 +42,17 @@ public final class GocryptFsFileSystem extends FileSystem {
         this.uri = URI.create("gocryptfs://" + urlEncode(key) + "/");
         this.root = GocryptFsPath.absolute(this, "/");
         this.userPrincipalLookupService = new GocryptFsUserPrincipalLookupService(this);
-        this.supportsPosix = detectPosix(core);
+        FileStore store = fileStore(core);
+        this.supportsPosix = store != null && store.supportsFileAttributeView("posix");
+        this.readOnly = store != null && store.isReadOnly();
     }
 
-    /** Detects whether the backing filesystem supports POSIX attributes. */
-    private static boolean detectPosix(GocryptFs core) {
+    /** Returns the backing file store, or {@code null} if it cannot be determined. */
+    private static FileStore fileStore(GocryptFs core) {
         try {
-            return Files.getFileStore(core.cipherRoot())
-                    .supportsFileAttributeView("posix");
+            return Files.getFileStore(core.cipherRoot());
         } catch (IOException e) {
-            return false;
+            return null;
         }
     }
 
@@ -109,7 +111,7 @@ public final class GocryptFsFileSystem extends FileSystem {
 
     @Override
     public boolean isReadOnly() {
-        return false;
+        return readOnly;
     }
 
     @Override

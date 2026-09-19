@@ -26,7 +26,7 @@ final class GocryptFsFileStore extends FileStore {
 
     @Override
     public boolean isReadOnly() {
-        return false;
+        return fs.isReadOnly();
     }
 
     @Override

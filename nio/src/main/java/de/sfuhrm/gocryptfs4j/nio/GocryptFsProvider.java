@@ -10,7 +10,6 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.URI;
 import java.nio.channels.SeekableByteChannel;
-import java.nio.file.AccessDeniedException;
 import java.nio.file.AccessMode;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.CopyOption;
@@ -612,7 +611,11 @@ public final class GocryptFsProvider extends FileSystemProvider {
     }
 
     /**
-     * Checks the existence of a path.
+     * Checks access to a path.
+     *
+     * <p>Access is evaluated against the backing cipher file, whose POSIX
+     * permissions are exposed as the plaintext permissions, so {@code READ},
+     * {@code WRITE} and {@code EXECUTE} are all honored.</p>
      *
      * @throws NullPointerException if {@code path} is {@code null}
      */
@@ -620,12 +623,8 @@ public final class GocryptFsProvider extends FileSystemProvider {
     public void checkAccess(Path path, AccessMode... modes) throws IOException {
         Objects.requireNonNull(path, "path");
         GocryptFsPath p = resolve(path);
-        DirEntry e = core(p).stat(p.toString());
-        for (AccessMode mode : modes) {
-            if (mode == AccessMode.EXECUTE && !e.isDirectory()) {
-                throw new AccessDeniedException(p.toString());
-            }
-        }
+        Path cipherPath = core(p).stat(p.toString()).cipherPath();
+        cipherPath.getFileSystem().provider().checkAccess(cipherPath, modes);
     }
 
     /**
