@@ -22,6 +22,9 @@ public final class Gcm implements ContentCipher {
     /** A copy of the AES key, kept so it can be wiped. */
     private final byte[] key;
 
+    /** Whether this cipher has been wiped. */
+    private volatile boolean wiped;
+
     /** A thread-local cipher for encryption, reused because {@link Cipher} is not thread-safe. */
     private final ThreadLocal<Cipher> encryptCipher = ThreadLocal.withInitial(Gcm::newCipher);
 
@@ -57,9 +60,45 @@ public final class Gcm implements ContentCipher {
         this.key = Arrays.copyOf(key, key.length);
     }
 
+    /**
+     * Wipes the key and this instance's scratch ciphers, and makes this cipher
+     * unusable. Calling this method more than once has no effect.
+     *
+     * <p>The scratch ciphers are thread-local, so only the calling thread's
+     * copies are cleared; other threads rebuild them lazily on their next
+     * operation. Because the scratch is per instance, wiping this cipher never
+     * affects another {@code Gcm} instance.</p>
+     */
     @Override
     public void wipe() {
-        Arrays.fill(key, (byte) 0);
+        if (!wiped) {
+            wiped = true;
+            Arrays.fill(key, (byte) 0);
+            // Overwrite the calling thread's scratch ciphers with a zero key,
+            // then drop them so the key schedule can be garbage-collected.
+            try {
+                SecretKeySpec zero = new SecretKeySpec(new byte[Constants.KEY_LEN], "AES");
+                GCMParameterSpec params = new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8,
+                        new byte[Constants.DEFAULT_IV_BITS / 8]);
+                encryptCipher.get().init(Cipher.ENCRYPT_MODE, zero, params);
+                decryptCipher.get().init(Cipher.DECRYPT_MODE, zero, params);
+            } catch (GeneralSecurityException e) {
+                // A zero key and IV of the correct size cannot fail; ignore.
+            }
+            encryptCipher.remove();
+            decryptCipher.remove();
+        }
+    }
+
+    /**
+     * Throws if this cipher has been wiped.
+     *
+     * @throws IllegalStateException if this cipher has been wiped
+     */
+    private void checkUsable() {
+        if (wiped) {
+            throw new IllegalStateException("cipher has been wiped");
+        }
     }
 
     /**
@@ -70,11 +109,13 @@ public final class Gcm implements ContentCipher {
      * @param aad       additional authenticated data, or {@code null}
      * @return the ciphertext followed by the 16-byte tag
      * @throws NullPointerException if {@code plaintext} or {@code nonce} is {@code null}
+     * @throws IllegalStateException if this cipher has been wiped
      */
     @Override
     public byte[] encrypt(byte[] plaintext, byte[] nonce, byte @Nullable [] aad) {
         Objects.requireNonNull(plaintext, "plaintext");
         Objects.requireNonNull(nonce, "nonce");
+        checkUsable();
         try {
             Cipher cipher = encryptCipher.get();
             cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(key, "AES"),
@@ -99,11 +140,13 @@ public final class Gcm implements ContentCipher {
      * @throws javax.crypto.AEADBadTagException (a GeneralSecurityException) on
      *         authentication failure
      * @throws NullPointerException if {@code ciphertext} or {@code nonce} is {@code null}
+     * @throws IllegalStateException if this cipher has been wiped
      */
     @Override
     public byte[] decrypt(byte[] ciphertext, byte[] nonce, byte @Nullable [] aad) throws GeneralSecurityException {
         Objects.requireNonNull(ciphertext, "ciphertext");
         Objects.requireNonNull(nonce, "nonce");
+        checkUsable();
         Cipher cipher = decryptCipher.get();
         cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "AES"),
                 new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8, nonce));
@@ -126,10 +169,12 @@ public final class Gcm implements ContentCipher {
      * @param out    the output buffer
      * @param outOff the output offset
      * @return the number of bytes written (ciphertext plus tag)
+     * @throws IllegalStateException if this cipher has been wiped
      */
     @Override
     public int encrypt(byte[] in, int inOff, int inLen, byte[] nonce,
                        byte @Nullable [] aad, int aadOff, int aadLen, byte[] out, int outOff) {
+        checkUsable();
         try {
             Cipher cipher = encryptCipher.get();
             cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(key, "AES"),
@@ -157,11 +202,13 @@ public final class Gcm implements ContentCipher {
      * @param outOff the output offset
      * @return the number of plaintext bytes written
      * @throws GeneralSecurityException on authentication failure
+     * @throws IllegalStateException if this cipher has been wiped
      */
     @Override
     public int decrypt(byte[] in, int inOff, int inLen, byte[] nonce,
                        byte @Nullable [] aad, int aadOff, int aadLen, byte[] out, int outOff)
             throws GeneralSecurityException {
+        checkUsable();
         Cipher cipher = decryptCipher.get();
         cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "AES"),
                 new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8, nonce));

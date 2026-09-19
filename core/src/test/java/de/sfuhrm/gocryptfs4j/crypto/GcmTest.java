@@ -89,4 +89,24 @@ class GcmTest {
         assertThrows(IllegalArgumentException.class, () -> new Gcm(new byte[16]));
         assertThrows(IllegalArgumentException.class, () -> new Gcm(new byte[0]));
     }
+
+    @Test
+    void wipeMakesCipherUnusable() throws GeneralSecurityException {
+        byte[] key = Keys.randomBytes(Constants.KEY_LEN);
+        Gcm gcm = new Gcm(key);
+        byte[] nonce = Keys.randomBytes(12);
+        byte[] plaintext = Keys.randomBytes(16);
+        byte[] ct = gcm.encrypt(plaintext, nonce, null);
+
+        gcm.wipe();
+        gcm.wipe();
+
+        assertThrows(IllegalStateException.class, () -> gcm.encrypt(plaintext, nonce, null));
+        assertThrows(IllegalStateException.class, () -> gcm.decrypt(ct, nonce, null));
+
+        // A fresh instance on the same thread still works.
+        Gcm fresh = new Gcm(key);
+        assertArrayEquals(plaintext,
+                fresh.decrypt(fresh.encrypt(plaintext, nonce, null), nonce, null));
+    }
 }

@@ -21,6 +21,9 @@ public final class XChaCha20Poly1305 implements ContentCipher {
     /** A copy of the 32-byte key, kept so it can be wiped. */
     private final byte[] key;
 
+    /** Whether this cipher has been wiped. */
+    private volatile boolean wiped;
+
     /** A thread-local cipher for encryption, reused because it is not thread-safe. */
     private final ThreadLocal<AEADCipher> encryptCipher = ThreadLocal.withInitial(
             org.bouncycastle.crypto.modes.XChaCha20Poly1305::new);
@@ -45,9 +48,42 @@ public final class XChaCha20Poly1305 implements ContentCipher {
         this.key = Arrays.copyOf(key, key.length);
     }
 
+    /**
+     * Wipes the key and this instance's scratch ciphers, and makes this cipher
+     * unusable. Calling this method more than once has no effect.
+     *
+     * <p>The scratch ciphers are thread-local, so only the calling thread's
+     * copies are cleared; other threads rebuild them lazily on their next
+     * operation. Because the scratch is per instance, wiping this cipher never
+     * affects another {@code XChaCha20Poly1305} instance.</p>
+     */
     @Override
     public void wipe() {
-        Arrays.fill(key, (byte) 0);
+        if (!wiped) {
+            wiped = true;
+            Arrays.fill(key, (byte) 0);
+            // Overwrite the calling thread's scratch ciphers with a zero key,
+            // then drop them so the key schedule can be garbage-collected.
+            KeyParameter zero = new KeyParameter(new byte[Constants.KEY_LEN]);
+            byte[] zeroNonce = new byte[Constants.XCHACHA_NONCE_LEN];
+            encryptCipher.get().init(true,
+                    new AEADParameters(zero, Constants.AUTH_TAG_LEN * 8, zeroNonce));
+            decryptCipher.get().init(false,
+                    new AEADParameters(zero, Constants.AUTH_TAG_LEN * 8, zeroNonce));
+            encryptCipher.remove();
+            decryptCipher.remove();
+        }
+    }
+
+    /**
+     * Throws if this cipher has been wiped.
+     *
+     * @throws IllegalStateException if this cipher has been wiped
+     */
+    private void checkUsable() {
+        if (wiped) {
+            throw new IllegalStateException("cipher has been wiped");
+        }
     }
 
     /**
@@ -71,11 +107,13 @@ public final class XChaCha20Poly1305 implements ContentCipher {
      * @return the ciphertext followed by the 16-byte tag
      * @throws NullPointerException if {@code plaintext} or {@code nonce} is {@code null}
      * @throws IllegalArgumentException if {@code nonce} is not 24 bytes long
+     * @throws IllegalStateException if this cipher has been wiped
      */
     @Override
     public byte[] encrypt(byte[] plaintext, byte[] nonce, byte @Nullable [] aad) {
         Objects.requireNonNull(plaintext, "plaintext");
         Objects.requireNonNull(nonce, "nonce");
+        checkUsable();
         if (nonce.length != Constants.XCHACHA_NONCE_LEN) {
             throw new IllegalArgumentException("XChaCha20-Poly1305 nonce must be "
                     + Constants.XCHACHA_NONCE_LEN + " bytes");
@@ -103,11 +141,13 @@ public final class XChaCha20Poly1305 implements ContentCipher {
      * @throws AEADBadTagException on authentication failure
      * @throws NullPointerException if {@code ciphertext} or {@code nonce} is {@code null}
      * @throws IllegalArgumentException if {@code nonce} is not 24 bytes long
+     * @throws IllegalStateException if this cipher has been wiped
      */
     @Override
     public byte[] decrypt(byte[] ciphertext, byte[] nonce, byte @Nullable [] aad) throws GeneralSecurityException {
         Objects.requireNonNull(ciphertext, "ciphertext");
         Objects.requireNonNull(nonce, "nonce");
+        checkUsable();
         if (nonce.length != Constants.XCHACHA_NONCE_LEN) {
             throw new IllegalArgumentException("XChaCha20-Poly1305 nonce must be "
                     + Constants.XCHACHA_NONCE_LEN + " bytes");
@@ -139,10 +179,12 @@ public final class XChaCha20Poly1305 implements ContentCipher {
      * @param out    the output buffer
      * @param outOff the output offset
      * @return the number of bytes written (ciphertext plus tag)
+     * @throws IllegalStateException if this cipher has been wiped
      */
     @Override
     public int encrypt(byte[] in, int inOff, int inLen, byte[] nonce,
                        byte @Nullable [] aad, int aadOff, int aadLen, byte[] out, int outOff) {
+        checkUsable();
         checkNonce(nonce);
         AEADCipher cipher = encryptCipher.get();
         cipher.init(true, new AEADParameters(new KeyParameter(key), Constants.AUTH_TAG_LEN * 8, nonce));
@@ -172,11 +214,13 @@ public final class XChaCha20Poly1305 implements ContentCipher {
      * @param outOff the output offset
      * @return the number of plaintext bytes written
      * @throws GeneralSecurityException on authentication failure
+     * @throws IllegalStateException if this cipher has been wiped
      */
     @Override
     public int decrypt(byte[] in, int inOff, int inLen, byte[] nonce,
                        byte @Nullable [] aad, int aadOff, int aadLen, byte[] out, int outOff)
             throws GeneralSecurityException {
+        checkUsable();
         checkNonce(nonce);
         AEADCipher cipher = decryptCipher.get();
         cipher.init(false, new AEADParameters(new KeyParameter(key), Constants.AUTH_TAG_LEN * 8, nonce));

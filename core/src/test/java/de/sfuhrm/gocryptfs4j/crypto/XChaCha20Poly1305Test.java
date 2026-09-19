@@ -68,4 +68,24 @@ class XChaCha20Poly1305Test {
         assertThrows(IllegalArgumentException.class, () -> cipher.encrypt(new byte[1], new byte[12], null));
         assertThrows(IllegalArgumentException.class, () -> cipher.decrypt(new byte[17], new byte[12], null));
     }
+
+    @Test
+    void wipeMakesCipherUnusable() throws GeneralSecurityException {
+        byte[] key = Keys.randomBytes(Constants.KEY_LEN);
+        XChaCha20Poly1305 cipher = new XChaCha20Poly1305(key);
+        byte[] nonce = Keys.randomBytes(Constants.XCHACHA_NONCE_LEN);
+        byte[] plaintext = Keys.randomBytes(16);
+        byte[] ct = cipher.encrypt(plaintext, nonce, null);
+
+        cipher.wipe();
+        cipher.wipe();
+
+        assertThrows(IllegalStateException.class, () -> cipher.encrypt(plaintext, nonce, null));
+        assertThrows(IllegalStateException.class, () -> cipher.decrypt(ct, nonce, null));
+
+        // A fresh instance on the same thread still works.
+        XChaCha20Poly1305 fresh = new XChaCha20Poly1305(key);
+        assertArrayEquals(plaintext,
+                fresh.decrypt(fresh.encrypt(plaintext, nonce, null), nonce, null));
+    }
 }
