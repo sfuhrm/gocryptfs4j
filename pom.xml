@@ -351,6 +351,7 @@
                                     <fork>true</fork>
                                     <compilerArgs>
                                         <arg>-XDcompilePolicy=simple</arg>
+                                        <arg>-XDaddTypeAnnotationsToSymbol=true</arg>
                                         <arg>-XDshould-stop.ifError=FLOW</arg>
                                         <arg>-Xplugin:ErrorProne -Xep:NullAway:ERROR -XepOpt:NullAway:OnlyNullMarked=true</arg>
                                         <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED</arg>
