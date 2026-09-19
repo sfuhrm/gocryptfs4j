@@ -467,7 +467,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
         } else if (se.isSymbolicLink()) {
             fs.createSymlink(t.toString(), fs.readSymlinkTarget(s.toString()));
             if (copyAttributes) {
-                copyAttributes(s, t, true);
+                copySymlinkAttributes(s, t);
             }
         } else {
             fs.createFile(t.toString());
@@ -511,6 +511,19 @@ public final class GocryptFsProvider extends FileSystemProvider {
         java.nio.file.Files.getFileAttributeView(target, BasicFileAttributeView.class,
                         LinkOption.NOFOLLOW_LINKS)
                 .setTimes(basic.lastModifiedTime(), basic.lastAccessTime(), basic.creationTime());
+    }
+
+    /**
+     * Best-effort copy of symbolic-link attributes. Some platforms (for example
+     * JDK 11 on Linux) cannot set symbolic-link timestamps or ownership; like the
+     * JDK's own copy, such failures are ignored so that the link is still copied.
+     */
+    private static void copySymlinkAttributes(GocryptFsPath source, GocryptFsPath target) {
+        try {
+            copyAttributes(source, target, true);
+        } catch (IOException | UnsupportedOperationException e) {
+            // Symbolic-link attributes are not settable on this platform.
+        }
     }
 
     /**

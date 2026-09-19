@@ -610,19 +610,37 @@ class GocryptFsProviderOperationsTest {
         Path link = nio.getPath("/attr-link");
         Files.createSymbolicLink(link, nio.getPath("/file.txt"));
         FileTime time = FileTime.fromMillis(System.currentTimeMillis() - 120_000);
-        Files.getFileAttributeView(link, BasicFileAttributeView.class, LinkOption.NOFOLLOW_LINKS)
-                .setTimes(time, time, time);
+        boolean timesSettable = setSymlinkTimes(link, time);
 
         Path copied = nio.getPath("/attr-link-copy");
         Files.copy(link, copied, LinkOption.NOFOLLOW_LINKS, StandardCopyOption.COPY_ATTRIBUTES);
         assertTrue(Files.isSymbolicLink(copied));
-        assertEquals(time.toMillis(),
-                Files.getLastModifiedTime(copied, LinkOption.NOFOLLOW_LINKS).toMillis());
+        assertEquals(nio.getPath("/file.txt"), Files.readSymbolicLink(copied));
 
-        Path plain = nio.getPath("/attr-link-plain");
-        Files.copy(link, plain, LinkOption.NOFOLLOW_LINKS);
-        assertNotEquals(time.toMillis(),
-                Files.getLastModifiedTime(plain, LinkOption.NOFOLLOW_LINKS).toMillis());
+        if (timesSettable) {
+            assertEquals(time.toMillis(),
+                    Files.getLastModifiedTime(copied, LinkOption.NOFOLLOW_LINKS).toMillis());
+
+            Path plain = nio.getPath("/attr-link-plain");
+            Files.copy(link, plain, LinkOption.NOFOLLOW_LINKS);
+            assertNotEquals(time.toMillis(),
+                    Files.getLastModifiedTime(plain, LinkOption.NOFOLLOW_LINKS).toMillis());
+        }
+    }
+
+    /**
+     * Sets the timestamps of a symbolic link, returning whether the platform
+     * supports it. JDK 11 on Linux, for example, cannot and throws instead.
+     */
+    private static boolean setSymlinkTimes(Path link, FileTime time) {
+        try {
+            Files.getFileAttributeView(link, BasicFileAttributeView.class,
+                            LinkOption.NOFOLLOW_LINKS)
+                    .setTimes(time, time, time);
+            return true;
+        } catch (IOException | UnsupportedOperationException e) {
+            return false;
+        }
     }
 
     @Test
