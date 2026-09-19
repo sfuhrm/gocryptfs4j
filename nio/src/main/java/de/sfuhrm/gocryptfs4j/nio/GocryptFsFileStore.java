@@ -46,12 +46,25 @@ final class GocryptFsFileStore extends FileStore {
 
     @Override
     public boolean supportsFileAttributeView(Class<? extends FileAttributeView> type) {
-        return type == java.nio.file.attribute.BasicFileAttributeView.class;
+        if (type == java.nio.file.attribute.BasicFileAttributeView.class) {
+            return true;
+        }
+        if (type == java.nio.file.attribute.PosixFileAttributeView.class
+                || type == java.nio.file.attribute.FileOwnerAttributeView.class) {
+            return fs.supportsPosix();
+        }
+        return false;
     }
 
     @Override
     public boolean supportsFileAttributeView(String name) {
-        return "basic".equals(name);
+        if ("basic".equals(name)) {
+            return true;
+        }
+        if ("posix".equals(name) || "owner".equals(name)) {
+            return fs.supportsPosix();
+        }
+        return false;
     }
 
     @Override

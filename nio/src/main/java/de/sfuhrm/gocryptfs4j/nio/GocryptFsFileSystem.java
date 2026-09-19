@@ -7,11 +7,13 @@ import java.net.URI;
 import java.nio.file.ClosedFileSystemException;
 import java.nio.file.FileStore;
 import java.nio.file.FileSystem;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.PathMatcher;
 import java.nio.file.WatchService;
 import java.nio.file.attribute.UserPrincipalLookupService;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.Objects;
 import java.util.Set;
 
@@ -29,6 +31,7 @@ public final class GocryptFsFileSystem extends FileSystem {
     private final URI uri;
     private final GocryptFsPath root;
     private final GocryptFsUserPrincipalLookupService userPrincipalLookupService;
+    private final boolean supportsPosix;
     private volatile boolean open = true;
 
     GocryptFsFileSystem(GocryptFsProvider provider, GocryptFs core, String key) {
@@ -38,6 +41,17 @@ public final class GocryptFsFileSystem extends FileSystem {
         this.uri = URI.create("gocryptfs://" + urlEncode(key) + "/");
         this.root = GocryptFsPath.absolute(this, "/");
         this.userPrincipalLookupService = new GocryptFsUserPrincipalLookupService(this);
+        this.supportsPosix = detectPosix(core);
+    }
+
+    /** Detects whether the backing filesystem supports POSIX attributes. */
+    private static boolean detectPosix(GocryptFs core) {
+        try {
+            return Files.getFileStore(core.cipherRoot())
+                    .supportsFileAttributeView("posix");
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     private static String urlEncode(String s) {
@@ -64,6 +78,11 @@ public final class GocryptFsFileSystem extends FileSystem {
 
     GocryptFs core() {
         return core;
+    }
+
+    /** Returns whether the backing filesystem supports POSIX attributes. */
+    boolean supportsPosix() {
+        return supportsPosix;
     }
 
     String key() {
@@ -110,7 +129,13 @@ public final class GocryptFsFileSystem extends FileSystem {
 
     @Override
     public Set<String> supportedFileAttributeViews() {
-        return Collections.singleton("basic");
+        Set<String> views = new LinkedHashSet<>();
+        views.add("basic");
+        if (supportsPosix) {
+            views.add("posix");
+            views.add("owner");
+        }
+        return Collections.unmodifiableSet(views);
     }
 
     /**

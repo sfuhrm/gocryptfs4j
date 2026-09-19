@@ -20,14 +20,23 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributeView;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.DosFileAttributeView;
+import java.nio.file.attribute.DosFileAttributes;
+import java.nio.file.attribute.FileOwnerAttributeView;
 import java.nio.file.attribute.FileStoreAttributeView;
 import java.nio.file.attribute.FileTime;
+import java.nio.file.attribute.GroupPrincipal;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFileAttributes;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
+import java.nio.file.attribute.UserPrincipal;
 import java.util.EnumSet;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * Covers the {@code FileStore}, attribute-view and copy/move operations of the
@@ -67,6 +76,11 @@ class GocryptFsProviderOperationsTest {
         assertFalse(store.isReadOnly());
         assertTrue(store.supportsFileAttributeView(BasicFileAttributeView.class));
         assertTrue(store.supportsFileAttributeView("basic"));
+        boolean posix = Files.getFileStore(cipherDir).supportsFileAttributeView("posix");
+        assertEquals(posix, store.supportsFileAttributeView(PosixFileAttributeView.class));
+        assertEquals(posix, store.supportsFileAttributeView("posix"));
+        assertEquals(posix, store.supportsFileAttributeView(FileOwnerAttributeView.class));
+        assertEquals(posix, store.supportsFileAttributeView("owner"));
         assertNull(store.getFileStoreAttributeView(FileStoreAttributeView.class));
         assertTrue(store.getTotalSpace() >= 0);
         assertTrue(store.getUsableSpace() >= 0);
@@ -145,10 +159,13 @@ class GocryptFsProviderOperationsTest {
         Map<String, Object> basicAll = Files.readAttributes(file, "basic:*");
         assertEquals(all.keySet(), basicAll.keySet());
 
-        assertThrows(UnsupportedOperationException.class,
-                () -> Files.readAttributes(file, "posix:size"));
+        Map<String, Object> posixSize = Files.readAttributes(file, "posix:size");
+        assertEquals(3L, posixSize.get("size"));
+
         assertThrows(UnsupportedOperationException.class,
                 () -> Files.readAttributes(file, "bogus:*"));
+        assertThrows(UnsupportedOperationException.class,
+                () -> Files.readAttributes(file, "dos:size"));
         assertThrows(IllegalArgumentException.class,
                 () -> Files.readAttributes(file, "size,bogus"));
         assertThrows(IllegalArgumentException.class,
@@ -265,7 +282,7 @@ class GocryptFsProviderOperationsTest {
         assertThrows(IllegalArgumentException.class,
                 () -> Files.setAttribute(file, "size", 1L));
         assertThrows(UnsupportedOperationException.class,
-                () -> Files.setAttribute(file, "posix:lastModifiedTime", time));
+                () -> Files.setAttribute(file, "dos:hidden", true));
         assertThrows(ClassCastException.class,
                 () -> Files.setAttribute(file, "lastModifiedTime", "not-a-time"));
     }
@@ -273,9 +290,85 @@ class GocryptFsProviderOperationsTest {
     @Test
     void unsupportedAttributeViews() throws IOException {
         Path file = nio.getPath("/file.txt");
-        assertNull(Files.getFileAttributeView(file, PosixFileAttributeView.class));
+        assertNull(Files.getFileAttributeView(file, DosFileAttributeView.class));
         assertThrows(UnsupportedOperationException.class,
-                () -> Files.readAttributes(file, PosixFileAttributes.class));
+                () -> Files.readAttributes(file, DosFileAttributes.class));
+    }
+
+    @Test
+    void posixAttributes() throws IOException {
+        assumeTrue(posixSupported());
+        Path file = nio.getPath("/file.txt");
+
+        PosixFileAttributes attrs = Files.readAttributes(file, PosixFileAttributes.class);
+        assertNotNull(attrs.owner());
+        assertNotNull(attrs.group());
+        assertNotNull(attrs.permissions());
+        assertTrue(attrs.isRegularFile());
+        assertEquals(3L, attrs.size());
+
+        assertTrue(nio.supportedFileAttributeViews().contains("basic"));
+        assertTrue(nio.supportedFileAttributeViews().contains("posix"));
+        assertTrue(nio.supportedFileAttributeViews().contains("owner"));
+        assertNotNull(Files.getFileAttributeView(file, PosixFileAttributeView.class));
+        assertNotNull(Files.getFileAttributeView(file, FileOwnerAttributeView.class));
+        assertNotNull(Files.getOwner(file));
+    }
+
+    @Test
+    void posixReadAttributesByName() throws IOException {
+        assumeTrue(posixSupported());
+        Path file = nio.getPath("/file.txt");
+
+        Map<String, Object> perms = Files.readAttributes(file, "posix:permissions");
+        assertTrue(perms.get("permissions") instanceof Set);
+
+        Map<String, Object> all = Files.readAttributes(file, "posix:*");
+        assertTrue(all.containsKey("permissions"));
+        assertTrue(all.containsKey("owner"));
+        assertTrue(all.containsKey("group"));
+        assertTrue(all.containsKey("size"));
+        assertTrue(all.containsKey("fileKey"));
+
+        Map<String, Object> owner = Files.readAttributes(file, "owner:owner");
+        assertNotNull(owner.get("owner"));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> Files.readAttributes(file, "owner:size"));
+        assertThrows(IllegalArgumentException.class,
+                () -> Files.readAttributes(file, "basic:permissions"));
+    }
+
+    @Test
+    void posixSetAttribute() throws IOException {
+        assumeTrue(posixSupported());
+        Path file = nio.getPath("/posix.txt");
+        Files.write(file, "x".getBytes(StandardCharsets.UTF_8));
+
+        Set<PosixFilePermission> perms = PosixFilePermissions.fromString("rw-------");
+        Files.setAttribute(file, "posix:permissions", perms);
+        assertEquals(perms, Files.getPosixFilePermissions(file));
+
+        UserPrincipal owner = Files.getOwner(file);
+        Files.setAttribute(file, "posix:owner", owner);
+        Files.setAttribute(file, "owner:owner", owner);
+        GroupPrincipal group = Files.readAttributes(file, PosixFileAttributes.class).group();
+        Files.setAttribute(file, "posix:group", group);
+
+        FileTime time = FileTime.fromMillis(System.currentTimeMillis() - 60_000);
+        Files.setAttribute(file, "posix:lastModifiedTime", time);
+        assertEquals(time.toMillis(), Files.getLastModifiedTime(file).toMillis());
+
+        assertThrows(IllegalArgumentException.class,
+                () -> Files.setAttribute(file, "posix:size", 1L));
+        assertThrows(IllegalArgumentException.class,
+                () -> Files.setAttribute(file, "owner:size", 1L));
+        assertThrows(IllegalArgumentException.class,
+                () -> Files.setAttribute(file, "basic:permissions", perms));
+    }
+
+    private static boolean posixSupported() throws IOException {
+        return Files.getFileStore(cipherDir).supportsFileAttributeView("posix");
     }
 
     @Test

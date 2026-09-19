@@ -227,8 +227,10 @@ FIDO2-protected filesystems work the same way: pass a `Fido2Token` to
 `newFileSystem(Path, Fido2Token)`, or put it under the `fido2Token` environment
 key (instead of `password`) when using the URI form.
 
-> Note: the NIO view currently exposes basic attributes (type, size, times).
-> POSIX permissions and ownership are not yet mapped.
+> Note: the NIO view exposes basic attributes (type, size, times) and, when the
+> backing filesystem supports it, the POSIX attributes (permissions, owner and
+> group). gocryptfs does not store ownership or permissions itself, so these are
+> read from and written to the backing cipher file.
 
 ### 3. Options: content cipher and plaintext names
 

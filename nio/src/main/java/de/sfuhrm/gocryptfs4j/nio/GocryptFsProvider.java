@@ -30,7 +30,13 @@ import java.nio.file.attribute.BasicFileAttributeView;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.FileAttributeView;
+import java.nio.file.attribute.FileOwnerAttributeView;
 import java.nio.file.attribute.FileTime;
+import java.nio.file.attribute.GroupPrincipal;
+import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.PosixFileAttributes;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.UserPrincipal;
 import java.nio.file.spi.FileSystemProvider;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -527,10 +533,20 @@ public final class GocryptFsProvider extends FileSystemProvider {
                                                                 LinkOption... options) {
         Objects.requireNonNull(path, "path");
         Objects.requireNonNull(type, "type");
+        GocryptFsFileSystem fs = (GocryptFsFileSystem) path.getFileSystem();
+        boolean follow = !noFollow(options);
         if (type == BasicFileAttributeView.class) {
-            return (V) new GocryptFsBasicFileAttributeView(
-                    (GocryptFsFileSystem) path.getFileSystem(), toAbsolute(path),
-                    !noFollow(options));
+            return (V) new GocryptFsBasicFileAttributeView(fs, toAbsolute(path), follow);
+        }
+        if (type == PosixFileAttributeView.class) {
+            return fs.supportsPosix()
+                    ? (V) new GocryptFsPosixFileAttributeView(fs, toAbsolute(path), follow)
+                    : null;
+        }
+        if (type == FileOwnerAttributeView.class) {
+            return fs.supportsPosix()
+                    ? (V) new GocryptFsOwnerFileAttributeView(fs, toAbsolute(path), follow)
+                    : null;
         }
         return null;
     }
@@ -539,6 +555,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
      * Reads a file's attributes.
      *
      * @throws NullPointerException if {@code path} or {@code type} is {@code null}
+     * @throws UnsupportedOperationException if the attribute type is not supported
      */
     @Override
     @SuppressWarnings("unchecked")
@@ -547,9 +564,12 @@ public final class GocryptFsProvider extends FileSystemProvider {
             throws IOException {
         Objects.requireNonNull(path, "path");
         Objects.requireNonNull(type, "type");
+        GocryptFsPath p = resolve(path, options);
         if (type == BasicFileAttributes.class) {
-            GocryptFsPath p = resolve(path, options);
             return (A) new GocryptFsFileAttributes(core(p).stat(p.toString()));
+        }
+        if (type == PosixFileAttributes.class) {
+            return (A) readPosixAttributes(p);
         }
         throw new UnsupportedOperationException("unsupported attribute type: " + type);
     }
@@ -560,7 +580,8 @@ public final class GocryptFsProvider extends FileSystemProvider {
      * <p>The {@code attributes} string has the form {@code [view:]attribute-list}
      * where {@code view} defaults to {@code basic} and {@code attribute-list} is a
      * comma separated list of attribute names. The special name {@code *} selects
-     * all basic attributes.</p>
+     * all attributes of the view. The {@code basic}, {@code posix} and
+     * {@code owner} views are supported.</p>
      *
      * @throws NullPointerException if {@code path} or {@code attributes} is {@code null}
      * @throws UnsupportedOperationException if the requested attribute view is not available
@@ -571,14 +592,37 @@ public final class GocryptFsProvider extends FileSystemProvider {
             throws IOException {
         Objects.requireNonNull(path, "path");
         Objects.requireNonNull(attributes, "attributes");
+        int colon = attributes.indexOf(':');
+        String view = colon < 0 ? "basic" : attributes.substring(0, colon);
         GocryptFsPath p = resolve(path, options);
-        return basicAttributes(core(p).stat(p.toString()), attributes);
+        switch (view) {
+            case "basic":
+                return basicAttributes(
+                        new GocryptFsFileAttributes(core(p).stat(p.toString())), attributes);
+            case "posix":
+                return posixAttributes(readPosixAttributes(p), attributes);
+            case "owner":
+                return ownerAttributes(readPosixAttributes(p).owner(), attributes);
+            default:
+                throw new UnsupportedOperationException("view '" + view + "' is not supported");
+        }
     }
 
     /** The names of all attributes of the basic view, in a stable order. */
     private static final List<String> BASIC_ATTRIBUTES = Arrays.asList(
             "size", "creationTime", "lastModifiedTime", "lastAccessTime",
             "isRegularFile", "isDirectory", "isSymbolicLink", "isOther", "fileKey");
+
+    /** The names of all attributes of the POSIX view: the basic names plus owner/group/permissions. */
+    private static final List<String> POSIX_ATTRIBUTES = posixAttributeNames();
+
+    private static List<String> posixAttributeNames() {
+        List<String> names = new ArrayList<>(BASIC_ATTRIBUTES);
+        names.add("owner");
+        names.add("group");
+        names.add("permissions");
+        return Collections.unmodifiableList(names);
+    }
 
     /**
      * Reads basic attributes from a directory entry by their specification string.
@@ -590,15 +634,67 @@ public final class GocryptFsProvider extends FileSystemProvider {
      * @throws IllegalArgumentException if no attribute or an unrecognized attribute is specified
      */
     static Map<String, Object> basicAttributes(DirEntry entry, String attributes) {
-        String names = stripBasicView(attributes);
+        return basicAttributes(new GocryptFsFileAttributes(entry), attributes);
+    }
+
+    private static Map<String, Object> basicAttributes(BasicFileAttributes attrs,
+                                                       String specification) {
+        String names = stripView(specification, "basic");
         Map<String, Object> result = new HashMap<>();
         for (String token : names.split(",")) {
             if (token.equals("*")) {
                 for (String attribute : BASIC_ATTRIBUTES) {
-                    result.put(attribute, basicAttribute(entry, attribute));
+                    result.put(attribute, basicAttribute(attrs, attribute));
                 }
             } else {
-                result.put(token, basicAttribute(entry, token));
+                result.put(token, basicAttribute(attrs, token));
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Reads POSIX attributes by their specification string.
+     *
+     * @param attrs         the POSIX attributes to read from
+     * @param specification the {@code [view:]attribute-list} specification
+     * @return the requested attribute values, keyed by their bare names
+     * @throws UnsupportedOperationException if the requested view is not the POSIX view
+     * @throws IllegalArgumentException if an unrecognized attribute is specified
+     */
+    static Map<String, Object> posixAttributes(GocryptFsPosixFileAttributes attrs,
+                                                String specification) {
+        String names = stripView(specification, "posix");
+        Map<String, Object> result = new HashMap<>();
+        for (String token : names.split(",")) {
+            if (token.equals("*")) {
+                for (String attribute : POSIX_ATTRIBUTES) {
+                    result.put(attribute, posixAttribute(attrs, attribute));
+                }
+            } else {
+                result.put(token, posixAttribute(attrs, token));
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Reads the owner attribute by its specification string.
+     *
+     * @param owner         the owner principal
+     * @param specification the {@code [view:]attribute-list} specification
+     * @return the requested attribute values, keyed by their bare names
+     * @throws UnsupportedOperationException if the requested view is not the owner view
+     * @throws IllegalArgumentException if an unrecognized attribute is specified
+     */
+    static Map<String, Object> ownerAttributes(UserPrincipal owner, String specification) {
+        String names = stripView(specification, "owner");
+        Map<String, Object> result = new HashMap<>();
+        for (String token : names.split(",")) {
+            if (token.equals("*") || token.equals("owner")) {
+                result.put("owner", owner);
+            } else {
+                throw new IllegalArgumentException("'owner:" + token + "' is not recognized");
             }
         }
         return result;
@@ -606,70 +702,137 @@ public final class GocryptFsProvider extends FileSystemProvider {
 
     /**
      * Strips the optional {@code view:} prefix from an attribute specification
-     * and validates that the named view is the basic view.
+     * and validates that the named view is {@code expected}.
      *
      * @param specification the {@code [view:]name} or {@code [view:]name-list} string
+     * @param expected      the required view name
      * @return the part after the optional {@code view:} prefix
-     * @throws UnsupportedOperationException if a view other than {@code basic} is named
+     * @throws UnsupportedOperationException if a different view is named
      */
-    private static String stripBasicView(String specification) {
+    private static String stripView(String specification, String expected) {
         int colon = specification.indexOf(':');
         if (colon < 0) {
             return specification;
         }
         String view = specification.substring(0, colon);
-        if (!"basic".equals(view)) {
+        if (!expected.equals(view)) {
             throw new UnsupportedOperationException("view '" + view + "' is not supported");
         }
         return specification.substring(colon + 1);
     }
 
-    private static Object basicAttribute(DirEntry e, String name) {
+    private static Object basicAttribute(BasicFileAttributes attrs, String name) {
         switch (name) {
             case "size":
-                return e.size();
+                return attrs.size();
             case "creationTime":
-                return e.creationTime();
+                return attrs.creationTime();
             case "lastModifiedTime":
-                return e.lastModifiedTime();
+                return attrs.lastModifiedTime();
             case "lastAccessTime":
-                return e.lastAccessTime();
+                return attrs.lastAccessTime();
             case "isDirectory":
-                return e.isDirectory();
+                return attrs.isDirectory();
             case "isRegularFile":
-                return e.isRegularFile();
+                return attrs.isRegularFile();
             case "isSymbolicLink":
-                return e.isSymbolicLink();
+                return attrs.isSymbolicLink();
             case "isOther":
-                return e.kind() == DirEntry.Kind.OTHER;
+                return attrs.isOther();
             case "fileKey":
-                return e.fileKey();
+                return attrs.fileKey();
             default:
                 throw new IllegalArgumentException("'" + name + "' is not recognized");
         }
+    }
+
+    private static Object posixAttribute(GocryptFsPosixFileAttributes attrs, String name) {
+        switch (name) {
+            case "owner":
+                return attrs.owner();
+            case "group":
+                return attrs.group();
+            case "permissions":
+                return attrs.permissions();
+            default:
+                return basicAttribute(attrs, name);
+        }
+    }
+
+    /**
+     * Reads the POSIX attributes of a plaintext path, taking the basic attributes
+     * (and thus the plaintext size) from the gocryptfs view and owner, group and
+     * permissions from the backing cipher file.
+     *
+     * @throws UnsupportedOperationException if the backing filesystem has no POSIX support
+     */
+    static GocryptFsPosixFileAttributes readPosixAttributes(GocryptFsPath path) throws IOException {
+        DirEntry entry = core(path).stat(path.toString());
+        PosixFileAttributes delegate = posixView(entry.cipherPath()).readAttributes();
+        return new GocryptFsPosixFileAttributes(new GocryptFsFileAttributes(entry),
+                delegate.owner(), delegate.group(), delegate.permissions());
+    }
+
+    /**
+     * Returns the POSIX attribute view of a backing cipher file.
+     *
+     * @throws UnsupportedOperationException if the backing filesystem has no POSIX support
+     */
+    static PosixFileAttributeView posixView(Path cipherPath) throws IOException {
+        PosixFileAttributeView view = java.nio.file.Files.getFileAttributeView(cipherPath,
+                PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
+        if (view == null) {
+            throw new UnsupportedOperationException(
+                    "POSIX attributes are not supported by the backing filesystem");
+        }
+        return view;
     }
 
     /**
      * Sets a file attribute by name.
      *
      * <p>The {@code attribute} string has the form {@code [view:]attribute-name}
-     * where {@code view} defaults to {@code basic}. Only the settable basic
-     * attributes {@code lastModifiedTime}, {@code lastAccessTime} and
-     * {@code creationTime} are supported.</p>
+     * where {@code view} defaults to {@code basic}. The basic view accepts
+     * {@code lastModifiedTime}, {@code lastAccessTime} and {@code creationTime};
+     * the POSIX view additionally accepts {@code permissions}, {@code owner} and
+     * {@code group}; the owner view accepts {@code owner}.</p>
      *
      * @throws NullPointerException if {@code path} or {@code attribute} is {@code null}
      * @throws UnsupportedOperationException if the requested attribute view is not available
      * @throws IllegalArgumentException if the attribute is not recognized or is not settable
      */
     @Override
+    @SuppressWarnings("unchecked")
     public void setAttribute(Path path, String attribute, Object value, LinkOption... options)
             throws IOException {
         Objects.requireNonNull(path, "path");
         Objects.requireNonNull(attribute, "attribute");
-        String name = stripBasicView(attribute);
-        boolean lastModified = "lastModifiedTime".equals(name);
-        boolean lastAccessed = "lastAccessTime".equals(name);
-        boolean created = "creationTime".equals(name);
+        int colon = attribute.indexOf(':');
+        String view = colon < 0 ? "basic" : attribute.substring(0, colon);
+        String name = colon < 0 ? attribute : attribute.substring(colon + 1);
+        switch (view) {
+            case "basic":
+                setBasicAttribute(path, name, value, options);
+                return;
+            case "owner":
+                if (!name.equals("owner")) {
+                    throw new IllegalArgumentException("'owner:" + name + "' is not recognized");
+                }
+                newOwnerView(path, options).setOwner((UserPrincipal) value);
+                return;
+            case "posix":
+                setPosixAttribute(path, name, value, options);
+                return;
+            default:
+                throw new UnsupportedOperationException("view '" + view + "' is not supported");
+        }
+    }
+
+    private static void setBasicAttribute(Path path, String name, Object value,
+                                          LinkOption... options) throws IOException {
+        boolean lastModified = name.equals("lastModifiedTime");
+        boolean lastAccessed = name.equals("lastAccessTime");
+        boolean created = name.equals("creationTime");
         if (!lastModified && !lastAccessed && !created) {
             throw new IllegalArgumentException("'basic:" + name + "' is not recognized");
         }
@@ -678,5 +841,44 @@ public final class GocryptFsProvider extends FileSystemProvider {
                 lastModified ? (FileTime) value : null,
                 lastAccessed ? (FileTime) value : null,
                 created ? (FileTime) value : null);
+    }
+
+    private static void setPosixAttribute(Path path, String name, Object value,
+                                          LinkOption... options) throws IOException {
+        GocryptFsPosixFileAttributeView view = newPosixView(path, options);
+        switch (name) {
+            case "permissions":
+                view.setPermissions((Set<PosixFilePermission>) value);
+                return;
+            case "owner":
+                view.setOwner((UserPrincipal) value);
+                return;
+            case "group":
+                view.setGroup((GroupPrincipal) value);
+                return;
+            case "lastModifiedTime":
+                view.setTimes((FileTime) value, null, null);
+                return;
+            case "lastAccessTime":
+                view.setTimes(null, (FileTime) value, null);
+                return;
+            case "creationTime":
+                view.setTimes(null, null, (FileTime) value);
+                return;
+            default:
+                throw new IllegalArgumentException("'posix:" + name + "' is not recognized");
+        }
+    }
+
+    private static GocryptFsPosixFileAttributeView newPosixView(Path path,
+                                                                LinkOption... options) {
+        GocryptFsFileSystem fs = (GocryptFsFileSystem) path.getFileSystem();
+        return new GocryptFsPosixFileAttributeView(fs, toAbsolute(path), !noFollow(options));
+    }
+
+    private static GocryptFsOwnerFileAttributeView newOwnerView(Path path,
+                                                                LinkOption... options) {
+        GocryptFsFileSystem fs = (GocryptFsFileSystem) path.getFileSystem();
+        return new GocryptFsOwnerFileAttributeView(fs, toAbsolute(path), !noFollow(options));
     }
 }
