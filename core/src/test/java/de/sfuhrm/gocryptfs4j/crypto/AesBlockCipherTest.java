@@ -61,4 +61,18 @@ class AesBlockCipherTest {
         assertThrows(IllegalArgumentException.class, () -> new AesBlockCipher(new byte[31]));
         assertThrows(IllegalArgumentException.class, () -> new AesBlockCipher(new byte[0]));
     }
+
+    @Test
+    void wipeMakesCipherUnusable() {
+        byte[] key = Keys.randomBytes(Constants.KEY_LEN);
+        AesBlockCipher cipher = new AesBlockCipher(key);
+        byte[] in = new byte[Constants.AES_BLOCK_SIZE];
+        byte[] out = new byte[Constants.AES_BLOCK_SIZE];
+
+        cipher.wipe();
+        cipher.wipe();
+
+        assertThrows(IllegalStateException.class, () -> cipher.encrypt(in, 0, out, 0));
+        assertThrows(IllegalStateException.class, () -> cipher.decrypt(in, 0, out, 0));
+    }
 }
