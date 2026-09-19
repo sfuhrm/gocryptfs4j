@@ -6,9 +6,9 @@
 [![Coverage](https://raw.githubusercontent.com/sfuhrm/gocryptfs4j/gh-pages/jacoco.svg)]() 
 [![ReleaseDate](https://img.shields.io/github/release-date/sfuhrm/gocryptfs4j)](https://github.com/sfuhrm/gocryptfs4j/releases)
 [![Maven Central](https://img.shields.io/maven-central/v/de.sfuhrm/gocryptfs4j)](https://central.sonatype.com/artifact/de.sfuhrm/gocryptfs4j)
-[![javadoc core](https://javadoc.io/badge2/de.sfuhrm/gocryptfs4j-core/0.3.0/javadoc.svg)](https://javadoc.io/doc/de.sfuhrm/gocryptfs4j-core)
-[![javadoc nio](https://javadoc.io/badge2/de.sfuhrm/gocryptfs4j-nio/0.3.0/javadoc.svg)](https://javadoc.io/doc/de.sfuhrm/gocryptfs4j-nio)
-[![javadoc libfido2](https://javadoc.io/badge2/de.sfuhrm/gocryptfs4j-libfido2/0.3.0/javadoc.svg)](https://javadoc.io/doc/de.sfuhrm/gocryptfs4j-libfido2)
+[![javadoc core](https://javadoc.io/badge2/de.sfuhrm/gocryptfs4j-core/0.4.0/javadoc.svg)](https://javadoc.io/doc/de.sfuhrm/gocryptfs4j-core)
+[![javadoc nio](https://javadoc.io/badge2/de.sfuhrm/gocryptfs4j-nio/0.4.0/javadoc.svg)](https://javadoc.io/doc/de.sfuhrm/gocryptfs4j-nio)
+[![javadoc libfido2](https://javadoc.io/badge2/de.sfuhrm/gocryptfs4j-libfido2/0.4.0/javadoc.svg)](https://javadoc.io/doc/de.sfuhrm/gocryptfs4j-libfido2)
 
 A pure Java implementation of the [gocryptfs](https://github.com/rfjakob/gocryptfs)
 forward-mode on-disk format. It lets Java applications create, read and write
