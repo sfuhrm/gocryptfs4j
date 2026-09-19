@@ -1,5 +1,7 @@
 package de.sfuhrm.gocryptfs4j.core;
 
+import org.jspecify.annotations.Nullable;
+
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.util.Objects;
@@ -24,8 +26,8 @@ public final class DirEntry {
     /** The plaintext (decrypted) name. */
     private final String plainName;
 
-    /** The ciphertext (encrypted) name. */
-    private final String cipherName;
+    /** The ciphertext (encrypted) name, or {@code null} for the root. */
+    private final @Nullable String cipherName;
 
     /** The ciphertext-side path. */
     private final Path cipherPath;
@@ -46,25 +48,25 @@ public final class DirEntry {
     private final FileTime creationTime;
 
     /** The file key, or {@code null} if there is none. */
-    private final Object fileKey;
+    private final @Nullable Object fileKey;
 
     /**
      * Creates a directory entry.
      *
      * @param plainName        the plaintext (decrypted) name
-     * @param cipherName       the ciphertext (encrypted) name
+     * @param cipherName       the ciphertext (encrypted) name, or {@code null} for the root
      * @param cipherPath       the ciphertext-side path
      * @param kind             the entry kind
      * @param size             the plaintext size in bytes
      * @param lastModifiedTime the last-modified time
      * @param lastAccessTime   the last-access time
      * @param creationTime     the creation time
-     * @param fileKey          the file key
+     * @param fileKey          the file key, or {@code null} if there is none
      * @throws NullPointerException if {@code plainName}, {@code cipherPath} or {@code kind} is {@code null}
      */
-    public DirEntry(String plainName, String cipherName, Path cipherPath, Kind kind, long size,
+    public DirEntry(String plainName, @Nullable String cipherName, Path cipherPath, Kind kind, long size,
                     FileTime lastModifiedTime, FileTime lastAccessTime, FileTime creationTime,
-                    Object fileKey) {
+                    @Nullable Object fileKey) {
         this.plainName = Objects.requireNonNull(plainName, "plainName");
         this.cipherName = cipherName;
         this.cipherPath = Objects.requireNonNull(cipherPath, "cipherPath");
@@ -90,7 +92,7 @@ public final class DirEntry {
      *
      * @return the ciphertext (encrypted) name
      */
-    public String cipherName() {
+    public @Nullable String cipherName() {
         return cipherName;
     }
 
@@ -180,7 +182,7 @@ public final class DirEntry {
      *
      * @return the file key
      */
-    public Object fileKey() {
+    public @Nullable Object fileKey() {
         return fileKey;
     }
 }

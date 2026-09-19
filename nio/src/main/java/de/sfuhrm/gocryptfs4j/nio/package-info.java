@@ -43,4 +43,7 @@
  * or by putting a {@code Fido2Token} under the {@code fido2Token} key of the
  * environment map instead of {@code password}.</p>
  */
+@NullMarked
 package de.sfuhrm.gocryptfs4j.nio;
+
+import org.jspecify.annotations.NullMarked;

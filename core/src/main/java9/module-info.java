@@ -8,6 +8,7 @@
 module de.sfuhrm.gocryptfs4j.core {
     requires org.bouncycastle.provider;
     requires com.google.gson;
+    requires static org.jspecify;
 
     exports de.sfuhrm.gocryptfs4j.core;
     exports de.sfuhrm.gocryptfs4j.fido2;

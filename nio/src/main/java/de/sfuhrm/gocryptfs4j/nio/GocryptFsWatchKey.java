@@ -1,6 +1,7 @@
 package de.sfuhrm.gocryptfs4j.nio;
 
 import de.sfuhrm.gocryptfs4j.core.DirEntry;
+import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -165,7 +166,7 @@ final class GocryptFsWatchKey implements WatchKey {
      * @param kind the event kind
      * @param name the affected entry name, or {@code null}
      */
-    private void enqueue(WatchEvent.Kind<?> kind, String name) {
+    private void enqueue(WatchEvent.Kind<?> kind, @Nullable String name) {
         synchronized (lock) {
             queue.add(event(kind, name));
             signal();
@@ -190,8 +191,8 @@ final class GocryptFsWatchKey implements WatchKey {
      * @return the watch event
      */
     @SuppressWarnings("unchecked")
-    private WatchEvent<Path> event(WatchEvent.Kind<?> kind, String name) {
-        Path context = name == null ? null : dir.resolve(name);
+    private WatchEvent<Path> event(WatchEvent.Kind<?> kind, @Nullable String name) {
+        @Nullable Path context = name == null ? null : dir.resolve(name);
         return new WatchEvent<Path>() {
             @Override
             public WatchEvent.Kind<Path> kind() {
@@ -204,7 +205,7 @@ final class GocryptFsWatchKey implements WatchKey {
             }
 
             @Override
-            public Path context() {
+            public @Nullable Path context() {
                 return context;
             }
         };

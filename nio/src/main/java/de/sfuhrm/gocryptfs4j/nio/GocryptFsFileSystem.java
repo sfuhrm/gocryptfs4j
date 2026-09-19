@@ -1,6 +1,7 @@
 package de.sfuhrm.gocryptfs4j.nio;
 
 import de.sfuhrm.gocryptfs4j.core.GocryptFs;
+import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
 import java.net.URI;
@@ -80,7 +81,7 @@ public final class GocryptFsFileSystem extends FileSystem {
      * @param core the core gocryptfs instance
      * @return the backing file store, or {@code null} if it cannot be determined
      */
-    private static FileStore fileStore(GocryptFs core) {
+    private static @Nullable FileStore fileStore(GocryptFs core) {
         try {
             return Files.getFileStore(core.cipherRoot());
         } catch (IOException e) {

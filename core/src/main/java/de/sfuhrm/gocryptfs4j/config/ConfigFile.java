@@ -12,6 +12,7 @@ import de.sfuhrm.gocryptfs4j.crypto.Hkdf;
 import de.sfuhrm.gocryptfs4j.crypto.Keys;
 import de.sfuhrm.gocryptfs4j.crypto.XChaCha20Poly1305;
 import de.sfuhrm.gocryptfs4j.core.ContentCipherType;
+import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -59,22 +60,23 @@ public final class ConfigFile {
     @SerializedName("Version")
     public int version;
 
-    /** The feature flags enabled for this filesystem. */
+    /** The feature flags enabled for this filesystem, or {@code null}. */
     @SerializedName("FeatureFlags")
-    public List<String> featureFlags;
+    public @Nullable List<String> featureFlags;
 
     /** The configured long-name limit, or {@code null} for the default. */
     @SerializedName("LongNameMax")
-    public Integer longNameMax;
+    public @Nullable Integer longNameMax;
 
     /** FIDO2 key-protection data, or {@code null} if unused. */
     @SerializedName("FIDO2")
-    public Fido2Params fido2;
+    public @Nullable Fido2Params fido2;
 
     /** The cached decrypted master key, or {@code null} until it is unlocked. */
-    private transient byte[] masterKey;
+    private transient byte @Nullable [] masterKey;
 
     /** Creates an empty config file (used by Gson and {@link #create}). */
+    @SuppressWarnings("NullAway.Init")
     public ConfigFile() {
     }
 
@@ -165,7 +167,7 @@ public final class ConfigFile {
      *
      * @return the version string, or {@code null} if it cannot be read
      */
-    private static String readVersion() {
+    private static @Nullable String readVersion() {
         try (InputStream in = ConfigFile.class.getResourceAsStream("version.properties")) {
             if (in == null) {
                 return null;
@@ -556,7 +558,7 @@ public final class ConfigFile {
      * @throws NullPointerException if {@code masterKey}, {@code secret} or {@code cipherType} is {@code null}
      */
     public static ConfigFile create(byte[] masterKey, byte[] secret, boolean plaintextNames,
-                                    ContentCipherType cipherType, Fido2Params fido2) {
+                                    ContentCipherType cipherType, @Nullable Fido2Params fido2) {
         Objects.requireNonNull(masterKey, "masterKey");
         Objects.requireNonNull(secret, "secret");
         Objects.requireNonNull(cipherType, "cipherType");

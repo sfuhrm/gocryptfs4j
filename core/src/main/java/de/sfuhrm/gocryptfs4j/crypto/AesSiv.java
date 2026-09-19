@@ -5,6 +5,7 @@ import org.bouncycastle.crypto.macs.CMac;
 import org.bouncycastle.crypto.modes.SICBlockCipher;
 import org.bouncycastle.crypto.params.KeyParameter;
 import org.bouncycastle.crypto.params.ParametersWithIV;
+import org.jspecify.annotations.Nullable;
 
 import javax.crypto.AEADBadTagException;
 import java.security.GeneralSecurityException;
@@ -73,7 +74,7 @@ public final class AesSiv implements ContentCipher {
      * @throws IllegalArgumentException if {@code nonce} is not 16 bytes long
      */
     @Override
-    public byte[] encrypt(byte[] plaintext, byte[] nonce, byte[] aad) {
+    public byte[] encrypt(byte[] plaintext, byte[] nonce, byte @Nullable [] aad) {
         Objects.requireNonNull(plaintext, "plaintext");
         Objects.requireNonNull(nonce, "nonce");
         checkNonce(nonce);
@@ -98,7 +99,7 @@ public final class AesSiv implements ContentCipher {
      * @throws IllegalArgumentException if {@code nonce} is not 16 bytes long
      */
     @Override
-    public byte[] decrypt(byte[] ciphertext, byte[] nonce, byte[] aad) throws GeneralSecurityException {
+    public byte[] decrypt(byte[] ciphertext, byte[] nonce, byte @Nullable [] aad) throws GeneralSecurityException {
         Objects.requireNonNull(ciphertext, "ciphertext");
         Objects.requireNonNull(nonce, "nonce");
         checkNonce(nonce);
@@ -121,7 +122,7 @@ public final class AesSiv implements ContentCipher {
      * @param data the data, or {@code null}
      * @return {@code data} or an empty array
      */
-    private static byte[] orEmpty(byte[] data) {
+    private static byte[] orEmpty(byte @Nullable [] data) {
         return data == null ? new byte[0] : data;
     }
 

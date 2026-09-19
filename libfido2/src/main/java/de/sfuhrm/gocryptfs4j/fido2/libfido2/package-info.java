@@ -92,4 +92,7 @@
  * @see de.sfuhrm.gocryptfs4j.fido2.Fido2Token
  * @see de.sfuhrm.gocryptfs4j.fido2.libfido2.LibFido2Token
  */
+@NullMarked
 package de.sfuhrm.gocryptfs4j.fido2.libfido2;
+
+import org.jspecify.annotations.NullMarked;

@@ -7,6 +7,7 @@
  */
 module de.sfuhrm.gocryptfs4j.nio {
     requires transitive de.sfuhrm.gocryptfs4j.core;
+    requires static org.jspecify;
 
     exports de.sfuhrm.gocryptfs4j.nio;
 

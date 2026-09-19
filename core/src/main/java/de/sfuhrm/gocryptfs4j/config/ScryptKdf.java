@@ -8,6 +8,7 @@ import com.google.gson.annotations.SerializedName;
 public final class ScryptKdf {
 
     /** Creates an empty scrypt parameter object (used by Gson). */
+    @SuppressWarnings("NullAway.Init")
     public ScryptKdf() {
     }
 

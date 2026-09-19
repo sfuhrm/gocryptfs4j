@@ -3,6 +3,7 @@ package de.sfuhrm.gocryptfs4j.core;
 import de.sfuhrm.gocryptfs4j.crypto.Constants;
 import de.sfuhrm.gocryptfs4j.crypto.ContentEnc;
 import de.sfuhrm.gocryptfs4j.crypto.FileHeader;
+import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -41,13 +42,13 @@ public final class CipherFile implements AutoCloseable {
     private final byte[] blockPlain;
 
     /** Scratch buffer for multiple ciphertext blocks, grown on demand. */
-    private byte[] bulkCipher;
+    private byte @Nullable [] bulkCipher;
 
     /** Scratch buffer for multiple plaintext blocks, grown on demand. */
-    private byte[] bulkPlain;
+    private byte @Nullable [] bulkPlain;
 
     /** The file id from the header, or {@code null} for an empty file. */
-    private byte[] fileId;
+    private byte @Nullable [] fileId;
 
     /** Whether the file id has been loaded from the header. */
     private boolean fileIdLoaded;
@@ -111,7 +112,7 @@ public final class CipherFile implements AutoCloseable {
      * @return the 16-byte file id, or {@code null}
      * @throws IOException if the file header is corrupt
      */
-    public synchronized byte[] fileId() throws IOException {
+    public synchronized byte @Nullable [] fileId() throws IOException {
         if (!fileIdLoaded) {
             long size = channel.size();
             if (size == 0) {
@@ -180,11 +181,13 @@ public final class CipherFile implements AutoCloseable {
         long cipherOffset = enc.blockNoToCipherOff(firstBlock);
         int cipherLength = (int) (blockCount * enc.cipherBS);
         ensureBulk(blockCount);
-        int available = readCipherRange(cipherOffset, bulkCipher, cipherLength);
+        byte[] cipherBuf = Objects.requireNonNull(bulkCipher, "bulkCipher");
+        byte[] plainBuf = Objects.requireNonNull(bulkPlain, "bulkPlain");
+        int available = readCipherRange(cipherOffset, cipherBuf, cipherLength);
 
         int plainLength;
         try {
-            plainLength = enc.decryptBlocks(bulkCipher, 0, available, firstBlock, fileId, bulkPlain, 0);
+            plainLength = enc.decryptBlocks(cipherBuf, 0, available, firstBlock, fileId, plainBuf, 0);
         } catch (GeneralSecurityException e) {
             throw new IOException("corrupt block in file", e);
         }
@@ -194,7 +197,7 @@ public final class CipherFile implements AutoCloseable {
             return -1;
         }
         int n = Math.min((int) length, readable);
-        dst.put(bulkPlain, skip, n);
+        dst.put(plainBuf, skip, n);
         return n;
     }
 
@@ -235,6 +238,8 @@ public final class CipherFile implements AutoCloseable {
         long lastBlock = (plainOffset + length - 1) / enc.plainBS;
         int blockCount = (int) (lastBlock - firstBlock + 1);
         ensureBulk(blockCount);
+        byte[] cipherBuf = Objects.requireNonNull(bulkCipher, "bulkCipher");
+        byte[] plainBuf = Objects.requireNonNull(bulkPlain, "bulkPlain");
 
         int plainPos = 0;
         for (long b = firstBlock; b <= lastBlock; b++) {
@@ -245,22 +250,22 @@ public final class CipherFile implements AutoCloseable {
             int segSkip = (int) (lo - blockStart);
 
             if (segSkip == 0 && segLen == enc.plainBS) {
-                src.get(bulkPlain, plainPos, segLen);
+                src.get(plainBuf, plainPos, segLen);
                 plainPos += segLen;
             } else {
                 byte[] old = readPlainBlock(b);
                 int blockPlainLen = Math.max(old.length, segSkip + segLen);
-                System.arraycopy(old, 0, bulkPlain, plainPos, old.length);
+                System.arraycopy(old, 0, plainBuf, plainPos, old.length);
                 for (int i = old.length; i < segSkip; i++) {
-                    bulkPlain[plainPos + i] = 0;
+                    plainBuf[plainPos + i] = 0;
                 }
-                src.get(bulkPlain, plainPos + segSkip, segLen);
+                src.get(plainBuf, plainPos + segSkip, segLen);
                 plainPos += blockPlainLen;
             }
         }
 
-        int cipherLength = enc.encryptBlocks(bulkPlain, 0, plainPos, firstBlock, fileId, bulkCipher, 0);
-        writeCipherRange(enc.blockNoToCipherOff(firstBlock), bulkCipher, 0, cipherLength);
+        int cipherLength = enc.encryptBlocks(plainBuf, 0, plainPos, firstBlock, fileId, cipherBuf, 0);
+        writeCipherRange(enc.blockNoToCipherOff(firstBlock), cipherBuf, 0, cipherLength);
         return length;
     }
 

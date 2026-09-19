@@ -1,5 +1,7 @@
 package de.sfuhrm.gocryptfs4j.nio;
 
+import org.jspecify.annotations.Nullable;
+
 import java.io.IOException;
 import java.nio.file.FileStore;
 import java.nio.file.attribute.FileAttributeView;
@@ -133,7 +135,7 @@ final class GocryptFsFileStore extends FileStore {
      * @return always {@code null}
      */
     @Override
-    public <V extends FileStoreAttributeView> V getFileStoreAttributeView(Class<V> type) {
+    public <V extends FileStoreAttributeView> @Nullable V getFileStoreAttributeView(Class<V> type) {
         return null;
     }
 
@@ -145,7 +147,7 @@ final class GocryptFsFileStore extends FileStore {
      * @throws IOException on filesystem errors
      */
     @Override
-    public Object getAttribute(String attribute) throws IOException {
+    public @Nullable Object getAttribute(String attribute) throws IOException {
         if ("totalSpace".equals(attribute)) {
             return getTotalSpace();
         }

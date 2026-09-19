@@ -19,4 +19,7 @@
  * <p>It can also be run from the command line with
  * {@code ContentCipherBenchmark [seconds]}.</p>
  */
+@NullMarked
 package de.sfuhrm.gocryptfs4j.benchmark;
+
+import org.jspecify.annotations.NullMarked;

@@ -4,6 +4,7 @@ import de.sfuhrm.gocryptfs4j.core.DirEntry;
 import de.sfuhrm.gocryptfs4j.core.GocryptFs;
 import de.sfuhrm.gocryptfs4j.core.CipherFile;
 import de.sfuhrm.gocryptfs4j.fido2.Fido2Token;
+import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -780,7 +781,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
      */
     @Override
     @SuppressWarnings("unchecked")
-    public <V extends FileAttributeView> V getFileAttributeView(Path path, Class<V> type,
+    public <V extends FileAttributeView> @Nullable V getFileAttributeView(Path path, Class<V> type,
                                                                 LinkOption... options) {
         Objects.requireNonNull(path, "path");
         Objects.requireNonNull(type, "type");

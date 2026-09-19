@@ -1,6 +1,7 @@
 package de.sfuhrm.gocryptfs4j.nio;
 
 import de.sfuhrm.gocryptfs4j.core.DirEntry;
+import org.jspecify.annotations.Nullable;
 
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
@@ -111,7 +112,7 @@ final class GocryptFsFileAttributes implements BasicFileAttributes {
      * @return the file key, or {@code null}
      */
     @Override
-    public Object fileKey() {
+    public @Nullable Object fileKey() {
         return entry.fileKey();
     }
 }

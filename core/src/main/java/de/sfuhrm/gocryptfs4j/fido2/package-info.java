@@ -6,4 +6,7 @@
  * does not provide a concrete implementation; applications wire in their own
  * libfido2 or YubiKey SDK adapter.</p>
  */
+@NullMarked
 package de.sfuhrm.gocryptfs4j.fido2;
+
+import org.jspecify.annotations.NullMarked;

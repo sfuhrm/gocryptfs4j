@@ -1,6 +1,7 @@
 package de.sfuhrm.gocryptfs4j.nio;
 
 import de.sfuhrm.gocryptfs4j.core.CipherFile;
+import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -58,7 +59,7 @@ final class GocryptFsFileChannel implements SeekableByteChannel {
     private final Sync sync;
 
     /** The action to run on close, or {@code null} for none. */
-    private final CloseAction closeAction;
+    private final @Nullable CloseAction closeAction;
 
     /** The current plaintext position. */
     private long position;
@@ -77,7 +78,7 @@ final class GocryptFsFileChannel implements SeekableByteChannel {
      * @param closeAction     an action to run on close, or {@code null} for none
      */
     GocryptFsFileChannel(CipherFile file, boolean readable, boolean writable,
-                         long initialPosition, Sync sync, CloseAction closeAction) {
+                         long initialPosition, Sync sync, @Nullable CloseAction closeAction) {
         this.file = file;
         this.readable = readable;
         this.writable = writable;

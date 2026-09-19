@@ -9,6 +9,7 @@ import java.nio.file.attribute.PosixFileAttributes;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.UserPrincipal;
 import java.util.Set;
+import org.jspecify.annotations.Nullable;
 
 /**
  * A {@link PosixFileAttributeView} for a gocryptfs plaintext path.
@@ -147,8 +148,8 @@ final class GocryptFsPosixFileAttributeView implements PosixFileAttributeView {
      * @throws IOException on filesystem errors
      */
     @Override
-    public void setTimes(FileTime lastModifiedTime, FileTime lastAccessTime, FileTime createTime)
-            throws IOException {
+    public void setTimes(@Nullable FileTime lastModifiedTime, @Nullable FileTime lastAccessTime,
+                         @Nullable FileTime createTime) throws IOException {
         delegate().setTimes(lastModifiedTime, lastAccessTime, createTime);
     }
 }

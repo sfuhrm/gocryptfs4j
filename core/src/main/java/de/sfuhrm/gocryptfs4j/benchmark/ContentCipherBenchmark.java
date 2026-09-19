@@ -202,10 +202,7 @@ public final class ContentCipherBenchmark {
      */
     private static double run(ContentEnc enc, byte[] fileId, long nanos, boolean encrypt) {
         byte[] plain = new byte[(int) enc.plainBS];
-        byte[] ciphertext = null;
-        if (!encrypt) {
-            ciphertext = enc.encryptBlock(plain, 0, fileId);
-        }
+        byte[] ciphertext = enc.encryptBlock(plain, 0, fileId);
 
         long bytes = 0;
         long blockNo = 0;

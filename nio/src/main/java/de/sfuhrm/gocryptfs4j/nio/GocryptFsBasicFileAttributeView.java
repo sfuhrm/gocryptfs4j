@@ -1,5 +1,7 @@
 package de.sfuhrm.gocryptfs4j.nio;
 
+import org.jspecify.annotations.Nullable;
+
 import java.io.IOException;
 import java.nio.file.attribute.BasicFileAttributeView;
 import java.nio.file.attribute.BasicFileAttributes;
@@ -76,8 +78,8 @@ final class GocryptFsBasicFileAttributeView implements BasicFileAttributeView {
      * @throws IOException on filesystem errors
      */
     @Override
-    public void setTimes(FileTime lastModifiedTime, FileTime lastAccessTime,
-                         FileTime createTime) throws IOException {
+    public void setTimes(@Nullable FileTime lastModifiedTime, @Nullable FileTime lastAccessTime,
+                         @Nullable FileTime createTime) throws IOException {
         fs.core().setTimes(target().toString(), lastModifiedTime, lastAccessTime, createTime);
     }
 }

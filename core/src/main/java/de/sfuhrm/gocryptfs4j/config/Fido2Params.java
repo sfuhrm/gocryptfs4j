@@ -9,6 +9,7 @@ import com.google.gson.JsonSerializationContext;
 import com.google.gson.JsonSerializer;
 import com.google.gson.annotations.JsonAdapter;
 import com.google.gson.annotations.SerializedName;
+import org.jspecify.annotations.Nullable;
 
 import java.lang.reflect.Type;
 import java.util.ArrayList;
@@ -42,9 +43,10 @@ public final class Fido2Params {
 
     /** Options to pass to the FIDO2 assertion, or {@code null} if unused. */
     @SerializedName("AssertOptions")
-    public List<String> assertOptions;
+    public @Nullable List<String> assertOptions;
 
     /** Creates an empty parameter object (used by Gson). */
+    @SuppressWarnings("NullAway.Init")
     public Fido2Params() {
     }
 
@@ -56,7 +58,7 @@ public final class Fido2Params {
      * @param assertOptions the assertion options, or {@code null}
      * @throws NullPointerException if {@code credentialId} or {@code hmacSalt} is {@code null}
      */
-    public Fido2Params(byte[] credentialId, byte[] hmacSalt, List<String> assertOptions) {
+    public Fido2Params(byte[] credentialId, byte[] hmacSalt, @Nullable List<String> assertOptions) {
         this.credentialId = credentialId.clone();
         this.hmacSalt = hmacSalt.clone();
         this.assertOptions = assertOptions == null
@@ -76,7 +78,8 @@ public final class Fido2Params {
         }
 
         @Override
-        public JsonElement serialize(byte[] src, Type type, JsonSerializationContext context) {
+        public @Nullable JsonElement serialize(byte @Nullable [] src, Type type,
+                                               JsonSerializationContext context) {
             if (src == null) {
                 return null;
             }
@@ -84,7 +87,8 @@ public final class Fido2Params {
         }
 
         @Override
-        public byte[] deserialize(JsonElement json, Type type, JsonDeserializationContext context)
+        public byte @Nullable [] deserialize(@Nullable JsonElement json, Type type,
+                                            JsonDeserializationContext context)
                 throws JsonParseException {
             if (json == null || json.isJsonNull()) {
                 return null;

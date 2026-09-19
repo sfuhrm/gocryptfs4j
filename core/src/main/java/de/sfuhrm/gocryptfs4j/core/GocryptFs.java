@@ -10,6 +10,7 @@ import de.sfuhrm.gocryptfs4j.crypto.Hkdf;
 import de.sfuhrm.gocryptfs4j.crypto.Keys;
 import de.sfuhrm.gocryptfs4j.fido2.Fido2Token;
 import de.sfuhrm.gocryptfs4j.names.NameTransform;
+import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -322,9 +323,9 @@ public final class GocryptFs implements AutoCloseable {
      * @throws IOException on filesystem errors or if the token interaction fails
      * @throws NullPointerException if {@code cipherDir}, {@code token} or {@code cipherType} is {@code null}
      */
-    public static GocryptFs create(Path cipherDir, Fido2Token token, String userName,
+    public static GocryptFs create(Path cipherDir, Fido2Token token, @Nullable String userName,
                                    boolean plaintextNames, ContentCipherType cipherType,
-                                   List<String> assertOptions) throws IOException {
+                                   @Nullable List<String> assertOptions) throws IOException {
         Objects.requireNonNull(cipherDir, "cipherDir");
         Objects.requireNonNull(token, "token");
         Objects.requireNonNull(cipherType, "cipherType");
@@ -506,12 +507,12 @@ public final class GocryptFs implements AutoCloseable {
     public static final class Resolved {
         /** The ciphertext-side path. */
         public final Path cipherPath;
-        /** The ciphertext-side parent directory. */
-        public final Path cipherParent;
+        /** The ciphertext-side parent directory, or {@code null} for the root. */
+        public final @Nullable Path cipherParent;
         /** The 16-byte IV of the parent directory. */
         public final byte[] parentDirIV;
-        /** The ciphertext (encrypted) name. */
-        public final String cipherName;
+        /** The ciphertext (encrypted) name, or {@code null} for the root. */
+        public final @Nullable String cipherName;
         /** The plaintext (decrypted) name. */
         public final String plainName;
 
@@ -519,12 +520,13 @@ public final class GocryptFs implements AutoCloseable {
          * Creates a resolution result.
          *
          * @param cipherPath   the ciphertext-side path
-         * @param cipherParent the ciphertext-side parent directory
+         * @param cipherParent the ciphertext-side parent directory, or {@code null} for the root
          * @param parentDirIV  the 16-byte IV of the parent directory
-         * @param cipherName   the ciphertext (encrypted) name
+         * @param cipherName   the ciphertext (encrypted) name, or {@code null} for the root
          * @param plainName    the plaintext (decrypted) name
          */
-        Resolved(Path cipherPath, Path cipherParent, byte[] parentDirIV, String cipherName, String plainName) {
+        Resolved(Path cipherPath, @Nullable Path cipherParent, byte[] parentDirIV,
+                 @Nullable String cipherName, String plainName) {
             this.cipherPath = cipherPath;
             this.cipherParent = cipherParent;
             this.parentDirIV = parentDirIV;
@@ -940,8 +942,9 @@ public final class GocryptFs implements AutoCloseable {
      * @throws IOException on filesystem errors
      * @throws NullPointerException if {@code plainPath} is {@code null}
      */
-    public void setTimes(String plainPath, FileTime lastModifiedTime, FileTime lastAccessTime,
-                         FileTime createTime) throws IOException {
+    public void setTimes(String plainPath, @Nullable FileTime lastModifiedTime,
+                         @Nullable FileTime lastAccessTime, @Nullable FileTime createTime)
+            throws IOException {
         Objects.requireNonNull(plainPath, "plainPath");
         Resolved r = resolve(plainPath);
         BasicFileAttributeView view = Files.getFileAttributeView(r.cipherPath,
@@ -969,8 +972,8 @@ public final class GocryptFs implements AutoCloseable {
         /** The current plaintext position. */
         private long pos;
 
-        /** The read-ahead buffer, lazily created. */
-        private byte[] buf;
+        /** The read-ahead buffer. */
+        private final byte[] buf = new byte[BUFFER_SIZE];
 
         /** The current position within the read-ahead buffer. */
         private int bufPos;
@@ -1042,9 +1045,6 @@ public final class GocryptFs implements AutoCloseable {
          * @throws IOException on filesystem errors
          */
         private boolean fill() throws IOException {
-            if (buf == null) {
-                buf = new byte[BUFFER_SIZE];
-            }
             int n = cf.read(ByteBuffer.wrap(buf), pos);
             if (n <= 0) {
                 bufLen = 0;
@@ -1114,9 +1114,11 @@ public final class GocryptFs implements AutoCloseable {
             Files.delete(r.cipherPath);
         } else {
             Files.delete(r.cipherPath);
-            if (!plaintextNames && nameTransform.isLongContent(r.cipherName)
-                    && r.cipherParent != null) {
-                Files.deleteIfExists(r.cipherParent.resolve(r.cipherName + Constants.LONG_NAME_SUFFIX));
+            String cipherName = r.cipherName;
+            Path cipherParent = r.cipherParent;
+            if (!plaintextNames && cipherName != null && cipherParent != null
+                    && nameTransform.isLongContent(cipherName)) {
+                Files.deleteIfExists(cipherParent.resolve(cipherName + Constants.LONG_NAME_SUFFIX));
             }
         }
     }
@@ -1149,10 +1151,13 @@ public final class GocryptFs implements AutoCloseable {
      * @throws IOException on filesystem errors
      */
     private void prepareLongName(Resolved r) throws IOException {
-        if (plaintextNames || !nameTransform.isLongContent(r.cipherName)) {
+        String cipherName = r.cipherName;
+        Path cipherParent = r.cipherParent;
+        if (plaintextNames || cipherName == null || cipherParent == null
+                || !nameTransform.isLongContent(cipherName)) {
             return;
         }
-        Path nameFile = r.cipherParent.resolve(r.cipherName + Constants.LONG_NAME_SUFFIX);
+        Path nameFile = cipherParent.resolve(cipherName + Constants.LONG_NAME_SUFFIX);
         byte[] fullCipher = nameTransform.encryptName(r.plainName, r.parentDirIV)
                 .getBytes(StandardCharsets.UTF_8);
         try {

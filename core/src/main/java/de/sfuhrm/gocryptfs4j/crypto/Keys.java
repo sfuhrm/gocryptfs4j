@@ -1,6 +1,7 @@
 package de.sfuhrm.gocryptfs4j.crypto;
 
 import org.bouncycastle.crypto.generators.SCrypt;
+import org.jspecify.annotations.Nullable;
 
 import java.security.SecureRandom;
 import java.util.Objects;
@@ -77,7 +78,7 @@ public final class Keys {
      *
      * @param buf the buffer to wipe, or {@code null}
      */
-    public static void wipe(byte[] buf) {
+    public static void wipe(byte @Nullable [] buf) {
         if (buf != null) {
             java.util.Arrays.fill(buf, (byte) 0);
         }

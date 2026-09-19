@@ -43,4 +43,7 @@
  * the standard {@code java.nio.file} API, see the
  * {@code de.sfuhrm.gocryptfs4j.nio} package instead.</p>
  */
+@NullMarked
 package de.sfuhrm.gocryptfs4j.core;
+
+import org.jspecify.annotations.NullMarked;

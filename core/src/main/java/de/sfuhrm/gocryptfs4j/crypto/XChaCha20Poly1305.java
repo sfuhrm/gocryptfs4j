@@ -4,6 +4,7 @@ import org.bouncycastle.crypto.InvalidCipherTextException;
 import org.bouncycastle.crypto.modes.AEADCipher;
 import org.bouncycastle.crypto.params.AEADParameters;
 import org.bouncycastle.crypto.params.KeyParameter;
+import org.jspecify.annotations.Nullable;
 
 import javax.crypto.AEADBadTagException;
 import java.security.GeneralSecurityException;
@@ -72,7 +73,7 @@ public final class XChaCha20Poly1305 implements ContentCipher {
      * @throws IllegalArgumentException if {@code nonce} is not 24 bytes long
      */
     @Override
-    public byte[] encrypt(byte[] plaintext, byte[] nonce, byte[] aad) {
+    public byte[] encrypt(byte[] plaintext, byte[] nonce, byte @Nullable [] aad) {
         Objects.requireNonNull(plaintext, "plaintext");
         Objects.requireNonNull(nonce, "nonce");
         if (nonce.length != Constants.XCHACHA_NONCE_LEN) {
@@ -104,7 +105,7 @@ public final class XChaCha20Poly1305 implements ContentCipher {
      * @throws IllegalArgumentException if {@code nonce} is not 24 bytes long
      */
     @Override
-    public byte[] decrypt(byte[] ciphertext, byte[] nonce, byte[] aad) throws GeneralSecurityException {
+    public byte[] decrypt(byte[] ciphertext, byte[] nonce, byte @Nullable [] aad) throws GeneralSecurityException {
         Objects.requireNonNull(ciphertext, "ciphertext");
         Objects.requireNonNull(nonce, "nonce");
         if (nonce.length != Constants.XCHACHA_NONCE_LEN) {
@@ -141,7 +142,7 @@ public final class XChaCha20Poly1305 implements ContentCipher {
      */
     @Override
     public int encrypt(byte[] in, int inOff, int inLen, byte[] nonce,
-                       byte[] aad, int aadOff, int aadLen, byte[] out, int outOff) {
+                       byte @Nullable [] aad, int aadOff, int aadLen, byte[] out, int outOff) {
         checkNonce(nonce);
         AEADCipher cipher = encryptCipher.get();
         cipher.init(true, new AEADParameters(new KeyParameter(key), Constants.AUTH_TAG_LEN * 8, nonce));
@@ -174,7 +175,7 @@ public final class XChaCha20Poly1305 implements ContentCipher {
      */
     @Override
     public int decrypt(byte[] in, int inOff, int inLen, byte[] nonce,
-                       byte[] aad, int aadOff, int aadLen, byte[] out, int outOff)
+                       byte @Nullable [] aad, int aadOff, int aadLen, byte[] out, int outOff)
             throws GeneralSecurityException {
         checkNonce(nonce);
         AEADCipher cipher = decryptCipher.get();

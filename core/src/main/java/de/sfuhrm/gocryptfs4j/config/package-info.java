@@ -13,4 +13,7 @@
  * <p>The classes in this package are implementation details and are not part of
  * the public API; use {@code de.sfuhrm.gocryptfs4j.core.GocryptFs} instead.</p>
  */
+@NullMarked
 package de.sfuhrm.gocryptfs4j.config;
+
+import org.jspecify.annotations.NullMarked;

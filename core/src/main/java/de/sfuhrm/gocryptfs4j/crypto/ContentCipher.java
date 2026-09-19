@@ -1,5 +1,7 @@
 package de.sfuhrm.gocryptfs4j.crypto;
 
+import org.jspecify.annotations.Nullable;
+
 import java.security.GeneralSecurityException;
 import java.util.Arrays;
 
@@ -25,7 +27,7 @@ public interface ContentCipher {
      * @param aad       additional authenticated data, or {@code null}
      * @return the ciphertext followed by the 16-byte tag
      */
-    byte[] encrypt(byte[] plaintext, byte[] nonce, byte[] aad);
+    byte[] encrypt(byte[] plaintext, byte[] nonce, byte @Nullable [] aad);
 
     /**
      * Decrypts {@code ciphertext} (which must include the trailing 16-byte
@@ -37,7 +39,7 @@ public interface ContentCipher {
      * @return the decrypted plaintext
      * @throws GeneralSecurityException on authentication failure
      */
-    byte[] decrypt(byte[] ciphertext, byte[] nonce, byte[] aad) throws GeneralSecurityException;
+    byte[] decrypt(byte[] ciphertext, byte[] nonce, byte @Nullable [] aad) throws GeneralSecurityException;
 
     /**
      * Encrypts {@code inLen} bytes from {@code in} and writes the ciphertext
@@ -59,7 +61,7 @@ public interface ContentCipher {
      * @return the number of bytes written to {@code out}
      */
     default int encrypt(byte[] in, int inOff, int inLen, byte[] nonce,
-                        byte[] aad, int aadOff, int aadLen, byte[] out, int outOff) {
+                        byte @Nullable [] aad, int aadOff, int aadLen, byte[] out, int outOff) {
         byte[] sliceIn = Arrays.copyOfRange(in, inOff, inOff + inLen);
         byte[] sliceAad = (aad == null || aadLen == 0) ? null
                 : Arrays.copyOfRange(aad, aadOff, aadOff + aadLen);
@@ -89,7 +91,7 @@ public interface ContentCipher {
      * @throws GeneralSecurityException on authentication failure
      */
     default int decrypt(byte[] in, int inOff, int inLen, byte[] nonce,
-                        byte[] aad, int aadOff, int aadLen, byte[] out, int outOff)
+                        byte @Nullable [] aad, int aadOff, int aadLen, byte[] out, int outOff)
             throws GeneralSecurityException {
         byte[] sliceIn = Arrays.copyOfRange(in, inOff, inOff + inLen);
         byte[] sliceAad = (aad == null || aadLen == 0) ? null

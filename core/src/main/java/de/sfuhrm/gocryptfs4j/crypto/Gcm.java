@@ -1,5 +1,7 @@
 package de.sfuhrm.gocryptfs4j.crypto;
 
+import org.jspecify.annotations.Nullable;
+
 import javax.crypto.Cipher;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
@@ -70,7 +72,7 @@ public final class Gcm implements ContentCipher {
      * @throws NullPointerException if {@code plaintext} or {@code nonce} is {@code null}
      */
     @Override
-    public byte[] encrypt(byte[] plaintext, byte[] nonce, byte[] aad) {
+    public byte[] encrypt(byte[] plaintext, byte[] nonce, byte @Nullable [] aad) {
         Objects.requireNonNull(plaintext, "plaintext");
         Objects.requireNonNull(nonce, "nonce");
         try {
@@ -99,7 +101,7 @@ public final class Gcm implements ContentCipher {
      * @throws NullPointerException if {@code ciphertext} or {@code nonce} is {@code null}
      */
     @Override
-    public byte[] decrypt(byte[] ciphertext, byte[] nonce, byte[] aad) throws GeneralSecurityException {
+    public byte[] decrypt(byte[] ciphertext, byte[] nonce, byte @Nullable [] aad) throws GeneralSecurityException {
         Objects.requireNonNull(ciphertext, "ciphertext");
         Objects.requireNonNull(nonce, "nonce");
         Cipher cipher = decryptCipher.get();
@@ -127,7 +129,7 @@ public final class Gcm implements ContentCipher {
      */
     @Override
     public int encrypt(byte[] in, int inOff, int inLen, byte[] nonce,
-                       byte[] aad, int aadOff, int aadLen, byte[] out, int outOff) {
+                       byte @Nullable [] aad, int aadOff, int aadLen, byte[] out, int outOff) {
         try {
             Cipher cipher = encryptCipher.get();
             cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(key, "AES"),
@@ -158,7 +160,7 @@ public final class Gcm implements ContentCipher {
      */
     @Override
     public int decrypt(byte[] in, int inOff, int inLen, byte[] nonce,
-                       byte[] aad, int aadOff, int aadLen, byte[] out, int outOff)
+                       byte @Nullable [] aad, int aadOff, int aadLen, byte[] out, int outOff)
             throws GeneralSecurityException {
         Cipher cipher = decryptCipher.get();
         cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "AES"),

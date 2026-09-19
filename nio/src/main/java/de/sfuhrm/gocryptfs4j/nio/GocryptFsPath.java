@@ -2,6 +2,7 @@ package de.sfuhrm.gocryptfs4j.nio;
 
 import de.sfuhrm.gocryptfs4j.core.DirEntry;
 import de.sfuhrm.gocryptfs4j.core.GocryptFs;
+import org.jspecify.annotations.Nullable;
 
 import java.io.File;
 import java.io.IOException;
@@ -142,7 +143,7 @@ final class GocryptFsPath implements Path {
      * @return the root path, or {@code null} for a relative path
      */
     @Override
-    public Path getRoot() {
+    public @Nullable Path getRoot() {
         return absolute ? fs.getRootPath() : null;
     }
 
@@ -152,7 +153,7 @@ final class GocryptFsPath implements Path {
      * @return the file name, or {@code null} if the path has no elements
      */
     @Override
-    public Path getFileName() {
+    public @Nullable Path getFileName() {
         String[] n = names();
         if (n.length == 0) {
             return null;
@@ -166,7 +167,7 @@ final class GocryptFsPath implements Path {
      * @return the parent path, or {@code null}
      */
     @Override
-    public Path getParent() {
+    public @Nullable Path getParent() {
         String[] n = names();
         if (n.length == 0) {
             return null;

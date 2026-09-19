@@ -1,5 +1,7 @@
 package de.sfuhrm.gocryptfs4j.crypto;
 
+import org.jspecify.annotations.Nullable;
+
 import java.security.GeneralSecurityException;
 import java.util.Arrays;
 import java.util.Objects;
@@ -114,7 +116,7 @@ public final class ContentEnc {
      * @param fileId  the 16-byte file id, or {@code null}
      * @return the additional authenticated data
      */
-    private static byte[] concatAD(long blockNo, byte[] fileId) {
+    private static byte[] concatAD(long blockNo, byte @Nullable [] fileId) {
         byte[] aad = new byte[8 + (fileId == null ? 0 : fileId.length)];
         fillAad(blockNo, fileId, aad);
         return aad;
@@ -129,7 +131,7 @@ public final class ContentEnc {
      * @param aad     the destination buffer
      * @return the number of bytes written
      */
-    private static int fillAad(long blockNo, byte[] fileId, byte[] aad) {
+    private static int fillAad(long blockNo, byte @Nullable [] fileId, byte[] aad) {
         for (int i = 0; i < 8; i++) {
             aad[7 - i] = (byte) (blockNo >>> (i * 8));
         }
@@ -150,7 +152,7 @@ public final class ContentEnc {
      * @throws NullPointerException if {@code plaintext} is {@code null}
      * @throws IllegalArgumentException if {@code blockNo} is negative
      */
-    public byte[] encryptBlock(byte[] plaintext, long blockNo, byte[] fileId) {
+    public byte[] encryptBlock(byte[] plaintext, long blockNo, byte @Nullable [] fileId) {
         Objects.requireNonNull(plaintext, "plaintext");
         if (blockNo < 0) {
             throw new IllegalArgumentException("negative block number: " + blockNo);
@@ -172,7 +174,7 @@ public final class ContentEnc {
      * @throws NullPointerException if {@code plaintext} or {@code nonce} is {@code null}
      * @throws IllegalArgumentException if {@code blockNo} is negative or {@code nonce} has the wrong length
      */
-    public byte[] encryptBlock(byte[] plaintext, long blockNo, byte[] fileId, byte[] nonce) {
+    public byte[] encryptBlock(byte[] plaintext, long blockNo, byte @Nullable [] fileId, byte[] nonce) {
         Objects.requireNonNull(plaintext, "plaintext");
         Objects.requireNonNull(nonce, "nonce");
         if (blockNo < 0) {
@@ -213,7 +215,7 @@ public final class ContentEnc {
      * @throws IllegalArgumentException if {@code plainLen} or {@code firstBlockNo} is negative
      */
     public int encryptBlocks(byte[] plain, int plainOff, int plainLen, long firstBlockNo,
-                             byte[] fileId, byte[] out, int outOff) {
+                             byte @Nullable [] fileId, byte[] out, int outOff) {
         Objects.requireNonNull(plain, "plain");
         Objects.requireNonNull(out, "out");
         if (plainLen < 0) {
@@ -254,7 +256,7 @@ public final class ContentEnc {
      * @throws NullPointerException if {@code ciphertext} is {@code null}
      * @throws IllegalArgumentException if {@code blockNo} is negative or the block is malformed
      */
-    public byte[] decryptBlock(byte[] ciphertext, long blockNo, byte[] fileId) throws GeneralSecurityException {
+    public byte[] decryptBlock(byte[] ciphertext, long blockNo, byte @Nullable [] fileId) throws GeneralSecurityException {
         Objects.requireNonNull(ciphertext, "ciphertext");
         if (blockNo < 0) {
             throw new IllegalArgumentException("negative block number: " + blockNo);
@@ -291,7 +293,7 @@ public final class ContentEnc {
      * @throws NullPointerException if {@code ciphertext} is {@code null}
      * @throws IllegalArgumentException if {@code firstBlockNo} is negative
      */
-    public byte[] decryptBlocks(byte[] ciphertext, long firstBlockNo, byte[] fileId) throws GeneralSecurityException {
+    public byte[] decryptBlocks(byte[] ciphertext, long firstBlockNo, byte @Nullable [] fileId) throws GeneralSecurityException {
         Objects.requireNonNull(ciphertext, "ciphertext");
         if (firstBlockNo < 0) {
             throw new IllegalArgumentException("negative block number: " + firstBlockNo);
@@ -328,7 +330,7 @@ public final class ContentEnc {
      * @throws IllegalArgumentException if {@code cipherLen} or {@code firstBlockNo} is negative or a block is malformed
      */
     public int decryptBlocks(byte[] cipherBuf, int cipherOff, int cipherLen, long firstBlockNo,
-                             byte[] fileId, byte[] out, int outOff) throws GeneralSecurityException {
+                             byte @Nullable [] fileId, byte[] out, int outOff) throws GeneralSecurityException {
         Objects.requireNonNull(cipherBuf, "cipherBuf");
         Objects.requireNonNull(out, "out");
         if (cipherLen < 0) {
