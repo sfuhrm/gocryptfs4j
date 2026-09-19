@@ -2,6 +2,7 @@ package de.sfuhrm.gocryptfs4j.crypto;
 
 import org.bouncycastle.crypto.engines.AESEngine;
 import org.bouncycastle.crypto.macs.CMac;
+import org.bouncycastle.crypto.modes.CTRModeCipher;
 import org.bouncycastle.crypto.modes.SICBlockCipher;
 import org.bouncycastle.crypto.params.KeyParameter;
 import org.bouncycastle.crypto.params.ParametersWithIV;
@@ -44,11 +45,11 @@ public final class AesSiv implements ContentCipher {
      * disturb another cipher's scratch.
      */
     private final ThreadLocal<CMac> cmacScratch = ThreadLocal.withInitial(
-            () -> new CMac(new AESEngine()));
+            () -> new CMac(AESEngine.newInstance()));
 
     /** A per-instance, per-thread SIC (CTR) scratch, reused because it is not thread-safe. */
-    private final ThreadLocal<SICBlockCipher> ctrScratch = ThreadLocal.withInitial(
-            () -> new SICBlockCipher(new AESEngine()));
+    private final ThreadLocal<CTRModeCipher> ctrScratch = ThreadLocal.withInitial(
+            () -> SICBlockCipher.newInstance(AESEngine.newInstance()));
 
     /**
      * Creates an AES-SIV instance.
@@ -233,7 +234,7 @@ public final class AesSiv implements ContentCipher {
      * @param cipher the SIC (CTR) scratch instance to use
      * @return the encrypted/decrypted data
      */
-    static byte[] ctr(byte[] k2, byte[] siv, byte[] data, SICBlockCipher cipher) {
+    static byte[] ctr(byte[] k2, byte[] siv, byte[] data, CTRModeCipher cipher) {
         byte[] q = siv.clone();
         q[8] &= 0x7f;
         q[12] &= 0x7f;

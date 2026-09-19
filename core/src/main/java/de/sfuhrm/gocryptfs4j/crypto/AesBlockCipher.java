@@ -1,5 +1,6 @@
 package de.sfuhrm.gocryptfs4j.crypto;
 
+import org.bouncycastle.crypto.MultiBlockCipher;
 import org.bouncycastle.crypto.engines.AESEngine;
 import org.bouncycastle.crypto.params.KeyParameter;
 
@@ -17,10 +18,10 @@ import java.util.Objects;
 public final class AesBlockCipher implements BlockCipher {
 
     /** The AES engine used for encryption. */
-    private final AESEngine encrypt = new AESEngine();
+    private final MultiBlockCipher encrypt = AESEngine.newInstance();
 
     /** The AES engine used for decryption. */
-    private final AESEngine decrypt = new AESEngine();
+    private final MultiBlockCipher decrypt = AESEngine.newInstance();
 
     /** Whether this cipher has been wiped. */
     private volatile boolean wiped;

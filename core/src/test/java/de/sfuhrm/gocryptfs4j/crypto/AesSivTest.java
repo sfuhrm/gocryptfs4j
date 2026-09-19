@@ -7,6 +7,7 @@ import java.security.GeneralSecurityException;
 import java.util.Arrays;
 import org.bouncycastle.crypto.engines.AESEngine;
 import org.bouncycastle.crypto.macs.CMac;
+import org.bouncycastle.crypto.modes.CTRModeCipher;
 import org.bouncycastle.crypto.modes.SICBlockCipher;
 import org.bouncycastle.util.encoders.Hex;
 
@@ -27,11 +28,11 @@ class AesSivTest {
                 "101112131415161718191a1b1c1d1e1f2021222324252627");
         byte[] plaintext = Hex.decode("112233445566778899aabbccddee");
 
-        CMac mac = new CMac(new AESEngine());
+        CMac mac = new CMac(AESEngine.newInstance());
         byte[] siv = AesSiv.s2v(k1, new byte[][]{ad}, plaintext, mac);
         assertArrayEquals(Hex.decode("85632d07c6e8f37f950acd320a2ecc93"), siv);
 
-        SICBlockCipher ctr = new SICBlockCipher(new AESEngine());
+        CTRModeCipher ctr = SICBlockCipher.newInstance(AESEngine.newInstance());
         byte[] ct = AesSiv.ctr(k2, siv, plaintext, ctr);
         assertArrayEquals(Hex.decode("40c02b9690c4dc04daef7f6afe5c"), ct);
     }
