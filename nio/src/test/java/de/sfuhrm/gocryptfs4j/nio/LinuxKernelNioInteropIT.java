@@ -237,7 +237,8 @@ class LinuxKernelNioInteropIT {
                 Files.write(target, Files.readAllBytes(p));
                 Files.setLastModifiedTime(target, attrs.lastModifiedTime());
             } else if (attrs.isSymbolicLink()) {
-                // The NIO view does not expose symlinks; the kernel 1.0 tree has none.
+                // The kernel 1.0 tree has none, but the NIO view supports them.
+                Files.createSymbolicLink(target, Files.readSymbolicLink(p));
             }
         }
     }

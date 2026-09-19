@@ -305,6 +305,41 @@ public final class GocryptFsProvider extends FileSystemProvider {
     }
 
     // ------------------------------------------------------------------
+    // Symbolic links
+    // ------------------------------------------------------------------
+
+    /**
+     * Creates a symbolic link pointing to {@code target}.
+     *
+     * <p>The target is stored as given and need not exist; a relative target is
+     * resolved against the link's parent directory when the link is followed.</p>
+     *
+     * @throws NullPointerException if {@code link} or {@code target} is {@code null}
+     */
+    @Override
+    public void createSymbolicLink(Path link, Path target, FileAttribute<?>... attrs)
+            throws IOException {
+        Objects.requireNonNull(link, "link");
+        Objects.requireNonNull(target, "target");
+        GocryptFsPath l = toAbsolute(link);
+        core(l).createSymlink(l.toString(), target.toString());
+    }
+
+    /**
+     * Reads the target of a symbolic link.
+     *
+     * @throws NullPointerException if {@code link} is {@code null}
+     * @throws java.nio.file.NotLinkException if {@code link} is not a symbolic link
+     */
+    @Override
+    public Path readSymbolicLink(Path link) throws IOException {
+        Objects.requireNonNull(link, "link");
+        GocryptFsPath l = toAbsolute(link);
+        String target = core(l).readSymlinkTarget(l.toString());
+        return l.getFileSystem().getPath(target);
+    }
+
+    // ------------------------------------------------------------------
     // Copy / move
     // ------------------------------------------------------------------
 

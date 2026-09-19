@@ -14,6 +14,7 @@ import java.nio.file.FileSystem;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
+import java.nio.file.NotLinkException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
@@ -206,9 +207,60 @@ class GocryptFsProviderOperationsTest {
     }
 
     @Test
-    void creatingSymbolicLinkIsUnsupported() {
-        assertThrows(UnsupportedOperationException.class,
-                () -> Files.createSymbolicLink(nio.getPath("/new-link"), nio.getPath("/file.txt")));
+    void createAndReadSymbolicLink() throws IOException {
+        Path target = nio.getPath("/file.txt");
+        Path link = nio.getPath("/created-link");
+        Files.createSymbolicLink(link, target);
+
+        assertTrue(Files.isSymbolicLink(link));
+        assertEquals(target, Files.readSymbolicLink(link));
+        assertEquals(target, link.toRealPath());
+    }
+
+    @Test
+    void readSymbolicLinkOfCoreCreatedLink() throws IOException {
+        Path target = Files.readSymbolicLink(nio.getPath("/link"));
+        assertEquals(nio.getPath("/file.txt"), target);
+        assertEquals("/file.txt", target.toString());
+    }
+
+    @Test
+    void createRelativeSymbolicLink() throws IOException {
+        Path link = nio.getPath("/relative-link");
+        Files.createSymbolicLink(link, nio.getPath("file.txt"));
+
+        Path target = Files.readSymbolicLink(link);
+        assertFalse(target.isAbsolute());
+        assertEquals("file.txt", target.toString());
+        assertEquals(nio.getPath("/file.txt"), link.toRealPath());
+    }
+
+    @Test
+    void createDanglingSymbolicLink() throws IOException {
+        Path target = nio.getPath("/does-not-exist");
+        Path link = nio.getPath("/dangling-link");
+        Files.createSymbolicLink(link, target);
+
+        assertTrue(Files.isSymbolicLink(link));
+        assertEquals(target, Files.readSymbolicLink(link));
+    }
+
+    @Test
+    void createSymbolicLinkOnExistingPathFails() {
+        assertThrows(FileAlreadyExistsException.class,
+                () -> Files.createSymbolicLink(nio.getPath("/file.txt"), nio.getPath("/other")));
+    }
+
+    @Test
+    void readSymbolicLinkOnRegularFileFails() {
+        assertThrows(NotLinkException.class,
+                () -> Files.readSymbolicLink(nio.getPath("/file.txt")));
+    }
+
+    @Test
+    void readSymbolicLinkOnMissingPathFails() {
+        assertThrows(NoSuchFileException.class,
+                () -> Files.readSymbolicLink(nio.getPath("/missing-link")));
     }
 
     @Test
