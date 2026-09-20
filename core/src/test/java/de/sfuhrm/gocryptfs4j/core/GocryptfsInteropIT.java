@@ -1,5 +1,6 @@
 package de.sfuhrm.gocryptfs4j.core;
 
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -39,6 +40,15 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 class GocryptfsInteropIT {
 
     private static final String PASSWORD = "testpass123";
+
+    /**
+     * A password with German umlauts. Its UTF-8 encoding ({@code C3 BC} for
+     * {@code ü}, {@code C3 9F} for {@code ß}, ...) deliberately differs from the
+     * low-byte truncation used by {@code ConfigFile.charsToBytes()}: gocryptfs
+     * hashes the raw bytes it receives, so only an encoding-accurate conversion
+     * can interoperate.
+     */
+    private static final String UMLAUT_PASSWORD = "Grüße-Öl-äöü";
 
     @TempDir
     Path tmp;
@@ -170,6 +180,60 @@ class GocryptfsInteropIT {
         }
     }
 
+    /**
+     * gocryptfs creates a filesystem protected by a UTF-8 umlaut password; Java
+     * must be able to unlock it with the same password as a {@code char[]}.
+     *
+     * <p>This is the regression test for the {@code charsToBytes()} encoding:
+     * gocryptfs feeds the raw UTF-8 bytes of the passfile to scrypt, while the
+     * current low-byte truncation produces Latin-1 bytes instead.</p>
+     */
+    @Test
+    void gocryptfsUtf8PasswordJavaReads() throws Exception {
+        assumeGocryptfsBinary();
+
+        Path cipherDir = Files.createDirectory(tmp.resolve("cipher-utf8-java"));
+        Path passfile = writeUmlautPassfile();
+
+        run("gocryptfs", "-init", "-passfile", passfile.toString(), cipherDir.toString());
+
+        try (GocryptFs fs = GocryptFs.open(cipherDir, UMLAUT_PASSWORD.toCharArray())) {
+            assertTrue(fs.list("/").isEmpty(), "an -init filesystem has an empty root");
+        }
+    }
+
+    /**
+     * Java creates a filesystem protected by a UTF-8 umlaut password; gocryptfs
+     * must be able to mount and read it using a UTF-8 passfile.
+     */
+    @Test
+    void javaUtf8PasswordGocryptfsReads() throws Exception {
+        assumeGocryptfs();
+
+        Path cipherDir = Files.createDirectory(tmp.resolve("cipher-utf8-gocryptfs"));
+        Path passfile = writeUmlautPassfile();
+
+        try (GocryptFs fs = GocryptFs.create(cipherDir, UMLAUT_PASSWORD.toCharArray())) {
+            fs.createFile("/hello.txt");
+            fs.write("/hello.txt", 0, "hello umlaut".getBytes(StandardCharsets.UTF_8));
+        }
+
+        Path mount = Files.createDirectory(tmp.resolve("mount-utf8"));
+        Process mountProc = start("gocryptfs", "-passfile", passfile.toString(),
+                cipherDir.toString(), mount.toString());
+        try {
+            waitForMount(mount);
+
+            assertEquals("hello umlaut",
+                    new String(Files.readAllBytes(mount.resolve("hello.txt")), StandardCharsets.UTF_8));
+        } finally {
+            unmount(mount);
+            if (!mountProc.waitFor(30, TimeUnit.SECONDS)) {
+                mountProc.destroyForcibly();
+            }
+        }
+    }
+
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
@@ -201,7 +265,21 @@ class GocryptfsInteropIT {
         return p;
     }
 
+    /** Writes the umlaut password as raw UTF-8 bytes, exactly what gocryptfs reads. */
+    private Path writeUmlautPassfile() throws IOException {
+        Path p = tmp.resolve("passfile-umlaut-" + System.nanoTime());
+        Files.write(p, UMLAUT_PASSWORD.getBytes(StandardCharsets.UTF_8));
+        return p;
+    }
+
     private static void assumeGocryptfs() throws InterruptedException, IOException {
+        assumeGocryptfsBinary();
+        boolean haveFuse = Files.exists(Paths.get("/dev/fuse"));
+        assumeTrue(haveFuse, "FUSE (/dev/fuse) not available");
+    }
+
+    /** Requires only the gocryptfs binary; {@code -init} needs no FUSE mount. */
+    private static void assumeGocryptfsBinary() throws InterruptedException {
         boolean haveBinary;
         try {
             Process p = new ProcessBuilder("gocryptfs", "-version")
@@ -210,9 +288,7 @@ class GocryptfsInteropIT {
         } catch (IOException e) {
             haveBinary = false;
         }
-        boolean haveFuse = Files.exists(Paths.get("/dev/fuse"));
         assumeTrue(haveBinary, "gocryptfs binary not found on PATH");
-        assumeTrue(haveFuse, "FUSE (/dev/fuse) not available");
     }
 
     private static Process start(String... cmd) throws IOException {

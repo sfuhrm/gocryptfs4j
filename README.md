@@ -184,6 +184,10 @@ keys from memory on `close()`. Other operations include `size`, `truncate`,
 streaming decrypting `InputStream`) and `openWrite` (a streaming encrypting
 `OutputStream`).
 
+Passwords are encoded as UTF-8 before they reach scrypt, matching the raw bytes
+gocryptfs reads from a UTF-8 terminal, passfile or extpass program. Non-ASCII
+passwords, such as German umlauts, therefore interoperate with gocryptfs.
+
 ### 2. NIO `FileSystemProvider` (`nio` module)
 
 The provider is registered as a service, so it can be obtained via

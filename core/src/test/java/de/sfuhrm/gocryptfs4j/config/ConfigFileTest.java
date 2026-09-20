@@ -9,6 +9,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -143,6 +144,32 @@ class ConfigFileTest {
                 ContentCipherType.AES_GCM);
         assertThrows(IllegalArgumentException.class,
                 () -> cf.reencryptMasterKey(new byte[16], "pw".toCharArray()));
+    }
+
+    @Test
+    void passwordIsEncodedAsUtf8() throws Exception {
+        // German umlauts: UTF-8 is multi-byte and differs from low-byte truncation.
+        String password = "Gr\u00fc\u00dfe-\u00d6l-\u00e4\u00f6\u00fc";
+        byte[] utf8 = password.getBytes(StandardCharsets.UTF_8);
+        byte[] masterKey = Keys.randomBytes(Constants.KEY_LEN);
+
+        // A config protected with the raw UTF-8 bytes (what gocryptfs reads
+        // from a UTF-8 passfile) must unlock via the char[] API ...
+        ConfigFile fromBytes = ConfigFile.create(masterKey, utf8, false,
+                ContentCipherType.AES_GCM, null);
+        assertArrayEquals(masterKey, fromBytes.decryptMasterKey(password.toCharArray()));
+
+        // ... and the reverse: created from char[], unlocked with UTF-8 bytes.
+        ConfigFile fromChars = ConfigFile.create(masterKey, password.toCharArray(), false,
+                ContentCipherType.AES_GCM);
+        assertArrayEquals(masterKey, fromChars.decryptMasterKey(utf8));
+
+        // The former low-byte (Latin-1) interpretation must no longer unlock it.
+        byte[] lowByte = new byte[password.length()];
+        for (int i = 0; i < password.length(); i++) {
+            lowByte[i] = (byte) password.charAt(i);
+        }
+        assertThrows(IOException.class, () -> fromBytes.decryptMasterKey(lowByte));
     }
 
     @Test

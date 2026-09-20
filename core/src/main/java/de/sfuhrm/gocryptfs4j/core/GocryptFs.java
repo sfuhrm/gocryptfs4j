@@ -45,12 +45,14 @@ import java.util.Objects;
  * <p>Sensitive input buffers supplied by the caller &mdash; the password
  * {@code char[]} and the raw master-key {@code byte[]} &mdash; are read but
  * neither retained nor wiped by this class: the caller keeps ownership of them
- * and should clear them once they are no longer needed. The master key that the
- * returned instance derives, and every sub-key derived from it, are owned by
- * that instance and wiped on {@link #close()}. A raw master-key array is cloned
- * internally, so closing the filesystem never modifies the caller's array.
- * Secrets obtained from a {@link Fido2Token} are owned and wiped by this
- * class.</p>
+ * and should clear them once they are no longer needed. A password is encoded
+ * as UTF-8 before it is passed to scrypt, matching the raw bytes gocryptfs
+ * reads from a UTF-8 terminal, passfile or extpass program. The master key that
+ * the returned instance derives, and every sub-key derived from it, are owned
+ * by that instance and wiped on {@link #close()}. A raw master-key array is
+ * cloned internally, so closing the filesystem never modifies the caller's
+ * array. Secrets obtained from a {@link Fido2Token} are owned and wiped by
+ * this class.</p>
  *
  * <pre>{@code
  * try (GocryptFs fs = GocryptFs.open(Paths.get("/data/cipher"), "password".toCharArray())) {
@@ -151,9 +153,9 @@ public final class GocryptFs implements AutoCloseable {
      * {@code password}.
      *
      * @param cipherDir the ciphertext directory
-     * @param password  the password to unlock the master key with; read but
-     *                  neither retained nor wiped by this class, so the caller
-     *                  should clear it when it is no longer needed
+     * @param password  the password to unlock the master key with, encoded as
+     *                  UTF-8; read but neither retained nor wiped by this class,
+     *                  so the caller should clear it when it is no longer needed
      * @return the opened filesystem
      * @throws IOException if the config is missing, the password is wrong or the filesystem is corrupt
      * @throws NullPointerException if {@code cipherDir} or {@code password} is {@code null}
@@ -251,9 +253,9 @@ public final class GocryptFs implements AutoCloseable {
      * and be empty) and opens it.
      *
      * @param cipherDir the ciphertext directory (must exist and be empty)
-     * @param password  the password to protect the master key with; read but
-     *                  neither retained nor wiped by this class, so the caller
-     *                  should clear it when it is no longer needed
+     * @param password  the password to protect the master key with, encoded as
+     *                  UTF-8; read but neither retained nor wiped by this class,
+     *                  so the caller should clear it when it is no longer needed
      * @return the opened filesystem
      * @throws IOException on filesystem errors
      */
@@ -265,10 +267,10 @@ public final class GocryptFs implements AutoCloseable {
      * Creates a new filesystem, optionally with plaintext (unencrypted) names.
      *
      * @param cipherDir      the ciphertext directory (must exist and be empty)
-     * @param password       the password to protect the master key with; read
-     *                       but neither retained nor wiped by this class, so
-     *                       the caller should clear it when it is no longer
-     *                       needed
+     * @param password       the password to protect the master key with, encoded
+     *                       as UTF-8; read but neither retained nor wiped by this
+     *                       class, so the caller should clear it when it is no
+     *                       longer needed
      * @param plaintextNames whether to store file names unencrypted
      * @return the opened filesystem
      * @throws IOException on filesystem errors
@@ -282,10 +284,10 @@ public final class GocryptFs implements AutoCloseable {
      * and a custom content cipher.
      *
      * @param cipherDir      the ciphertext directory (must exist and be empty)
-     * @param password       the password to protect the master key with; read
-     *                       but neither retained nor wiped by this class, so
-     *                       the caller should clear it when it is no longer
-     *                       needed
+     * @param password       the password to protect the master key with, encoded
+     *                       as UTF-8; read but neither retained nor wiped by this
+     *                       class, so the caller should clear it when it is no
+     *                       longer needed
      * @param plaintextNames whether to store file names unencrypted
      * @param cipherType     the content-encryption cipher
      * @return the opened filesystem

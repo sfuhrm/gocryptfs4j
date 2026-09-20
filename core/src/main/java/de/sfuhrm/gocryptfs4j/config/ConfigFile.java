@@ -16,6 +16,8 @@ import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.nio.CharBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -34,10 +36,12 @@ import java.util.Properties;
  *
  * <p>Sensitive inputs passed to this class &mdash; passwords, raw secrets and
  * master keys &mdash; are read but neither retained nor wiped: the caller keeps
- * ownership of them and should clear them when they are no longer needed. The
- * decrypted master key is likewise not stored by this class; the caller (for
- * example {@code de.sfuhrm.gocryptfs4j.core.GocryptFs}) is responsible for
- * holding and eventually wiping it.</p>
+ * ownership of them and should clear them when they are no longer needed. A
+ * password supplied as a {@code char[]} is encoded as UTF-8, matching the raw
+ * bytes gocryptfs reads from a UTF-8 terminal, passfile or extpass program.
+ * The decrypted master key is likewise not stored by this class; the caller
+ * (for example {@code de.sfuhrm.gocryptfs4j.core.GocryptFs}) is responsible
+ * for holding and eventually wiping it.</p>
  */
 public final class ConfigFile {
 
@@ -203,11 +207,13 @@ public final class ConfigFile {
     /**
      * Derives the scrypt key from the password and decrypts the master key.
      *
-     * <p>The supplied array is read but not wiped: the caller retains ownership
-     * and should clear it when it is no longer needed.</p>
+     * <p>The password characters are encoded as UTF-8, matching the raw bytes
+     * gocryptfs reads from a UTF-8 terminal, passfile or extpass program. The
+     * supplied array is read but not wiped: the caller retains ownership and
+     * should clear it when it is no longer needed.</p>
      *
-     * @param password the password to unlock the master key with; read but not
-     *                 wiped by this method
+     * @param password the password to unlock the master key with, encoded as
+     *                 UTF-8; read but not wiped by this method
      * @return the 32-byte master key
      * @throws IOException if the password is wrong or the config is malformed
      * @throws NullPointerException if {@code password} is {@code null}
@@ -273,16 +279,28 @@ public final class ConfigFile {
     }
 
     /**
-     * Converts a character array to a byte array, keeping the low byte of each
-     * character.
+     * Encodes a password character array as UTF-8.
+     *
+     * <p>gocryptfs hashes the raw bytes it receives from a terminal, passfile or
+     * extpass program; on a UTF-8 system those are the UTF-8 bytes of the typed
+     * password. Encoding the characters as UTF-8 is therefore what makes
+     * non-ASCII passwords (for example German umlauts) interoperate. An
+     * earlier implementation kept only the low byte of each {@code char},
+     * which silently truncated and collided passwords above U+00FF.</p>
+     *
+     * <p>The encoding is written straight into a mutable byte array; no
+     * intermediate {@link String} is created, so the password never lingers in
+     * an immutable object that cannot be wiped.</p>
      *
      * @param chars the characters
-     * @return the converted bytes
+     * @return the UTF-8 encoded bytes
      */
     private static byte[] charsToBytes(char[] chars) {
-        byte[] out = new byte[chars.length];
-        for (int i = 0; i < chars.length; i++) {
-            out[i] = (byte) chars[i];
+        ByteBuffer encoded = StandardCharsets.UTF_8.encode(CharBuffer.wrap(chars));
+        byte[] out = new byte[encoded.remaining()];
+        encoded.get(out);
+        if (encoded.hasArray()) {
+            Keys.wipe(encoded.array());
         }
         return out;
     }
@@ -300,7 +318,7 @@ public final class ConfigFile {
      * persist the change.</p>
      *
      * @param masterKey the 32-byte master key
-     * @param password  the new password
+     * @param password  the new password, encoded as UTF-8
      * @throws NullPointerException if {@code masterKey} or {@code password} is {@code null}
      * @throws IllegalArgumentException if {@code masterKey} is not 32 bytes long
      */
@@ -518,7 +536,8 @@ public final class ConfigFile {
      * names if {@code plaintextNames} is set.
      *
      * @param masterKey      the 32-byte master key
-     * @param password       the password to protect the master key with
+     * @param password       the password to protect the master key with, encoded
+     *                       as UTF-8
      * @param plaintextNames whether to store file names unencrypted
      * @return the created config file
      */
@@ -533,7 +552,8 @@ public final class ConfigFile {
      * {@code plaintextNames} is set. Content encryption uses {@code cipherType}.
      *
      * @param masterKey      the 32-byte master key
-     * @param password       the password to protect the master key with
+     * @param password       the password to protect the master key with, encoded
+     *                       as UTF-8
      * @param plaintextNames whether to store file names unencrypted
      * @param cipherType     the content-encryption cipher
      * @return the created config file
