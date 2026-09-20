@@ -625,10 +625,12 @@ public final class GocryptFs implements AutoCloseable {
      * @throws IOException on filesystem errors
      * @throws NullPointerException if {@code plainPath} is {@code null}
      * @throws IllegalArgumentException if the path contains a {@code ..} component
+     *                                  or targets the reserved {@code gocryptfs.conf} control file
      */
     public Resolved resolve(String plainPath) throws IOException {
         Objects.requireNonNull(plainPath, "plainPath");
         List<String> comps = normalize(plainPath);
+        checkNotControlFile(comps);
         Path cur = cipherRoot;
         byte[] curIV = readDirIV(cur);
         for (int i = 0; i < comps.size() - 1; i++) {
@@ -653,6 +655,7 @@ public final class GocryptFs implements AutoCloseable {
      */
     private Resolved resolveParent(String plainPath) throws IOException {
         List<String> comps = normalize(plainPath);
+        checkNotControlFile(comps);
         if (comps.isEmpty()) {
             throw new IOException("invalid path: " + plainPath);
         }
@@ -666,6 +669,25 @@ public final class GocryptFs implements AutoCloseable {
         }
         String cName = cipherNameFor(plainName, curIV);
         return new Resolved(cur.resolve(cName), cur, curIV, cName, plainName);
+    }
+
+    /**
+     * Rejects a plaintext path that would map to a reserved control file.
+     *
+     * <p>Encrypted file names are base64url and can never equal a control-file
+     * name (which contains a dot), so the collision only exists in
+     * plaintext-names mode, where the cipher name equals the plaintext name.
+     * Only the top-level {@code /gocryptfs.conf} is reserved; a same-named
+     * entry in a subdirectory is an ordinary file.</p>
+     *
+     * @param comps the normalized plaintext path components
+     * @throws IllegalArgumentException if the path targets the config file
+     */
+    private void checkNotControlFile(List<String> comps) {
+        if (plaintextNames && !comps.isEmpty()
+                && comps.get(0).equals(Constants.CONF_DEFAULT_NAME)) {
+            throw new IllegalArgumentException("reserved control file: " + Constants.CONF_DEFAULT_NAME);
+        }
     }
 
     /**

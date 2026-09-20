@@ -316,6 +316,40 @@ class GocryptFsTest {
     }
 
     @Test
+    void plaintextNamesRejectsControlFilePath() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        Path conf = cipherDir.resolve("gocryptfs.conf");
+
+        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray(), true)) {
+            byte[] before = Files.readAllBytes(conf);
+
+            // The root listing hides the control file ...
+            assertTrue(fs.list("/").stream()
+                    .noneMatch(e -> e.plainName().equals("gocryptfs.conf")));
+
+            // ... and the path-based APIs must refuse to touch it.
+            assertThrows(IllegalArgumentException.class, () -> fs.readAll("/gocryptfs.conf"));
+            assertThrows(IllegalArgumentException.class,
+                    () -> fs.write("/gocryptfs.conf", 0, new byte[]{1}));
+            assertThrows(IllegalArgumentException.class, () -> fs.delete("/gocryptfs.conf"));
+            assertThrows(IllegalArgumentException.class, () -> fs.createFile("/gocryptfs.conf"));
+            assertThrows(IllegalArgumentException.class, () -> fs.mkdir("/gocryptfs.conf"));
+            assertThrows(IllegalArgumentException.class, () -> fs.list("/gocryptfs.conf"));
+            assertThrows(IllegalArgumentException.class, () -> fs.openRead("/gocryptfs.conf"));
+
+            // The control file is untouched.
+            assertArrayEquals(before, Files.readAllBytes(conf));
+
+            // A same-named entry below the root is an ordinary file.
+            fs.mkdir("/sub");
+            fs.createFile("/sub/gocryptfs.conf");
+            assertTrue(fs.list("/sub").stream()
+                    .anyMatch(e -> e.plainName().equals("gocryptfs.conf")));
+        }
+    }
+
+    @Test
     void longFileNames() throws IOException {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
