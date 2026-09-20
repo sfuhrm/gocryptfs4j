@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.bouncycastle.util.encoders.Hex;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class EmeTest {
 
@@ -35,5 +36,19 @@ class EmeTest {
             byte[] dec = eme.decrypt(tweak, enc);
             assertArrayEquals(data, dec, "length " + len);
         }
+    }
+
+    @Test
+    void wipeMakesCipherUnusable() {
+        byte[] key = Keys.randomBytes(32);
+        byte[] tweak = Keys.randomBytes(16);
+        byte[] input = Keys.randomBytes(16);
+        Eme eme = new Eme(new AesBlockCipher(key));
+
+        eme.wipe();
+        eme.wipe();
+
+        assertThrows(IllegalStateException.class, () -> eme.encrypt(tweak, input));
+        assertThrows(IllegalStateException.class, () -> eme.decrypt(tweak, input));
     }
 }

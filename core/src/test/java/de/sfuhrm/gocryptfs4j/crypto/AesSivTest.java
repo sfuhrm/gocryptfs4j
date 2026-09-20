@@ -116,6 +116,13 @@ class AesSivTest {
         assertThrows(IllegalStateException.class, () -> cipher.encrypt(plaintext, nonce, null));
         assertThrows(IllegalStateException.class, () -> cipher.decrypt(ct, nonce, null));
 
+        // The buffer-based overloads must be invalidated as well.
+        byte[] out = new byte[plaintext.length + Constants.AES_BLOCK_SIZE];
+        assertThrows(IllegalStateException.class, () -> cipher.encrypt(
+                plaintext, 0, plaintext.length, nonce, null, 0, 0, out, 0));
+        assertThrows(IllegalStateException.class, () -> cipher.decrypt(
+                ct, 0, ct.length, nonce, null, 0, 0, new byte[plaintext.length], 0));
+
         // The thread-local scratch was dropped, not left broken: a fresh
         // instance on the same thread still works.
         AesSiv fresh = new AesSiv(key);

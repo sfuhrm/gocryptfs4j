@@ -4,10 +4,17 @@ import org.junit.jupiter.api.Test;
 
 import javax.crypto.AEADBadTagException;
 import java.security.GeneralSecurityException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import org.bouncycastle.util.encoders.Hex;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class GcmTest {
 
@@ -104,9 +111,53 @@ class GcmTest {
         assertThrows(IllegalStateException.class, () -> gcm.encrypt(plaintext, nonce, null));
         assertThrows(IllegalStateException.class, () -> gcm.decrypt(ct, nonce, null));
 
+        // The buffer-based overloads must be invalidated as well.
+        byte[] out = new byte[plaintext.length + Constants.AUTH_TAG_LEN];
+        assertThrows(IllegalStateException.class, () -> gcm.encrypt(
+                plaintext, 0, plaintext.length, nonce, null, 0, 0, out, 0));
+        assertThrows(IllegalStateException.class, () -> gcm.decrypt(
+                ct, 0, ct.length, nonce, null, 0, 0, new byte[plaintext.length], 0));
+
         // A fresh instance on the same thread still works.
         Gcm fresh = new Gcm(key);
         assertArrayEquals(plaintext,
                 fresh.decrypt(fresh.encrypt(plaintext, nonce, null), nonce, null));
+    }
+
+    @Test
+    void wipeInvalidatesCipherForOtherThreads() throws Exception {
+        Gcm gcm = new Gcm(Keys.randomBytes(Constants.KEY_LEN));
+        byte[] nonce = Keys.randomBytes(12);
+        byte[] plaintext = Keys.randomBytes(16);
+        CountDownLatch used = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicReference<Throwable> unexpected = new AtomicReference<>();
+        AtomicBoolean invalidated = new AtomicBoolean();
+
+        Thread worker = new Thread(() -> {
+            try {
+                // Create this thread's scratch cipher before the wipe.
+                gcm.encrypt(plaintext, nonce, null);
+                used.countDown();
+                release.await();
+                try {
+                    gcm.encrypt(plaintext, nonce, null);
+                } catch (IllegalStateException e) {
+                    invalidated.set(true);
+                }
+            } catch (Throwable t) {
+                unexpected.set(t);
+            }
+        });
+        worker.start();
+
+        assertTrue(used.await(5, TimeUnit.SECONDS), "worker did not use the cipher");
+        gcm.wipe();
+        release.countDown();
+        worker.join(5000);
+
+        assertFalse(worker.isAlive(), "worker did not finish");
+        assertNull(unexpected.get(), () -> "unexpected worker failure: " + unexpected.get());
+        assertTrue(invalidated.get(), "wipe must invalidate the cipher for other threads");
     }
 }

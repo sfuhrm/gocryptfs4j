@@ -101,6 +101,21 @@ class GocryptFsTest {
     }
 
     @Test
+    void closeInvalidatesCryptoState() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray());
+        fs.createFile("/f.txt");
+        fs.write("/f.txt", 0, "data".getBytes(StandardCharsets.UTF_8));
+        fs.close();
+
+        assertThrows(IllegalStateException.class, () -> fs.readAll("/f.txt"));
+        assertThrows(IllegalStateException.class,
+                () -> fs.write("/f.txt", 0, new byte[]{1}));
+    }
+
+    @Test
     void constructorAbortWipesMasterKey() throws Exception {
         // A non-HKDF config with a short master key makes the constructor fail
         // while deriving the EME key, after the master key was handed over.

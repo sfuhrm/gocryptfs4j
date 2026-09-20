@@ -75,6 +75,14 @@ class ContentEncTest {
 
         assertThrows(IllegalStateException.class, () -> enc.encryptBlock(data, 0, fileId));
         assertThrows(IllegalStateException.class, () -> enc.decryptBlock(ct, 0, fileId));
+
+        // The bulk block methods must be invalidated as well.
+        byte[] bulkCipher = new byte[ct.length];
+        byte[] bulkPlain = new byte[data.length];
+        assertThrows(IllegalStateException.class,
+                () -> enc.encryptBlocks(data, 0, data.length, 0, fileId, bulkCipher, 0));
+        assertThrows(IllegalStateException.class,
+                () -> enc.decryptBlocks(ct, 0, ct.length, 0, fileId, bulkPlain, 0));
     }
 
     @Test

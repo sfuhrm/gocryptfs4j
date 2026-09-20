@@ -83,6 +83,13 @@ class XChaCha20Poly1305Test {
         assertThrows(IllegalStateException.class, () -> cipher.encrypt(plaintext, nonce, null));
         assertThrows(IllegalStateException.class, () -> cipher.decrypt(ct, nonce, null));
 
+        // The buffer-based overloads must be invalidated as well.
+        byte[] out = new byte[plaintext.length + Constants.AUTH_TAG_LEN];
+        assertThrows(IllegalStateException.class, () -> cipher.encrypt(
+                plaintext, 0, plaintext.length, nonce, null, 0, 0, out, 0));
+        assertThrows(IllegalStateException.class, () -> cipher.decrypt(
+                ct, 0, ct.length, nonce, null, 0, 0, new byte[plaintext.length], 0));
+
         // A fresh instance on the same thread still works.
         XChaCha20Poly1305 fresh = new XChaCha20Poly1305(key);
         assertArrayEquals(plaintext,
