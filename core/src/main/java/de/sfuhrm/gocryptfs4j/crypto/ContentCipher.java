@@ -103,8 +103,7 @@ public interface ContentCipher {
 
     /**
      * Wipes any key material held by this cipher. Implementations that hold no
-     * copy of the key may leave this as a no-op.
+     * copy of the key may implement this as a no-op.
      */
-    default void wipe() {
-    }
+    void wipe();
 }

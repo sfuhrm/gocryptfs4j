@@ -34,8 +34,7 @@ public interface BlockCipher {
 
     /**
      * Wipes any key material held by this cipher. Implementations that hold no
-     * copy of the key may leave this as a no-op.
+     * copy of the key may make this as a no-op.
      */
-    default void wipe() {
-    }
+    void wipe();
 }
