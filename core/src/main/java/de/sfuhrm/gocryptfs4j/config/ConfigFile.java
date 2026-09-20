@@ -14,6 +14,7 @@ import de.sfuhrm.gocryptfs4j.crypto.XChaCha20Poly1305;
 import de.sfuhrm.gocryptfs4j.core.ContentCipherType;
 import org.jspecify.annotations.Nullable;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
@@ -98,7 +99,8 @@ public final class ConfigFile {
      */
     public static ConfigFile load(Path path) throws IOException {
         Objects.requireNonNull(path, "path");
-        String json = new String(Files.readAllBytes(path), StandardCharsets.UTF_8);
+        byte[] bytes = readBounded(path, Constants.CONFIG_MAX_SIZE);
+        String json = new String(bytes, StandardCharsets.UTF_8);
         ConfigFile cf = GSON.fromJson(json, ConfigFile.class);
         if (cf == null) {
             throw new IOException("empty config file");
@@ -108,10 +110,41 @@ public final class ConfigFile {
     }
 
     /**
+     * Reads a file, refusing to buffer more than {@code maxBytes} bytes.
+     *
+     * <p>Unlike {@link Files#readAllBytes(Path)}, this never loads an
+     * attacker-sized file fully into memory: it aborts as soon as the limit is
+     * exceeded, so a rogue or corrupt config cannot cause an out-of-memory
+     * condition.</p>
+     *
+     * @param path     the file to read
+     * @param maxBytes the maximum number of bytes to accept
+     * @return the file contents
+     * @throws IOException if the file cannot be read or exceeds {@code maxBytes}
+     */
+    private static byte[] readBounded(Path path, int maxBytes) throws IOException {
+        try (InputStream in = Files.newInputStream(path)) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int total = 0;
+            int n;
+            while ((n = in.read(buf)) != -1) {
+                total += n;
+                if (total > maxBytes) {
+                    throw new IOException("config file too large (limit " + maxBytes + " bytes)");
+                }
+                out.write(buf, 0, n);
+            }
+            return out.toByteArray();
+        }
+    }
+
+    /**
      * Validates the parsed configuration.
      *
      * @throws IOException if the format version is unsupported, a feature flag
-     *                     is unknown or the FIDO2 data is incomplete
+     *                     is unknown, the scrypt parameters are out of range or
+     *                     the FIDO2 data is incomplete
      */
     private void validate() throws IOException {
         if (version != Constants.CURRENT_VERSION) {
@@ -125,6 +158,7 @@ public final class ConfigFile {
                 }
             }
         }
+        validateScrypt();
         if (isFeatureFlagSet(Constants.FLAG_FIDO2)) {
             if (fido2 == null) {
                 throw new IOException("FIDO2 feature flag is set but the FIDO2 object is missing");
@@ -132,9 +166,78 @@ public final class ConfigFile {
             if (fido2.credentialId == null || fido2.credentialId.length == 0) {
                 throw new IOException("FIDO2 credential ID is missing");
             }
+            if (fido2.credentialId.length > Constants.FIDO2_MAX_CREDENTIAL_ID_LEN) {
+                throw new IOException("FIDO2 credential ID too long: "
+                        + fido2.credentialId.length);
+            }
             if (fido2.hmacSalt == null || fido2.hmacSalt.length == 0) {
                 throw new IOException("FIDO2 HMAC salt is missing");
             }
+            if (fido2.hmacSalt.length > Constants.FIDO2_MAX_HMAC_SALT_LEN) {
+                throw new IOException("FIDO2 HMAC salt too long: " + fido2.hmacSalt.length);
+            }
+            if (fido2.assertOptions != null) {
+                if (fido2.assertOptions.size() > Constants.FIDO2_MAX_ASSERT_OPTIONS) {
+                    throw new IOException("too many FIDO2 assertion options: "
+                            + fido2.assertOptions.size());
+                }
+                for (String option : fido2.assertOptions) {
+                    if (option.length() > Constants.FIDO2_MAX_ASSERT_OPTION_LEN) {
+                        throw new IOException("FIDO2 assertion option too long");
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Validates the attacker-controllable scrypt parameters against hard bounds.
+     *
+     * <p>gocryptfs only enforces minimums, so a rogue {@code gocryptfs.conf}
+     * could otherwise request an unbounded amount of scrypt memory or CPU and
+     * deny service when the filesystem is opened.</p>
+     *
+     * @throws IOException if a parameter is missing, malformed or out of range
+     */
+    private void validateScrypt() throws IOException {
+        ScryptKdf s = scryptObject;
+        if (s == null) {
+            throw new IOException("scrypt object is missing");
+        }
+        if (s.keyLen != Constants.KEY_LEN) {
+            throw new IOException("unsupported scrypt KeyLen " + s.keyLen
+                    + " (want " + Constants.KEY_LEN + ")");
+        }
+        int minN = 1 << Constants.SCRYPT_MIN_LOG_N;
+        int maxN = 1 << Constants.SCRYPT_MAX_LOG_N;
+        if (s.n < minN || s.n > maxN || (s.n & (s.n - 1)) != 0) {
+            throw new IOException("scrypt N out of range: " + s.n);
+        }
+        if (s.r < Constants.SCRYPT_MIN_R || s.r > Constants.SCRYPT_MAX_R) {
+            throw new IOException("scrypt R out of range: " + s.r);
+        }
+        if (s.p < Constants.SCRYPT_MIN_P || s.p > Constants.SCRYPT_MAX_P) {
+            throw new IOException("scrypt P out of range: " + s.p);
+        }
+        long memory = 128L * s.n * s.r;
+        if (memory > Constants.SCRYPT_MAX_MEMORY) {
+            throw new IOException("scrypt memory cost too high: " + memory + " bytes");
+        }
+        if (s.salt == null) {
+            throw new IOException("scrypt salt is missing");
+        }
+        if (s.salt.length() > 4 * Constants.SCRYPT_MAX_SALT_LEN) {
+            throw new IOException("scrypt salt too long");
+        }
+        byte[] salt;
+        try {
+            salt = Base64.getDecoder().decode(s.salt);
+        } catch (IllegalArgumentException e) {
+            throw new IOException("invalid scrypt salt", e);
+        }
+        if (salt.length < Constants.SCRYPT_MIN_SALT_LEN
+                || salt.length > Constants.SCRYPT_MAX_SALT_LEN) {
+            throw new IOException("scrypt salt length out of range: " + salt.length);
         }
     }
 
@@ -248,6 +351,7 @@ public final class ConfigFile {
      */
     public byte[] decryptMasterKey(byte[] secret) throws IOException {
         Objects.requireNonNull(secret, "secret");
+        validateScrypt();
         ScryptKdf s = scryptObject;
         byte[] scryptHash = Keys.scrypt(secret, decode(s.salt), s.n, s.r, s.p, s.keyLen);
         byte[] contentKey = null;

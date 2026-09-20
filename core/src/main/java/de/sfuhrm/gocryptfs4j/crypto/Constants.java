@@ -106,4 +106,56 @@ public final class Constants {
 
     /** Feature flag: XChaCha20-Poly1305 content encryption. */
     public static final String FLAG_XCHACHA = "XChaCha20Poly1305";
+
+    // ------------------------------------------------------------------
+    // Bounds for attacker-controlled scrypt parameters (gocryptfs.conf).
+    // gocryptfs only validates minimums, so a rogue config could otherwise
+    // force an unbounded memory/CPU load when the filesystem is opened.
+    // ------------------------------------------------------------------
+
+    /** Minimum accepted scrypt logN (2^10), matching gocryptfs. */
+    public static final int SCRYPT_MIN_LOG_N = 10;
+
+    /** Maximum accepted scrypt logN (2^20). */
+    public static final int SCRYPT_MAX_LOG_N = 20;
+
+    /** Minimum accepted scrypt block-size parameter R, matching gocryptfs. */
+    public static final int SCRYPT_MIN_R = 8;
+
+    /** Maximum accepted scrypt block-size parameter R. */
+    public static final int SCRYPT_MAX_R = 32;
+
+    /** Minimum accepted scrypt parallelization parameter P. */
+    public static final int SCRYPT_MIN_P = 1;
+
+    /** Maximum accepted scrypt parallelization parameter P. */
+    public static final int SCRYPT_MAX_P = 16;
+
+    /** Minimum accepted scrypt salt length in bytes, matching gocryptfs. */
+    public static final int SCRYPT_MIN_SALT_LEN = 32;
+
+    /** Maximum accepted scrypt salt length in bytes. */
+    public static final int SCRYPT_MAX_SALT_LEN = 64;
+
+    /** Maximum accepted scrypt working memory in bytes ({@code 128 * N * R}). */
+    public static final long SCRYPT_MAX_MEMORY = 1L << 30;
+
+    /**
+     * Maximum accepted size of a {@code gocryptfs.conf} file in bytes. A real
+     * config is a few kilobytes; the generous limit bounds the memory an
+     * attacker-controlled config file can consume before parsing.
+     */
+    public static final int CONFIG_MAX_SIZE = 1 << 20;
+
+    /** Maximum accepted FIDO2 credential ID length in bytes. */
+    public static final int FIDO2_MAX_CREDENTIAL_ID_LEN = 1024;
+
+    /** Maximum accepted FIDO2 HMAC salt length in bytes. */
+    public static final int FIDO2_MAX_HMAC_SALT_LEN = 64;
+
+    /** Maximum number of FIDO2 assertion options accepted from a config. */
+    public static final int FIDO2_MAX_ASSERT_OPTIONS = 64;
+
+    /** Maximum length of a single FIDO2 assertion option. */
+    public static final int FIDO2_MAX_ASSERT_OPTION_LEN = 1024;
 }

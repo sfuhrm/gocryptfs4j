@@ -12,10 +12,12 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Base64;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -170,6 +172,128 @@ class ConfigFileTest {
             lowByte[i] = (byte) password.charAt(i);
         }
         assertThrows(IOException.class, () -> fromBytes.decryptMasterKey(lowByte));
+    }
+
+    @Test
+    void loadRejectsOutOfRangeScryptParameters() throws Exception {
+        Path dir = Files.createTempDirectory("gocryptfs4j-");
+        String salt32 = Base64.getEncoder().encodeToString(new byte[32]);
+        String flags = "[\"HKDF\",\"GCMIV128\"]";
+        try {
+            // A normal gocryptfs parameter set loads fine.
+            assertNotNull(ConfigFile.load(
+                    writeConf(dir, salt32, 1 << 16, 8, 1, 32, flags, null)));
+
+            // N too large, too small, or not a power of two.
+            assertThrows(IOException.class, () -> ConfigFile.load(
+                    writeConf(dir, salt32, 1 << 30, 8, 1, 32, flags, null)));
+            assertThrows(IOException.class, () -> ConfigFile.load(
+                    writeConf(dir, salt32, 1 << 9, 8, 1, 32, flags, null)));
+            assertThrows(IOException.class, () -> ConfigFile.load(
+                    writeConf(dir, salt32, (1 << 16) + 1, 8, 1, 32, flags, null)));
+            // R and P too large.
+            assertThrows(IOException.class, () -> ConfigFile.load(
+                    writeConf(dir, salt32, 1 << 16, 1 << 20, 1, 32, flags, null)));
+            assertThrows(IOException.class, () -> ConfigFile.load(
+                    writeConf(dir, salt32, 1 << 16, 8, 1 << 20, 32, flags, null)));
+            // KeyLen must be the 32 bytes gocryptfs uses.
+            assertThrows(IOException.class, () -> ConfigFile.load(
+                    writeConf(dir, salt32, 1 << 16, 8, 1, 16, flags, null)));
+            // 128 * N * R exceeding the memory bound (128 * 2^20 * 32 = 4 GiB).
+            assertThrows(IOException.class, () -> ConfigFile.load(
+                    writeConf(dir, salt32, 1 << 20, 32, 1, 32, flags, null)));
+            // Salt too short / too long.
+            String salt8 = Base64.getEncoder().encodeToString(new byte[8]);
+            assertThrows(IOException.class, () -> ConfigFile.load(
+                    writeConf(dir, salt8, 1 << 16, 8, 1, 32, flags, null)));
+            String salt128 = Base64.getEncoder().encodeToString(new byte[128]);
+            assertThrows(IOException.class, () -> ConfigFile.load(
+                    writeConf(dir, salt128, 1 << 16, 8, 1, 32, flags, null)));
+        } finally {
+            Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
+    void loadRejectsOversizedConfigFile() throws Exception {
+        Path dir = Files.createTempDirectory("gocryptfs4j-");
+        try {
+            Path conf = dir.resolve("gocryptfs.conf");
+            Files.write(conf, new byte[Constants.CONFIG_MAX_SIZE + 1]);
+
+            IOException thrown = assertThrows(IOException.class, () -> ConfigFile.load(conf));
+            assertTrue(thrown.getMessage().contains("too large"), thrown.getMessage());
+        } finally {
+            Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
+    void loadRejectsOverlongFido2Parameters() throws Exception {
+        Path dir = Files.createTempDirectory("gocryptfs4j-");
+        String salt32 = Base64.getEncoder().encodeToString(new byte[32]);
+        String flags = "[\"HKDF\",\"GCMIV128\",\"FIDO2\"]";
+        String goodSalt = Base64.getEncoder().encodeToString(new byte[32]);
+        try {
+            String hugeId = Base64.getEncoder().encodeToString(new byte[2048]);
+            assertThrows(IOException.class, () -> ConfigFile.load(
+                    writeConf(dir, salt32, 1 << 16, 8, 1, 32, flags,
+                            "{\"CredentialID\":\"" + hugeId + "\",\"HMACSalt\":\""
+                                    + goodSalt + "\"}")));
+
+            String shortId = Base64.getEncoder().encodeToString(new byte[16]);
+            String hugeSalt = Base64.getEncoder().encodeToString(new byte[256]);
+            assertThrows(IOException.class, () -> ConfigFile.load(
+                    writeConf(dir, salt32, 1 << 16, 8, 1, 32, flags,
+                            "{\"CredentialID\":\"" + shortId + "\",\"HMACSalt\":\""
+                                    + hugeSalt + "\"}")));
+
+            // Too many assertion options.
+            StringBuilder many = new StringBuilder("[");
+            for (int i = 0; i < 100; i++) {
+                if (i > 0) {
+                    many.append(',');
+                }
+                many.append("\"o").append(i).append('"');
+            }
+            many.append(']');
+            assertThrows(IOException.class, () -> ConfigFile.load(
+                    writeConf(dir, salt32, 1 << 16, 8, 1, 32, flags,
+                            "{\"CredentialID\":\"" + shortId + "\",\"HMACSalt\":\""
+                                    + goodSalt + "\",\"AssertOptions\":" + many + "}")));
+
+            // A single overlong assertion option.
+            StringBuilder longOption = new StringBuilder();
+            for (int i = 0; i < 2048; i++) {
+                longOption.append('x');
+            }
+            assertThrows(IOException.class, () -> ConfigFile.load(
+                    writeConf(dir, salt32, 1 << 16, 8, 1, 32, flags,
+                            "{\"CredentialID\":\"" + shortId + "\",\"HMACSalt\":\""
+                                    + goodSalt + "\",\"AssertOptions\":[\"" + longOption + "\"]}")));
+        } finally {
+            Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    private static Path writeConf(Path dir, String saltB64, int n, int r, int p, int keyLen,
+                                  String featureFlags, String fido2) throws IOException {
+        StringBuilder json = new StringBuilder();
+        json.append("{\"Creator\":\"test\",\"EncryptedKey\":\"\",");
+        json.append("\"ScryptObject\":{\"Salt\":\"").append(saltB64).append("\",");
+        json.append("\"N\":").append(n).append(",\"R\":").append(r)
+                .append(",\"P\":").append(p).append(",\"KeyLen\":").append(keyLen).append("},");
+        json.append("\"Version\":2,\"FeatureFlags\":").append(featureFlags);
+        if (fido2 != null) {
+            json.append(",\"FIDO2\":").append(fido2);
+        }
+        json.append('}');
+        Path conf = dir.resolve("gocryptfs.conf");
+        Files.write(conf, json.toString().getBytes(StandardCharsets.UTF_8));
+        return conf;
     }
 
     @Test
