@@ -339,7 +339,13 @@ public final class ConfigFile {
             byte[] ct = Arrays.copyOfRange(encryptedKeyBytes, ivLen, encryptedKeyBytes.length);
             // blockNo = 0, fileID = nil -> AAD is eight zero bytes
             byte[] aad = new byte[8];
-            byte[] masterKey = new Gcm(contentKey).decrypt(ct, nonce, aad);
+            Gcm gcm = new Gcm(contentKey);
+            byte[] masterKey;
+            try {
+                masterKey = gcm.decrypt(ct, nonce, aad);
+            } finally {
+                gcm.wipe();
+            }
             if (masterKey.length != Constants.KEY_LEN) {
                 throw new IOException("unexpected master key length " + masterKey.length);
             }
@@ -423,7 +429,13 @@ public final class ConfigFile {
 
             byte[] nonce = Keys.randomBytes(ivLen);
             byte[] aad = new byte[8];
-            byte[] ct = new Gcm(contentKey).encrypt(masterKey, nonce, aad);
+            Gcm gcm = new Gcm(contentKey);
+            byte[] ct;
+            try {
+                ct = gcm.encrypt(masterKey, nonce, aad);
+            } finally {
+                gcm.wipe();
+            }
             byte[] encrypted = new byte[nonce.length + ct.length];
             System.arraycopy(nonce, 0, encrypted, 0, nonce.length);
             System.arraycopy(ct, 0, encrypted, nonce.length, ct.length);
@@ -718,7 +730,13 @@ public final class ConfigFile {
             contentKey = Hkdf.derive(scryptHash, Constants.HKDF_INFO_GCM_CONTENT, Constants.KEY_LEN);
             byte[] nonce = Keys.randomBytes(Constants.DEFAULT_IV_BITS / 8);
             byte[] aad = new byte[8];
-            byte[] ct = new Gcm(contentKey).encrypt(masterKey, nonce, aad);
+            Gcm gcm = new Gcm(contentKey);
+            byte[] ct;
+            try {
+                ct = gcm.encrypt(masterKey, nonce, aad);
+            } finally {
+                gcm.wipe();
+            }
             byte[] encrypted = new byte[nonce.length + ct.length];
             System.arraycopy(nonce, 0, encrypted, 0, nonce.length);
             System.arraycopy(ct, 0, encrypted, nonce.length, ct.length);
