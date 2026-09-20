@@ -11,7 +11,9 @@ import java.io.OutputStream;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -338,6 +340,33 @@ class GocryptFsTest {
         try (GocryptFs fs = GocryptFs.open(cipherDir, "pw".toCharArray())) {
             assertEquals("longname content",
                     new String(fs.readAll("/" + name), StandardCharsets.UTF_8));
+        }
+    }
+
+    @Test
+    void deleteNonEmptyDirectoryKeepsDirIV() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+            fs.mkdir("/dir");
+            fs.createFile("/dir/keep.txt");
+
+            Path cipherPath = fs.resolve("/dir").cipherPath;
+            Path dirIV = cipherPath.resolve("gocryptfs.diriv");
+            assertTrue(Files.exists(dirIV), "a fresh directory has a gocryptfs.diriv");
+
+            assertThrows(DirectoryNotEmptyException.class, () -> fs.delete("/dir"));
+
+            assertTrue(Files.exists(dirIV),
+                    "a rejected delete must not remove gocryptfs.diriv");
+            assertTrue(Files.isDirectory(cipherPath, LinkOption.NOFOLLOW_LINKS),
+                    "a rejected delete must not remove the directory");
+
+            // Once empty, the directory (and its diriv) can be removed.
+            fs.delete("/dir/keep.txt");
+            fs.delete("/dir");
+            assertFalse(Files.exists(cipherPath, LinkOption.NOFOLLOW_LINKS));
         }
     }
 

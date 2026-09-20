@@ -18,6 +18,7 @@ import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
@@ -1189,6 +1190,16 @@ public final class GocryptFs implements AutoCloseable {
         Objects.requireNonNull(plainPath, "plainPath");
         Resolved r = resolve(plainPath);
         if (Files.isDirectory(r.cipherPath, LinkOption.NOFOLLOW_LINKS)) {
+            // Verify the directory is empty apart from its gocryptfs.diriv
+            // before removing anything, so that rejecting a non-empty delete
+            // leaves the directory (and its diriv) intact.
+            try (DirectoryStream<Path> ds = Files.newDirectoryStream(r.cipherPath)) {
+                for (Path entry : ds) {
+                    if (!entry.getFileName().toString().equals(Constants.DIR_IV_FILENAME)) {
+                        throw new DirectoryNotEmptyException(r.cipherPath.toString());
+                    }
+                }
+            }
             Files.deleteIfExists(r.cipherPath.resolve(Constants.DIR_IV_FILENAME));
             Files.delete(r.cipherPath);
         } else {
