@@ -59,6 +59,48 @@ class GocryptFsTest {
     }
 
     @Test
+    void openDoesNotModifyCallerMasterKeyArray() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+            // just create the filesystem
+        }
+
+        byte[] masterKey = ConfigFile.load(cipherDir.resolve("gocryptfs.conf"))
+                .decryptMasterKey("pw".toCharArray());
+        byte[] before = masterKey.clone();
+
+        try (GocryptFs fs = GocryptFs.open(cipherDir, masterKey)) {
+            fs.list("/");
+        }
+
+        assertArrayEquals(before, masterKey,
+                "the caller's master-key array must be neither retained nor wiped");
+    }
+
+    @Test
+    void openAndCreateDoNotModifyCallerPassword() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        char[] createPassword = "pw".toCharArray();
+        char[] createBefore = createPassword.clone();
+        try (GocryptFs fs = GocryptFs.create(cipherDir, createPassword)) {
+            fs.list("/");
+        }
+        assertArrayEquals(createBefore, createPassword,
+                "the caller's password must be neither retained nor wiped");
+
+        char[] openPassword = "pw".toCharArray();
+        char[] openBefore = openPassword.clone();
+        try (GocryptFs fs = GocryptFs.open(cipherDir, openPassword)) {
+            fs.list("/");
+        }
+        assertArrayEquals(openBefore, openPassword,
+                "the caller's password must be neither retained nor wiped");
+    }
+
+    @Test
     void constructorAbortWipesMasterKey() throws Exception {
         // A non-HKDF config with a short master key makes the constructor fail
         // while deriving the EME key, after the master key was handed over.

@@ -42,6 +42,16 @@ import java.util.Objects;
  * <p>Provides traversal, listing and content read/write on the plaintext view of
  * an encrypted directory using the gocryptfs forward-mode on-disk format.</p>
  *
+ * <p>Sensitive input buffers supplied by the caller &mdash; the password
+ * {@code char[]} and the raw master-key {@code byte[]} &mdash; are read but
+ * neither retained nor wiped by this class: the caller keeps ownership of them
+ * and should clear them once they are no longer needed. The master key that the
+ * returned instance derives, and every sub-key derived from it, are owned by
+ * that instance and wiped on {@link #close()}. A raw master-key array is cloned
+ * internally, so closing the filesystem never modifies the caller's array.
+ * Secrets obtained from a {@link Fido2Token} are owned and wiped by this
+ * class.</p>
+ *
  * <pre>{@code
  * try (GocryptFs fs = GocryptFs.open(Paths.get("/data/cipher"), "password".toCharArray())) {
  *     for (DirEntry e : fs.list("/")) {
@@ -141,7 +151,9 @@ public final class GocryptFs implements AutoCloseable {
      * {@code password}.
      *
      * @param cipherDir the ciphertext directory
-     * @param password  the password to unlock the master key with
+     * @param password  the password to unlock the master key with; read but
+     *                  neither retained nor wiped by this class, so the caller
+     *                  should clear it when it is no longer needed
      * @return the opened filesystem
      * @throws IOException if the config is missing, the password is wrong or the filesystem is corrupt
      * @throws NullPointerException if {@code cipherDir} or {@code password} is {@code null}
@@ -162,8 +174,13 @@ public final class GocryptFs implements AutoCloseable {
      * <p>This is equivalent to gocryptfs's {@code -masterkey} option and is
      * useful when the password is unknown but the master key is available.</p>
      *
+     * <p>The key is cloned before it is kept, so the caller's array is neither
+     * retained nor wiped by this class; the caller should clear it when it is
+     * no longer needed.</p>
+     *
      * @param cipherDir the ciphertext directory
-     * @param masterKey the 32-byte master key
+     * @param masterKey the 32-byte master key; cloned, so the caller's array is
+     *                  neither retained nor wiped by this class
      * @return the opened filesystem
      * @throws IOException if the config is missing or the filesystem is corrupt
      * @throws NullPointerException if {@code cipherDir} or {@code masterKey} is {@code null}
@@ -190,8 +207,12 @@ public final class GocryptFs implements AutoCloseable {
      * master key. The token implementation is provided by the application; see
      * {@link Fido2Token} for the required semantics.</p>
      *
+     * <p>The {@code hmac-secret} returned by the token is owned by this class
+     * and wiped after it has been used.</p>
+     *
      * @param cipherDir the ciphertext directory
-     * @param token     the FIDO2 token implementation to unlock the master key with
+     * @param token     the FIDO2 token implementation to unlock the master key
+     *                  with; the secret it returns is wiped by this class
      * @return the opened filesystem
      * @throws IOException if the config is missing, not FIDO2-protected, or the token fails
      * @throws NullPointerException if {@code cipherDir} or {@code token} is {@code null}
@@ -230,7 +251,9 @@ public final class GocryptFs implements AutoCloseable {
      * and be empty) and opens it.
      *
      * @param cipherDir the ciphertext directory (must exist and be empty)
-     * @param password  the password to protect the master key with
+     * @param password  the password to protect the master key with; read but
+     *                  neither retained nor wiped by this class, so the caller
+     *                  should clear it when it is no longer needed
      * @return the opened filesystem
      * @throws IOException on filesystem errors
      */
@@ -242,7 +265,10 @@ public final class GocryptFs implements AutoCloseable {
      * Creates a new filesystem, optionally with plaintext (unencrypted) names.
      *
      * @param cipherDir      the ciphertext directory (must exist and be empty)
-     * @param password       the password to protect the master key with
+     * @param password       the password to protect the master key with; read
+     *                       but neither retained nor wiped by this class, so
+     *                       the caller should clear it when it is no longer
+     *                       needed
      * @param plaintextNames whether to store file names unencrypted
      * @return the opened filesystem
      * @throws IOException on filesystem errors
@@ -256,7 +282,10 @@ public final class GocryptFs implements AutoCloseable {
      * and a custom content cipher.
      *
      * @param cipherDir      the ciphertext directory (must exist and be empty)
-     * @param password       the password to protect the master key with
+     * @param password       the password to protect the master key with; read
+     *                       but neither retained nor wiped by this class, so
+     *                       the caller should clear it when it is no longer
+     *                       needed
      * @param plaintextNames whether to store file names unencrypted
      * @param cipherType     the content-encryption cipher
      * @return the opened filesystem
@@ -313,7 +342,8 @@ public final class GocryptFs implements AutoCloseable {
      * more specific overload to change that.</p>
      *
      * @param cipherDir the ciphertext directory (must exist and be empty)
-     * @param token     the FIDO2 token implementation to protect the master key with
+     * @param token     the FIDO2 token implementation to protect the master key
+     *                  with; the secret it returns is wiped by this class
      * @return the opened filesystem
      * @throws IOException on filesystem errors or if the token interaction fails
      * @throws NullPointerException if {@code cipherDir} or {@code token} is {@code null}
@@ -328,7 +358,8 @@ public final class GocryptFs implements AutoCloseable {
      * and a custom content cipher.
      *
      * @param cipherDir      the ciphertext directory (must exist and be empty)
-     * @param token          the FIDO2 token implementation to protect the master key with
+     * @param token          the FIDO2 token implementation to protect the master
+     *                       key with; the secret it returns is wiped by this class
      * @param plaintextNames whether to store file names unencrypted
      * @param cipherType     the content-encryption cipher
      * @return the opened filesystem
@@ -349,7 +380,8 @@ public final class GocryptFs implements AutoCloseable {
      * none.</p>
      *
      * @param cipherDir      the ciphertext directory (must exist and be empty)
-     * @param token          the FIDO2 token implementation to protect the master key with
+     * @param token          the FIDO2 token implementation to protect the master
+     *                       key with; the secret it returns is wiped by this class
      * @param userName       the user name to register the credential with, or
      *                       {@code null} to use the base name of {@code cipherDir}
      * @param plaintextNames whether to store file names unencrypted

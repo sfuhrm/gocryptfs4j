@@ -32,7 +32,10 @@ import java.util.Properties;
 /**
  * Parses {@code gocryptfs.conf} and unlocks the master key from a password.
  *
- * <p>The decrypted master key is not stored by this class; the caller (for
+ * <p>Sensitive inputs passed to this class &mdash; passwords, raw secrets and
+ * master keys &mdash; are read but neither retained nor wiped: the caller keeps
+ * ownership of them and should clear them when they are no longer needed. The
+ * decrypted master key is likewise not stored by this class; the caller (for
  * example {@code de.sfuhrm.gocryptfs4j.core.GocryptFs}) is responsible for
  * holding and eventually wiping it.</p>
  */
@@ -200,7 +203,11 @@ public final class ConfigFile {
     /**
      * Derives the scrypt key from the password and decrypts the master key.
      *
-     * @param password the password to unlock the master key with
+     * <p>The supplied array is read but not wiped: the caller retains ownership
+     * and should clear it when it is no longer needed.</p>
+     *
+     * @param password the password to unlock the master key with; read but not
+     *                 wiped by this method
      * @return the 32-byte master key
      * @throws IOException if the password is wrong or the config is malformed
      * @throws NullPointerException if {@code password} is {@code null}
@@ -224,7 +231,11 @@ public final class ConfigFile {
      * <p>The returned key is freshly decrypted on every call; this class does not
      * cache or retain it.</p>
      *
-     * @param secret the raw secret to unlock the master key with
+     * <p>The supplied array is read but not wiped: the caller retains ownership
+     * and should clear it when it is no longer needed.</p>
+     *
+     * @param secret the raw secret to unlock the master key with; read but not
+     *               wiped by this method
      * @return the 32-byte master key
      * @throws IOException if the secret is wrong or the config is malformed
      * @throws NullPointerException if {@code secret} is {@code null}

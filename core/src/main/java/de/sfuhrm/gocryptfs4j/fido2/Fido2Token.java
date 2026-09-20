@@ -38,7 +38,8 @@ public interface Fido2Token {
      *
      * <p>This is called once, when a filesystem is created. The returned
      * credential ID is stored in {@code gocryptfs.conf} and handed back to
-     * {@link #hmacSecret(byte[], byte[], List)} on every open.</p>
+     * {@link #hmacSecret(byte[], byte[], List)} on every open. It is not secret
+     * and is not wiped by gocryptfs4j.</p>
      *
      * @param userName the user name to associate with the credential (gocryptfs
      *                 uses the base name of the cipher directory)
@@ -53,6 +54,10 @@ public interface Fido2Token {
      * <p>The returned bytes are used verbatim as the scrypt password protecting
      * the master key. gocryptfs requires at least 32 bytes and rejects an
      * all-zero secret.</p>
+     *
+     * <p>The returned array is owned by gocryptfs4j and wiped once it has been
+     * used: implementations should return a fresh array on every call and not
+     * rely on its contents afterwards.</p>
      *
      * @param credentialId   the credential ID returned by
      *                       {@link #registerCredential(String)}
