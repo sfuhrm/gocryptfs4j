@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryNotEmptyException;
@@ -367,6 +368,39 @@ class GocryptFsTest {
             fs.delete("/dir/keep.txt");
             fs.delete("/dir");
             assertFalse(Files.exists(cipherPath, LinkOption.NOFOLLOW_LINKS));
+        }
+    }
+
+    @Test
+    void cipherInputStreamWipesReadAheadBufferOnClose() throws Exception {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+            fs.createFile("/f.txt");
+            fs.write("/f.txt", 0, "secret plaintext".getBytes(StandardCharsets.UTF_8));
+
+            InputStream in = fs.openRead("/f.txt");
+            // A single-byte read populates the read-ahead buffer.
+            assertTrue(in.read() >= 0);
+
+            Field bufField = in.getClass().getDeclaredField("buf");
+            bufField.setAccessible(true);
+            byte[] buf = (byte[]) bufField.get(in);
+            boolean nonZero = false;
+            for (byte b : buf) {
+                if (b != 0) {
+                    nonZero = true;
+                    break;
+                }
+            }
+            assertTrue(nonZero, "the read-ahead buffer should hold plaintext before close");
+
+            in.close();
+
+            for (byte b : (byte[]) bufField.get(in)) {
+                assertEquals(0, b, "the read-ahead buffer must be wiped on close");
+            }
         }
     }
 

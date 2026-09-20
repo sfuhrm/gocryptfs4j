@@ -560,12 +560,29 @@ public final class CipherFile implements AutoCloseable {
     }
 
     /**
-     * Closes the underlying channel.
+     * Closes the underlying channel and wipes the scratch buffers, which may
+     * hold plaintext or ciphertext of the last operation. Calling this method
+     * more than once has no effect.
      *
      * @throws IOException on filesystem errors
      */
     @Override
     public synchronized void close() throws IOException {
-        channel.close();
+        try {
+            channel.close();
+        } finally {
+            Arrays.fill(blockCipher, (byte) 0);
+            Arrays.fill(blockPlain, (byte) 0);
+            byte[] bulk = bulkCipher;
+            if (bulk != null) {
+                Arrays.fill(bulk, (byte) 0);
+                bulkCipher = null;
+            }
+            bulk = bulkPlain;
+            if (bulk != null) {
+                Arrays.fill(bulk, (byte) 0);
+                bulkPlain = null;
+            }
+        }
     }
 }

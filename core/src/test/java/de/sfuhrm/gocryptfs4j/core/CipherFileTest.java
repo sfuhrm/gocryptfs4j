@@ -8,6 +8,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
 import java.nio.channels.WritableByteChannel;
 import java.nio.file.Files;
@@ -256,6 +257,51 @@ class CipherFileTest {
         try (CipherFile cf = CipherFile.open(newFile(), enc(), true)) {
             assertThrows(IllegalArgumentException.class, () -> cf.writeChannel(-1));
         }
+    }
+
+    @Test
+    void closeWipesScratchBuffers() throws Exception {
+        ContentEnc enc = enc();
+        byte[] data = new byte[(int) (enc.plainBS * 2 + 100)];
+        Arrays.fill(data, (byte) 0x42);
+
+        CipherFile cf = CipherFile.open(newFile(), enc, true);
+        cf.write(ByteBuffer.wrap(data), 0);
+        // A partial write forces a read-modify-write through the single-block
+        // scratch buffers; readAll populates the bulk buffers.
+        cf.write(ByteBuffer.wrap(new byte[]{1, 2, 3}), 50);
+        readAll(cf);
+
+        assertHasNonZero(cf, "blockPlain");
+        assertHasNonZero(cf, "blockCipher");
+        assertHasNonZero(cf, "bulkPlain");
+        assertHasNonZero(cf, "bulkCipher");
+
+        cf.close();
+
+        assertArrayEquals(new byte[(int) enc.plainBS], (byte[]) field(cf, "blockPlain"));
+        assertArrayEquals(new byte[(int) enc.cipherBS], (byte[]) field(cf, "blockCipher"));
+        assertNull(field(cf, "bulkPlain"), "bulkPlain reference must be dropped");
+        assertNull(field(cf, "bulkCipher"), "bulkCipher reference must be dropped");
+    }
+
+    private static Object field(Object target, String name) throws Exception {
+        Field f = target.getClass().getDeclaredField(name);
+        f.setAccessible(true);
+        return f.get(target);
+    }
+
+    private static void assertHasNonZero(Object target, String name) throws Exception {
+        byte[] a = (byte[]) field(target, name);
+        assertNotNull(a, name + " should be populated before close");
+        boolean nonZero = false;
+        for (byte b : a) {
+            if (b != 0) {
+                nonZero = true;
+                break;
+            }
+        }
+        assertTrue(nonZero, name + " should contain non-zero data before close");
     }
 
     @Test

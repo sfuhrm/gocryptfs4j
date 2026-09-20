@@ -1139,13 +1139,21 @@ public final class GocryptFs implements AutoCloseable {
         }
 
         /**
-         * Closes the underlying cipher file.
+         * Closes the underlying cipher file and wipes the read-ahead buffer,
+         * which holds up to 8 KiB of decrypted plaintext. Calling this method
+         * more than once has no effect.
          *
          * @throws IOException on filesystem errors
          */
         @Override
         public void close() throws IOException {
-            cf.close();
+            try {
+                cf.close();
+            } finally {
+                Arrays.fill(buf, (byte) 0);
+                bufPos = 0;
+                bufLen = 0;
+            }
         }
     }
 
