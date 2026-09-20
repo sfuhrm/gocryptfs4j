@@ -88,25 +88,52 @@ public final class GocryptFs implements AutoCloseable {
      * @param masterKey  the 32-byte master key
      */
     private GocryptFs(Path cipherRoot, ConfigFile config, byte[] masterKey) {
-        this.cipherRoot = cipherRoot.toAbsolutePath().normalize();
-        this.config = config;
-        this.masterKey = masterKey;
-        this.plaintextNames = config.plaintextNames();
-        this.dirIvFlag = config.dirIv();
-        this.deterministicNames = !plaintextNames && !dirIvFlag;
+        Path root = cipherRoot.toAbsolutePath().normalize();
+        boolean plainNames = config.plaintextNames();
+        boolean dirIv = config.dirIv();
+        boolean deterministic = !plainNames && !dirIv;
 
-        boolean useHkdf = config.hkdf();
-        byte[] emeKey = useHkdf
-                ? Hkdf.derive(masterKey, Constants.HKDF_INFO_EME_NAMES, Constants.KEY_LEN)
-                : Arrays.copyOf(masterKey, masterKey.length);
+        Eme emeHelper = null;
+        ContentEnc contentEncHelper = null;
+        boolean constructed = false;
         try {
-            this.eme = new Eme(new AesBlockCipher(emeKey));
+            boolean useHkdf = config.hkdf();
+            byte[] emeKey = useHkdf
+                    ? Hkdf.derive(masterKey, Constants.HKDF_INFO_EME_NAMES, Constants.KEY_LEN)
+                    : Arrays.copyOf(masterKey, masterKey.length);
+            try {
+                emeHelper = new Eme(new AesBlockCipher(emeKey));
+            } finally {
+                Keys.wipe(emeKey);
+            }
+            contentEncHelper = config.contentEnc(masterKey);
+            NameTransform nameTransformHelper = new NameTransform(emeHelper, config.longNames(),
+                    config.longNameMax(), config.raw64(), deterministic);
+
+            this.cipherRoot = root;
+            this.config = config;
+            this.masterKey = masterKey;
+            this.plaintextNames = plainNames;
+            this.dirIvFlag = dirIv;
+            this.deterministicNames = deterministic;
+            this.eme = emeHelper;
+            this.contentEnc = contentEncHelper;
+            this.nameTransform = nameTransformHelper;
+            constructed = true;
         } finally {
-            Keys.wipe(emeKey);
+            if (!constructed) {
+                // The constructor is aborting before ownership of the key
+                // material transfers to the instance: wipe everything derived
+                // here, including the master key.
+                if (contentEncHelper != null) {
+                    contentEncHelper.wipe();
+                }
+                if (emeHelper != null) {
+                    emeHelper.wipe();
+                }
+                Keys.wipe(masterKey);
+            }
         }
-        this.contentEnc = config.contentEnc(masterKey);
-        this.nameTransform = new NameTransform(eme, config.longNames(), config.longNameMax(),
-                config.raw64(), deterministicNames);
     }
 
     /**
@@ -251,17 +278,26 @@ public final class GocryptFs implements AutoCloseable {
             }
         }
         byte[] masterKey = Keys.randomBytes(Constants.KEY_LEN);
-        ConfigFile config = ConfigFile.create(masterKey, password, plaintextNames, cipherType);
-        config.writeTo(dir.resolve(Constants.CONF_DEFAULT_NAME));
-        GocryptFs fs = new GocryptFs(dir, config, masterKey);
+        boolean ok = false;
         try {
-            if (!plaintextNames) {
-                fs.writeDirIV(dir);
+            ConfigFile config = ConfigFile.create(masterKey, password, plaintextNames, cipherType);
+            config.writeTo(dir.resolve(Constants.CONF_DEFAULT_NAME));
+            GocryptFs fs = new GocryptFs(dir, config, masterKey);
+            try {
+                if (!plaintextNames) {
+                    fs.writeDirIV(dir);
+                }
+                ok = true;
+                return fs;
+            } catch (IOException e) {
+                fs.close();
+                Files.deleteIfExists(dir.resolve(Constants.CONF_DEFAULT_NAME));
+                throw e;
             }
-            return fs;
-        } catch (IOException e) {
-            Files.deleteIfExists(dir.resolve(Constants.CONF_DEFAULT_NAME));
-            throw e;
+        } finally {
+            if (!ok) {
+                Keys.wipe(masterKey);
+            }
         }
     }
 
@@ -348,18 +384,27 @@ public final class GocryptFs implements AutoCloseable {
         byte[] secret = token.hmacSecret(credentialId, hmacSalt, options);
         try {
             byte[] masterKey = Keys.randomBytes(Constants.KEY_LEN);
-            ConfigFile config = ConfigFile.create(masterKey, secret, plaintextNames, cipherType,
-                    new Fido2Params(credentialId, hmacSalt, options));
-            config.writeTo(dir.resolve(Constants.CONF_DEFAULT_NAME));
-            GocryptFs fs = new GocryptFs(dir, config, masterKey);
+            boolean ok = false;
             try {
-                if (!plaintextNames) {
-                    fs.writeDirIV(dir);
+                ConfigFile config = ConfigFile.create(masterKey, secret, plaintextNames, cipherType,
+                        new Fido2Params(credentialId, hmacSalt, options));
+                config.writeTo(dir.resolve(Constants.CONF_DEFAULT_NAME));
+                GocryptFs fs = new GocryptFs(dir, config, masterKey);
+                try {
+                    if (!plaintextNames) {
+                        fs.writeDirIV(dir);
+                    }
+                    ok = true;
+                    return fs;
+                } catch (IOException e) {
+                    fs.close();
+                    Files.deleteIfExists(dir.resolve(Constants.CONF_DEFAULT_NAME));
+                    throw e;
                 }
-                return fs;
-            } catch (IOException e) {
-                Files.deleteIfExists(dir.resolve(Constants.CONF_DEFAULT_NAME));
-                throw e;
+            } finally {
+                if (!ok) {
+                    Keys.wipe(masterKey);
+                }
             }
         } finally {
             Keys.wipe(secret);

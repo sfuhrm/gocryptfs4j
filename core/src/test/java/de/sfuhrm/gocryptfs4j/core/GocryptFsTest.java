@@ -8,9 +8,12 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
@@ -53,6 +56,27 @@ class GocryptFsTest {
 
         assertThrows(IllegalArgumentException.class,
                 () -> GocryptFs.open(cipherDir, new byte[16]));
+    }
+
+    @Test
+    void constructorAbortWipesMasterKey() throws Exception {
+        // A non-HKDF config with a short master key makes the constructor fail
+        // while deriving the EME key, after the master key was handed over.
+        ConfigFile config = new ConfigFile();
+        config.featureFlags = new ArrayList<>();
+        byte[] masterKey = new byte[16];
+        Arrays.fill(masterKey, (byte) 0x5a);
+
+        Constructor<GocryptFs> constructor = GocryptFs.class.getDeclaredConstructor(
+                Path.class, ConfigFile.class, byte[].class);
+        constructor.setAccessible(true);
+
+        InvocationTargetException thrown = assertThrows(InvocationTargetException.class,
+                () -> constructor.newInstance(tmp, config, masterKey));
+
+        assertInstanceOf(IllegalArgumentException.class, thrown.getCause());
+        assertArrayEquals(new byte[16], masterKey,
+                "master key must be wiped when construction aborts");
     }
 
     @Test
