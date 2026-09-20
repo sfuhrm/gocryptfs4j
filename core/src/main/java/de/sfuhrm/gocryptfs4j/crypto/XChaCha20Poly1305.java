@@ -25,11 +25,11 @@ public final class XChaCha20Poly1305 implements ContentCipher {
     private volatile boolean wiped;
 
     /** A thread-local cipher for encryption, reused because it is not thread-safe. */
-    private final ThreadLocal<AEADCipher> encryptCipher = ThreadLocal.withInitial(
+    private final TrackedThreadLocal<AEADCipher> encryptCipher = new TrackedThreadLocal<>(
             org.bouncycastle.crypto.modes.XChaCha20Poly1305::new);
 
     /** A thread-local cipher for decryption, reused because it is not thread-safe. */
-    private final ThreadLocal<AEADCipher> decryptCipher = ThreadLocal.withInitial(
+    private final TrackedThreadLocal<AEADCipher> decryptCipher = new TrackedThreadLocal<>(
             org.bouncycastle.crypto.modes.XChaCha20Poly1305::new);
 
     /**
@@ -49,29 +49,27 @@ public final class XChaCha20Poly1305 implements ContentCipher {
     }
 
     /**
-     * Wipes the key and this instance's scratch ciphers, and makes this cipher
-     * unusable. Calling this method more than once has no effect.
+     * Wipes the key and every scratch cipher created so far, and makes this
+     * cipher unusable. Calling this method more than once has no effect.
      *
-     * <p>The scratch ciphers are thread-local, so only the calling thread's
-     * copies are cleared; other threads rebuild them lazily on their next
-     * operation. Because the scratch is per instance, wiping this cipher never
-     * affects another {@code XChaCha20Poly1305} instance.</p>
+     * <p>The scratch ciphers are per instance and per thread. All of them, not
+     * just the calling thread's, are cleared; see {@link TrackedThreadLocal}.
+     * Because the scratch is per instance, wiping this cipher never affects
+     * another {@code XChaCha20Poly1305} instance.</p>
      */
     @Override
     public void wipe() {
         if (!wiped) {
             wiped = true;
             Arrays.fill(key, (byte) 0);
-            // Overwrite the calling thread's scratch ciphers with a zero key,
-            // then drop them so the key schedule can be garbage-collected.
+            // Overwrite every scratch cipher with a zero key so the real key
+            // schedule can be garbage-collected.
             KeyParameter zero = new KeyParameter(new byte[Constants.KEY_LEN]);
             byte[] zeroNonce = new byte[Constants.XCHACHA_NONCE_LEN];
-            encryptCipher.get().init(true,
-                    new AEADParameters(zero, Constants.AUTH_TAG_LEN * 8, zeroNonce));
-            decryptCipher.get().init(false,
-                    new AEADParameters(zero, Constants.AUTH_TAG_LEN * 8, zeroNonce));
-            encryptCipher.remove();
-            decryptCipher.remove();
+            encryptCipher.wipeAll(c -> c.init(true,
+                    new AEADParameters(zero, Constants.AUTH_TAG_LEN * 8, zeroNonce)));
+            decryptCipher.wipeAll(c -> c.init(false,
+                    new AEADParameters(zero, Constants.AUTH_TAG_LEN * 8, zeroNonce)));
         }
     }
 

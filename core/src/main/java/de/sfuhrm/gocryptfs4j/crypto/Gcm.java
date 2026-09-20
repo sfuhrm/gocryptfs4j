@@ -26,10 +26,10 @@ public final class Gcm implements ContentCipher {
     private volatile boolean wiped;
 
     /** A thread-local cipher for encryption, reused because {@link Cipher} is not thread-safe. */
-    private final ThreadLocal<Cipher> encryptCipher = ThreadLocal.withInitial(Gcm::newCipher);
+    private final TrackedThreadLocal<Cipher> encryptCipher = new TrackedThreadLocal<>(Gcm::newCipher);
 
     /** A thread-local cipher for decryption, reused because {@link Cipher} is not thread-safe. */
-    private final ThreadLocal<Cipher> decryptCipher = ThreadLocal.withInitial(Gcm::newCipher);
+    private final TrackedThreadLocal<Cipher> decryptCipher = new TrackedThreadLocal<>(Gcm::newCipher);
 
     /**
      * Creates a new AES/GCM/NoPadding cipher.
@@ -61,32 +61,43 @@ public final class Gcm implements ContentCipher {
     }
 
     /**
-     * Wipes the key and this instance's scratch ciphers, and makes this cipher
-     * unusable. Calling this method more than once has no effect.
+     * Wipes the key and every scratch cipher created so far, and makes this
+     * cipher unusable. Calling this method more than once has no effect.
      *
-     * <p>The scratch ciphers are thread-local, so only the calling thread's
-     * copies are cleared; other threads rebuild them lazily on their next
-     * operation. Because the scratch is per instance, wiping this cipher never
-     * affects another {@code Gcm} instance.</p>
+     * <p>The scratch ciphers are per instance and per thread. All of them, not
+     * just the calling thread's, are cleared; see {@link TrackedThreadLocal}.
+     * Because the scratch is per instance, wiping this cipher never affects
+     * another {@code Gcm} instance.</p>
      */
     @Override
     public void wipe() {
         if (!wiped) {
             wiped = true;
             Arrays.fill(key, (byte) 0);
-            // Overwrite the calling thread's scratch ciphers with a zero key,
-            // then drop them so the key schedule can be garbage-collected.
-            try {
-                SecretKeySpec zero = new SecretKeySpec(new byte[Constants.KEY_LEN], "AES");
-                GCMParameterSpec params = new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8,
-                        new byte[Constants.DEFAULT_IV_BITS / 8]);
-                encryptCipher.get().init(Cipher.ENCRYPT_MODE, zero, params);
-                decryptCipher.get().init(Cipher.DECRYPT_MODE, zero, params);
-            } catch (GeneralSecurityException e) {
-                // A zero key and IV of the correct size cannot fail; ignore.
-            }
-            encryptCipher.remove();
-            decryptCipher.remove();
+            // Overwrite every scratch cipher with a zero key so the real key
+            // schedule can be garbage-collected.
+            SecretKeySpec zero = new SecretKeySpec(new byte[Constants.KEY_LEN], "AES");
+            GCMParameterSpec params = new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8,
+                    new byte[Constants.DEFAULT_IV_BITS / 8]);
+            encryptCipher.wipeAll(c -> zeroCipher(c, Cipher.ENCRYPT_MODE, zero, params));
+            decryptCipher.wipeAll(c -> zeroCipher(c, Cipher.DECRYPT_MODE, zero, params));
+        }
+    }
+
+    /**
+     * Re-initializes a scratch cipher with a zero key.
+     *
+     * @param cipher the scratch cipher to clear
+     * @param mode   the cipher mode (encrypt or decrypt)
+     * @param zero   the all-zero key
+     * @param params the GCM parameters
+     */
+    private static void zeroCipher(Cipher cipher, int mode, SecretKeySpec zero,
+                                   GCMParameterSpec params) {
+        try {
+            cipher.init(mode, zero, params);
+        } catch (GeneralSecurityException e) {
+            // A zero key and IV of the correct size cannot fail; ignore.
         }
     }
 

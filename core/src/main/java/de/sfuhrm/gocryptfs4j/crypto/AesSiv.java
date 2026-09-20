@@ -44,11 +44,11 @@ public final class AesSiv implements ContentCipher {
      * not thread-safe. Keeping it per instance means wiping one cipher cannot
      * disturb another cipher's scratch.
      */
-    private final ThreadLocal<CMac> cmacScratch = ThreadLocal.withInitial(
+    private final TrackedThreadLocal<CMac> cmacScratch = new TrackedThreadLocal<>(
             () -> new CMac(AESEngine.newInstance()));
 
     /** A per-instance, per-thread SIC (CTR) scratch, reused because it is not thread-safe. */
-    private final ThreadLocal<CTRModeCipher> ctrScratch = ThreadLocal.withInitial(
+    private final TrackedThreadLocal<CTRModeCipher> ctrScratch = new TrackedThreadLocal<>(
             () -> SICBlockCipher.newInstance(AESEngine.newInstance()));
 
     /**
@@ -69,14 +69,14 @@ public final class AesSiv implements ContentCipher {
     }
 
     /**
-     * Wipes the two sub-keys and this instance's scratch CMAC/CTR ciphers, and
-     * makes this cipher unusable. Calling this method more than once has no
+     * Wipes the two sub-keys and every scratch CMAC/CTR cipher created so far,
+     * and makes this cipher unusable. Calling this method more than once has no
      * effect.
      *
-     * <p>The scratch ciphers are thread-local, so only the calling thread's
-     * copies are cleared; other threads rebuild them lazily on their next
-     * operation. Because the scratch is per instance, wiping this cipher never
-     * affects another {@code AesSiv} instance.</p>
+     * <p>The scratch ciphers are per instance and per thread. All of them, not
+     * just the calling thread's, are cleared; see {@link TrackedThreadLocal}.
+     * Because the scratch is per instance, wiping this cipher never affects
+     * another {@code AesSiv} instance.</p>
      */
     @Override
     public void wipe() {
@@ -84,14 +84,12 @@ public final class AesSiv implements ContentCipher {
             wiped = true;
             Arrays.fill(k1, (byte) 0);
             Arrays.fill(k2, (byte) 0);
-            // Overwrite the calling thread's scratch key schedules with a zero
-            // key, then drop them so the engines can be garbage-collected.
+            // Overwrite every scratch key schedule with a zero key so the real
+            // key schedule can be garbage-collected.
             KeyParameter zero = new KeyParameter(new byte[Constants.KEY_LEN]);
-            cmacScratch.get().init(zero);
-            ctrScratch.get().init(true,
-                    new ParametersWithIV(zero, new byte[Constants.AES_BLOCK_SIZE]));
-            cmacScratch.remove();
-            ctrScratch.remove();
+            cmacScratch.wipeAll(mac -> mac.init(zero));
+            ctrScratch.wipeAll(c -> c.init(true,
+                    new ParametersWithIV(zero, new byte[Constants.AES_BLOCK_SIZE])));
         }
     }
 

@@ -32,10 +32,10 @@ public final class ContentEnc {
     private final ContentCipher cipher;
 
     /** A thread-local scratch buffer for the additional authenticated data. */
-    private final ThreadLocal<byte[]> aadBuffer;
+    private final TrackedThreadLocal<byte[]> aadBuffer;
 
     /** A thread-local scratch buffer for the nonce. */
-    private final ThreadLocal<byte[]> nonceBuffer;
+    private final TrackedThreadLocal<byte[]> nonceBuffer;
 
     /**
      * Creates a content-encryption helper using AES-256-GCM with the default
@@ -89,8 +89,8 @@ public final class ContentEnc {
         this.ivLen = ivLen;
         this.plainBS = plainBS;
         this.cipherBS = plainBS + ivLen + Constants.AUTH_TAG_LEN;
-        this.aadBuffer = ThreadLocal.withInitial(() -> new byte[8 + Constants.HEADER_ID_LEN]);
-        this.nonceBuffer = ThreadLocal.withInitial(() -> new byte[ivLen]);
+        this.aadBuffer = new TrackedThreadLocal<>(() -> new byte[8 + Constants.HEADER_ID_LEN]);
+        this.nonceBuffer = new TrackedThreadLocal<>(() -> new byte[ivLen]);
     }
 
     /**
@@ -103,23 +103,17 @@ public final class ContentEnc {
     }
 
     /**
-     * Wipes the underlying cipher's key material and this instance's scratch
-     * buffers, and makes the underlying cipher unusable.
+     * Wipes the underlying cipher's key material and every scratch buffer
+     * created so far, and makes the underlying cipher unusable.
      *
-     * <p>The scratch buffers are thread-local, so only the calling thread's
-     * copies are cleared; other threads rebuild them lazily on their next
-     * operation.</p>
+     * <p>The scratch buffers are per instance and per thread. All of them, not
+     * just the calling thread's, are cleared; see {@link TrackedThreadLocal}.</p>
      */
     public void wipe() {
         cipher.wipe();
-        // Overwrite the calling thread's scratch buffers with zeros, then drop
-        // them so they can be garbage-collected.
-        byte[] aad = aadBuffer.get();
-        Arrays.fill(aad, (byte) 0);
-        aadBuffer.remove();
-        byte[] nonce = nonceBuffer.get();
-        Arrays.fill(nonce, (byte) 0);
-        nonceBuffer.remove();
+        // Overwrite every scratch buffer with zeros so it can be collected.
+        aadBuffer.wipeAll(aad -> Arrays.fill(aad, (byte) 0));
+        nonceBuffer.wipeAll(nonce -> Arrays.fill(nonce, (byte) 0));
     }
 
     /**
