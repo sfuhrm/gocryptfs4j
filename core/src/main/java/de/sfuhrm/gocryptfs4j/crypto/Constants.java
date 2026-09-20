@@ -62,6 +62,13 @@ public final class Constants {
     /** Maximum length (in bytes) of a plaintext file name. */
     public static final int NAME_MAX = 255;
 
+    /**
+     * Maximum accepted size in bytes of a {@code *.name} long-name file. The
+     * stored base64 cipher name is well below this (EME input is capped at
+     * 128 blocks, so the base64 form is at most ~2732 bytes).
+     */
+    public static final int LONG_NAME_CONTENT_MAX_SIZE = 4096;
+
     /** HKDF info string for the EME filename-encryption sub-key. */
     public static final String HKDF_INFO_EME_NAMES = "EME filename encryption";
 

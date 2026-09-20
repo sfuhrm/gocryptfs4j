@@ -7,6 +7,7 @@ import de.sfuhrm.gocryptfs4j.crypto.Constants;
 import de.sfuhrm.gocryptfs4j.crypto.ContentEnc;
 import de.sfuhrm.gocryptfs4j.crypto.Eme;
 import de.sfuhrm.gocryptfs4j.crypto.Hkdf;
+import de.sfuhrm.gocryptfs4j.crypto.IoUtil;
 import de.sfuhrm.gocryptfs4j.crypto.Keys;
 import de.sfuhrm.gocryptfs4j.fido2.Fido2Token;
 import de.sfuhrm.gocryptfs4j.names.NameTransform;
@@ -512,7 +513,7 @@ public final class GocryptFs implements AutoCloseable {
             return nameTransform.zeroDirIV();
         }
         Path p = cipherDir.resolve(Constants.DIR_IV_FILENAME);
-        byte[] data = Files.readAllBytes(p);
+        byte[] data = IoUtil.readBounded(p, Constants.DIR_IV_LEN);
         if (data.length != Constants.DIR_IV_LEN) {
             throw new IOException("bad diriv length " + data.length + " in " + cipherDir);
         }
@@ -747,7 +748,9 @@ public final class GocryptFs implements AutoCloseable {
                     }
                     if (t == NameTransform.LONG_NAME_CONTENT) {
                         Path nameFile = cipherDir.resolve(cName + Constants.LONG_NAME_SUFFIX);
-                        cipherName = new String(Files.readAllBytes(nameFile), StandardCharsets.UTF_8);
+                        cipherName = new String(
+                                IoUtil.readBounded(nameFile, Constants.LONG_NAME_CONTENT_MAX_SIZE),
+                                StandardCharsets.UTF_8);
                     }
                 }
 

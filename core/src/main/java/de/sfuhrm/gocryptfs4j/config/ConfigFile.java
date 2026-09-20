@@ -9,12 +9,12 @@ import de.sfuhrm.gocryptfs4j.crypto.ContentCipher;
 import de.sfuhrm.gocryptfs4j.crypto.ContentEnc;
 import de.sfuhrm.gocryptfs4j.crypto.Gcm;
 import de.sfuhrm.gocryptfs4j.crypto.Hkdf;
+import de.sfuhrm.gocryptfs4j.crypto.IoUtil;
 import de.sfuhrm.gocryptfs4j.crypto.Keys;
 import de.sfuhrm.gocryptfs4j.crypto.XChaCha20Poly1305;
 import de.sfuhrm.gocryptfs4j.core.ContentCipherType;
 import org.jspecify.annotations.Nullable;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
@@ -99,7 +99,7 @@ public final class ConfigFile {
      */
     public static ConfigFile load(Path path) throws IOException {
         Objects.requireNonNull(path, "path");
-        byte[] bytes = readBounded(path, Constants.CONFIG_MAX_SIZE);
+        byte[] bytes = IoUtil.readBounded(path, Constants.CONFIG_MAX_SIZE);
         String json = new String(bytes, StandardCharsets.UTF_8);
         ConfigFile cf = GSON.fromJson(json, ConfigFile.class);
         if (cf == null) {
@@ -107,36 +107,6 @@ public final class ConfigFile {
         }
         cf.validate();
         return cf;
-    }
-
-    /**
-     * Reads a file, refusing to buffer more than {@code maxBytes} bytes.
-     *
-     * <p>Unlike {@link Files#readAllBytes(Path)}, this never loads an
-     * attacker-sized file fully into memory: it aborts as soon as the limit is
-     * exceeded, so a rogue or corrupt config cannot cause an out-of-memory
-     * condition.</p>
-     *
-     * @param path     the file to read
-     * @param maxBytes the maximum number of bytes to accept
-     * @return the file contents
-     * @throws IOException if the file cannot be read or exceeds {@code maxBytes}
-     */
-    private static byte[] readBounded(Path path, int maxBytes) throws IOException {
-        try (InputStream in = Files.newInputStream(path)) {
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            byte[] buf = new byte[8192];
-            int total = 0;
-            int n;
-            while ((n = in.read(buf)) != -1) {
-                total += n;
-                if (total > maxBytes) {
-                    throw new IOException("config file too large (limit " + maxBytes + " bytes)");
-                }
-                out.write(buf, 0, n);
-            }
-            return out.toByteArray();
-        }
     }
 
     /**
