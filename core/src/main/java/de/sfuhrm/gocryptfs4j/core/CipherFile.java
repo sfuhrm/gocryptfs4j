@@ -109,7 +109,7 @@ public final class CipherFile implements AutoCloseable {
     /**
      * Returns the file id from the header, or {@code null} if the file is empty.
      *
-     * @return the 16-byte file id, or {@code null}
+     * @return a copy of the 16-byte file id, or {@code null} for an empty file
      * @throws IOException if the file header is corrupt
      */
     public synchronized byte @Nullable [] fileId() throws IOException {
@@ -126,7 +126,8 @@ public final class CipherFile implements AutoCloseable {
             }
             fileIdLoaded = true;
         }
-        return fileId;
+        byte[] id = fileId;
+        return id == null ? null : id.clone();
     }
 
     /**

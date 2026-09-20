@@ -66,6 +66,31 @@ class FileHeaderTest {
     }
 
     @Test
+    void constructorCopiesTheId() {
+        byte[] id = new byte[Constants.HEADER_ID_LEN];
+        id[0] = 0x7f;
+        FileHeader header = new FileHeader(Constants.CURRENT_VERSION, id);
+
+        // Mutating the caller's array must not change the header.
+        id[0] = 0x01;
+
+        assertEquals(0x7f, header.id()[0] & 0xFF);
+        assertEquals(0x7f, header.pack()[Constants.HEADER_VERSION_LEN] & 0xFF);
+    }
+
+    @Test
+    void idReturnsACopy() {
+        byte[] id = new byte[Constants.HEADER_ID_LEN];
+        id[0] = 0x11;
+        FileHeader header = new FileHeader(Constants.CURRENT_VERSION, id);
+
+        header.id()[0] = 0x22;
+
+        assertEquals(0x11, header.id()[0] & 0xFF);
+        assertEquals(0x11, header.pack()[Constants.HEADER_VERSION_LEN] & 0xFF);
+    }
+
+    @Test
     void constructorRejectsWrongIdLength() {
         assertThrows(IllegalArgumentException.class, () -> new FileHeader(2, new byte[Constants.HEADER_ID_LEN - 1]));
         assertThrows(IllegalArgumentException.class, () -> new FileHeader(2, new byte[Constants.HEADER_ID_LEN + 1]));

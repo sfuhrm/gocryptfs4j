@@ -29,7 +29,7 @@ public final class FileHeader {
             throw new IllegalArgumentException("file id must be " + Constants.HEADER_ID_LEN + " bytes");
         }
         this.version = version;
-        this.id = id;
+        this.id = id.clone();
     }
 
     /**

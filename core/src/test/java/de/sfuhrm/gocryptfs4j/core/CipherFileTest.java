@@ -260,6 +260,27 @@ class CipherFileTest {
     }
 
     @Test
+    void fileIdGetterReturnsACopy() throws IOException {
+        ContentEnc enc = enc();
+        byte[] data = new byte[256];
+        Arrays.fill(data, (byte) 0x5a);
+
+        try (CipherFile cf = CipherFile.open(newFile(), enc, true)) {
+            cf.write(ByteBuffer.wrap(data), 0);
+
+            byte[] id = cf.fileId();
+            assertNotNull(id);
+            byte[] copy = id.clone();
+
+            // Corrupting the returned array must not change the id used as
+            // additional authenticated data for subsequent operations.
+            Arrays.fill(id, (byte) 0xFF);
+            assertArrayEquals(copy, cf.fileId(), "fileId() must return a defensive copy");
+            assertArrayEquals(data, readAll(cf));
+        }
+    }
+
+    @Test
     void closeWipesScratchBuffers() throws Exception {
         ContentEnc enc = enc();
         byte[] data = new byte[(int) (enc.plainBS * 2 + 100)];
