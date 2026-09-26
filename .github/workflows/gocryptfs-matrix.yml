@@ -33,33 +33,46 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-          cache: maven
+
+      - name: Cache Maven dependencies
+        uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+
+      - name: Remove conflicting fuse3 for gocryptfs v1.x
+        if: startsWith(matrix.gocryptfs, '1.')
+        run: sudo apt-get remove -y fuse3
 
       - name: Install FUSE
-        run: |
-          sudo apt-get update
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
           # v1.x mounts via the fuse2 helper 'fusermount', v2.x via the fuse3
           # helper 'fusermount3'. On Ubuntu 24.04 the two packages conflict
           # (fuse3 Breaks fuse), so install per major version.
-          case "${{ matrix.gocryptfs }}" in
-            1.*)
-              sudo apt-get remove -y fuse3
-              sudo apt-get install -y fuse
-              ;;
-            *)
-              sudo apt-get install -y fuse3
-              ;;
-          esac
-          ls -la /bin/fusermount /bin/fusermount3 2>/dev/null || true
+          packages: ${{ startsWith(matrix.gocryptfs, '1.') && 'fuse' || 'fuse3' }}
+          version: 1.0
+
+      - name: Cache gocryptfs v${{ matrix.gocryptfs }}
+        id: cache-gocryptfs
+        uses: actions/cache@v6
+        with:
+          path: ~/.local/gocryptfs
+          key: gocryptfs-${{ matrix.gocryptfs }}-linux-static-amd64
 
       - name: Download gocryptfs v${{ matrix.gocryptfs }}
+        if: steps.cache-gocryptfs.outputs.cache-hit != 'true'
         run: |
-          mkdir -p "$HOME/bin"
+          mkdir -p "$HOME/.local/gocryptfs"
           curl -fsSL -o /tmp/gocryptfs.tar.gz \
             "https://github.com/rfjakob/gocryptfs/releases/download/v${{ matrix.gocryptfs }}/gocryptfs_v${{ matrix.gocryptfs }}_linux-static_amd64.tar.gz"
-          tar -xzf /tmp/gocryptfs.tar.gz -C "$HOME/bin" gocryptfs
-          chmod +x "$HOME/bin/gocryptfs"
-          echo "$HOME/bin" >> "$GITHUB_PATH"
+          tar -xzf /tmp/gocryptfs.tar.gz -C "$HOME/.local/gocryptfs" gocryptfs
+          chmod +x "$HOME/.local/gocryptfs/gocryptfs"
+
+      - name: Add gocryptfs to PATH
+        run: echo "$HOME/.local/gocryptfs" >> "$GITHUB_PATH"
 
       - name: Verify gocryptfs + FUSE availability
         run: |
