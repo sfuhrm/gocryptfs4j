@@ -581,8 +581,8 @@ public final class GocryptFsProvider extends FileSystemProvider {
             fs.mkdir(t.toString());
             if (recursive) {
                 for (DirEntry child : fs.list(s.toString())) {
-                    copyEntry(s.resolve(child.plainName()), t.resolve(child.plainName()),
-                            opts, true);
+                    copyEntry((GocryptFsPath) s.resolve(child.plainName()),
+                            (GocryptFsPath) t.resolve(child.plainName()), opts, true);
                 }
             }
             if (copyAttributes) {
