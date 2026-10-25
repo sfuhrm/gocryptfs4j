@@ -24,6 +24,7 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
@@ -1243,6 +1244,66 @@ public final class GocryptFs implements AutoCloseable {
                     && nameTransform.isLongContent(cipherName)) {
                 Files.deleteIfExists(cipherParent.resolve(cipherName + Constants.LONG_NAME_SUFFIX));
             }
+        }
+    }
+
+    /**
+     * Renames (moves) a file, symlink or directory within this filesystem by
+     * renaming the single ciphertext entry.
+     *
+     * <p>No content is read or re-encrypted: file content is bound to the file
+     * ID stored in its header, directory contents are bound to the directory's
+     * own {@code gocryptfs.diriv}, and symlink targets are not path-bound, so
+     * only the entry's encrypted name (and its long-name support file, if any)
+     * changes. Directories are therefore moved together with their whole
+     * subtree.</p>
+     *
+     * @param plainFrom       the plaintext source path
+     * @param plainTo         the plaintext target path
+     * @param replaceExisting whether an existing target (a file, symlink or
+     *                        empty directory) may be replaced
+     * @throws NoSuchFileException if the source or the target's parent does not exist
+     * @throws FileAlreadyExistsException if the target exists and {@code replaceExisting} is {@code false}
+     * @throws DirectoryNotEmptyException if the target is a non-empty directory
+     * @throws IOException if the target lies inside the source or on filesystem errors
+     * @throws NullPointerException if an argument is {@code null}
+     */
+    public void rename(String plainFrom, String plainTo, boolean replaceExisting)
+            throws IOException {
+        Objects.requireNonNull(plainFrom, "plainFrom");
+        Objects.requireNonNull(plainTo, "plainTo");
+        List<String> fromComps = normalize(plainFrom);
+        List<String> toComps = normalize(plainTo);
+        if (fromComps.isEmpty() || toComps.isEmpty()) {
+            throw new IOException("cannot rename the root directory");
+        }
+        Resolved from = resolveParent(plainFrom);
+        if (!Files.exists(from.cipherPath, LinkOption.NOFOLLOW_LINKS)) {
+            throw new NoSuchFileException(plainFrom);
+        }
+        if (fromComps.equals(toComps)) {
+            return;
+        }
+        if (toComps.size() > fromComps.size()
+                && toComps.subList(0, fromComps.size()).equals(fromComps)) {
+            throw new IOException("cannot move " + plainFrom + " into its own subtree: " + plainTo);
+        }
+        Resolved to = resolveParent(plainTo);
+        if (Files.exists(to.cipherPath, LinkOption.NOFOLLOW_LINKS)) {
+            if (!replaceExisting) {
+                throw new FileAlreadyExistsException(plainTo);
+            }
+            // Fails with DirectoryNotEmptyException for a non-empty directory.
+            delete(plainTo);
+        }
+        prepareLongName(to);
+        Files.move(from.cipherPath, to.cipherPath);
+
+        String fromName = from.cipherName;
+        Path fromParent = from.cipherParent;
+        if (!plaintextNames && fromName != null && fromParent != null
+                && nameTransform.isLongContent(fromName)) {
+            Files.deleteIfExists(fromParent.resolve(fromName + Constants.LONG_NAME_SUFFIX));
         }
     }
 

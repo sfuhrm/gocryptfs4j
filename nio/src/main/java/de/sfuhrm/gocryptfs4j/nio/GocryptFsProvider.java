@@ -541,7 +541,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
         if (s.equals(t) || toAbsolute(source).equals(t)) {
             return;
         }
-        copyEntry(s, t, opts, false);
+        copyEntry(s, t, opts);
     }
 
     private static Set<CopyOption> toOptionSet(CopyOption... options) {
@@ -551,17 +551,15 @@ public final class GocryptFsProvider extends FileSystemProvider {
     }
 
     /**
-     * Copies one entry; with {@code recursive} the children of a directory are
-     * copied as well (used by {@link #move}).
+     * Copies one entry. For a directory only the (empty) directory is created.
      *
-     * @param s         the absolute, resolved source
-     * @param t         the absolute target
-     * @param opts      the copy options
-     * @param recursive whether to copy directory contents
+     * @param s    the absolute, resolved source
+     * @param t    the absolute target
+     * @param opts the copy options
      * @throws IOException on filesystem errors
      */
-    private void copyEntry(GocryptFsPath s, GocryptFsPath t, Set<CopyOption> opts,
-                           boolean recursive) throws IOException {
+    private void copyEntry(GocryptFsPath s, GocryptFsPath t, Set<CopyOption> opts)
+            throws IOException {
         boolean replace = opts.contains(StandardCopyOption.REPLACE_EXISTING);
         boolean copyAttributes = opts.contains(StandardCopyOption.COPY_ATTRIBUTES);
         GocryptFs fs = core(s);
@@ -579,12 +577,6 @@ public final class GocryptFsProvider extends FileSystemProvider {
         DirEntry se = fs.stat(s.toString());
         if (se.isDirectory()) {
             fs.mkdir(t.toString());
-            if (recursive) {
-                for (DirEntry child : fs.list(s.toString())) {
-                    copyEntry((GocryptFsPath) s.resolve(child.plainName()),
-                            (GocryptFsPath) t.resolve(child.plainName()), opts, true);
-                }
-            }
             if (copyAttributes) {
                 copyAttributes(s, t, false);
             }
@@ -657,16 +649,23 @@ public final class GocryptFsProvider extends FileSystemProvider {
     }
 
     /**
-     * Moves a file or directory tree.
+     * Moves a file, symbolic link or directory (including its subtree).
      *
-     * <p>The move never follows symbolic links: a symbolic link is moved as a
-     * link. {@link StandardCopyOption#COPY_ATTRIBUTES} is honored.</p>
+     * <p>The move is a rename of the ciphertext entry: nothing is decrypted or
+     * re-encrypted, and a directory is moved with all of its contents in one
+     * step. A symbolic link is moved as a link. {@link StandardCopyOption#COPY_ATTRIBUTES}
+     * is accepted; a rename preserves all attributes anyway. Atomic moves are
+     * not supported, and a move between two different encrypted filesystems
+     * fails.</p>
      *
      * @param source  the path to move
      * @param target  the move target
      * @param options the move options
      * @throws NullPointerException if {@code source} or {@code target} is {@code null}
      * @throws AtomicMoveNotSupportedException if {@link StandardCopyOption#ATOMIC_MOVE} is given
+     * @throws FileAlreadyExistsException if the target exists and
+     *                                    {@link StandardCopyOption#REPLACE_EXISTING} is not given
+     * @throws DirectoryNotEmptyException if the target is a non-empty directory
      * @throws IOException on filesystem errors
      */
     @Override
@@ -680,34 +679,12 @@ public final class GocryptFsProvider extends FileSystemProvider {
         }
         GocryptFsPath s = toAbsolute(source);
         GocryptFsPath t = toAbsolute(target);
-        if (s.equals(t)) {
-            return;
-        }
-        if (t.startsWith(s)) {
+        if (core(s) != core(t)) {
             throw new FileSystemException(s.toString(), t.toString(),
-                    "cannot move a path into its own subtree");
+                    "cannot move between different encrypted filesystems");
         }
-        Set<CopyOption> copyOpts = new HashSet<>(opts);
-        copyOpts.add(LinkOption.NOFOLLOW_LINKS);
-        copyEntry(s, t, copyOpts, true);
-        deleteRecursively(s);
-    }
-
-    /**
-     * Deletes a path and, if it is a directory, all of its descendants.
-     *
-     * @param p the plaintext path to delete recursively
-     * @throws IOException on filesystem errors
-     */
-    private void deleteRecursively(Path p) throws IOException {
-        GocryptFs fs = core(p);
-        DirEntry e = fs.stat(p.toString());
-        if (e.isDirectory()) {
-            for (DirEntry c : fs.list(p.toString())) {
-                deleteRecursively(p.resolve(c.plainName()));
-            }
-        }
-        fs.delete(p.toString());
+        core(s).rename(s.toString(), t.toString(),
+                opts.contains(StandardCopyOption.REPLACE_EXISTING));
     }
 
     /**
