@@ -515,6 +515,18 @@ class GocryptFsProviderOperationsTest {
     }
 
     @Test
+    void moveReplaceExisting() throws IOException {
+        Path a = nio.getPath("/mv-a.txt");
+        Path b = nio.getPath("/mv-b.txt");
+        Files.write(a, "A".getBytes(StandardCharsets.UTF_8));
+        Files.write(b, "B".getBytes(StandardCharsets.UTF_8));
+        assertThrows(java.nio.file.FileAlreadyExistsException.class, () -> Files.move(a, b));
+        Files.move(a, b, StandardCopyOption.REPLACE_EXISTING);
+        assertFalse(Files.exists(a));
+        assertEquals("A", new String(Files.readAllBytes(b), StandardCharsets.UTF_8));
+    }
+
+    @Test
     void moveDirectoryIntoOwnSubtreeFails() throws IOException {
         Path dir = nio.getPath("/mvself");
         Files.createDirectory(dir);
