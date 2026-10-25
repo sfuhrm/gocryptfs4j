@@ -13,6 +13,8 @@ import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryNotEmptyException;
+import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
@@ -375,6 +377,88 @@ class GocryptFsTest {
         try (GocryptFs fs = GocryptFs.open(cipherDir, "pw".toCharArray())) {
             assertEquals("longname content",
                     new String(fs.readAll("/" + name), StandardCharsets.UTF_8));
+        }
+    }
+
+    @Test
+    void renameFileKeepsContentAndDirectoryMoveKeepsSubtree() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+            fs.createFile("/a.txt");
+            fs.write("/a.txt", 0, "data".getBytes(StandardCharsets.UTF_8));
+            fs.mkdir("/d1");
+            fs.mkdir("/d2");
+            fs.mkdir("/d1/sub");
+            fs.createFile("/d1/sub/f.txt");
+            fs.write("/d1/sub/f.txt", 0, "deep".getBytes(StandardCharsets.UTF_8));
+
+            Path oldCipher = fs.resolve("/a.txt").cipherPath;
+            fs.rename("/a.txt", "/d2/b.txt", false);
+            assertFalse(Files.exists(oldCipher, LinkOption.NOFOLLOW_LINKS));
+            assertEquals("data", new String(fs.readAll("/d2/b.txt"), StandardCharsets.UTF_8));
+
+            Path dirCipher = fs.resolve("/d1").cipherPath;
+            fs.rename("/d1", "/d2/moved", false);
+            assertFalse(Files.exists(dirCipher, LinkOption.NOFOLLOW_LINKS));
+            assertEquals("deep", new String(
+                    fs.readAll("/d2/moved/sub/f.txt"), StandardCharsets.UTF_8));
+        }
+    }
+
+    @Test
+    void renameLongNamesMoveSupportFile() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 200; i++) {
+            sb.append('x');
+        }
+        String longA = sb + "A";
+        String longB = sb + "B";
+        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+            fs.createFile("/" + longA);
+            fs.mkdir("/dir");
+            Path oldCipher = fs.resolve("/" + longA).cipherPath;
+            Path oldName = oldCipher.resolveSibling(oldCipher.getFileName() + ".name");
+            assertTrue(Files.exists(oldName));
+
+            fs.rename("/" + longA, "/dir/" + longB, false);
+
+            assertFalse(Files.exists(oldCipher, LinkOption.NOFOLLOW_LINKS));
+            assertFalse(Files.exists(oldName), "old long-name file must be removed");
+            Path newCipher = fs.resolve("/dir/" + longB).cipherPath;
+            assertTrue(Files.exists(newCipher));
+            assertTrue(Files.exists(newCipher.resolveSibling(newCipher.getFileName() + ".name")));
+            assertEquals(1, fs.list("/dir").size());
+            assertEquals(longB, fs.list("/dir").get(0).plainName());
+        }
+    }
+
+    @Test
+    void renameExistingTargetAndErrors() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+            fs.createFile("/a");
+            fs.write("/a", 0, "A".getBytes(StandardCharsets.UTF_8));
+            fs.createFile("/b");
+            fs.mkdir("/full");
+            fs.createFile("/full/x");
+            fs.mkdir("/empty");
+
+            assertThrows(FileAlreadyExistsException.class, () -> fs.rename("/a", "/b", false));
+            assertThrows(NoSuchFileException.class, () -> fs.rename("/missing", "/z", false));
+            assertThrows(IOException.class, () -> fs.rename("/a", "/nodir/z", false));
+            assertThrows(DirectoryNotEmptyException.class, () -> fs.rename("/a", "/full", true));
+            assertThrows(IOException.class, () -> fs.rename("/full", "/full/in", false));
+            assertTrue(fs.list("/").stream().anyMatch(e -> e.plainName().equals("a")));
+
+            fs.rename("/a", "/b", true);
+            assertEquals("A", new String(fs.readAll("/b"), StandardCharsets.UTF_8));
+            fs.rename("/b", "/empty", true);
+            assertEquals("A", new String(fs.readAll("/empty"), StandardCharsets.UTF_8));
+            fs.rename("/empty", "/empty", false);
         }
     }
 
