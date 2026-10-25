@@ -464,7 +464,7 @@ class GocryptFsProviderOperationsTest {
     }
 
     @Test
-    void copyDirectoryTree() throws IOException {
+    void copyDirectoryIsShallow() throws IOException {
         Path dir = nio.getPath("/tree");
         Files.createDirectory(dir);
         Files.write(dir.resolve("a.txt"), "a".getBytes(StandardCharsets.UTF_8));
@@ -473,9 +473,54 @@ class GocryptFsProviderOperationsTest {
         Path copy = nio.getPath("/tree-copy");
         Files.copy(dir, copy);
         assertTrue(Files.isDirectory(copy));
-        assertEquals("a", new String(
-                Files.readAllBytes(copy.resolve("a.txt")), StandardCharsets.UTF_8));
-        assertTrue(Files.isDirectory(copy.resolve("sub")));
+        assertFalse(Files.exists(copy.resolve("a.txt")));
+        assertFalse(Files.exists(copy.resolve("sub")));
+    }
+
+    @Test
+    void copyOntoItselfKeepsFile() throws IOException {
+        Path f = nio.getPath("/self.txt");
+        Files.write(f, "keep".getBytes(StandardCharsets.UTF_8));
+        Files.copy(f, f, StandardCopyOption.REPLACE_EXISTING);
+        assertEquals("keep", new String(Files.readAllBytes(f), StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void copyReplaceNonEmptyDirectoryFails() throws IOException {
+        Path src = nio.getPath("/rsrc.txt");
+        Files.write(src, "x".getBytes(StandardCharsets.UTF_8));
+        Path dir = nio.getPath("/rdir");
+        Files.createDirectory(dir);
+        Files.write(dir.resolve("c.txt"), "c".getBytes(StandardCharsets.UTF_8));
+        assertThrows(java.nio.file.DirectoryNotEmptyException.class,
+                () -> Files.copy(src, dir, StandardCopyOption.REPLACE_EXISTING));
+        assertTrue(Files.exists(dir.resolve("c.txt")));
+    }
+
+    @Test
+    void walkBasedTreeCopy() throws IOException {
+        Path dir = nio.getPath("/wtree");
+        Files.createDirectory(dir);
+        Files.write(dir.resolve("a.txt"), "a".getBytes(StandardCharsets.UTF_8));
+        Files.createDirectory(dir.resolve("sub"));
+        Files.write(dir.resolve("sub").resolve("b.txt"), "b".getBytes(StandardCharsets.UTF_8));
+        Path dst = nio.getPath("/wtree-copy");
+        try (java.util.stream.Stream<Path> w = Files.walk(dir)) {
+            for (Path p : (Iterable<Path>) w::iterator) {
+                Files.copy(p, dst.resolve(dir.relativize(p).toString()));
+            }
+        }
+        assertEquals("b", new String(Files.readAllBytes(
+                dst.resolve("sub").resolve("b.txt")), StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void moveDirectoryIntoOwnSubtreeFails() throws IOException {
+        Path dir = nio.getPath("/mvself");
+        Files.createDirectory(dir);
+        Files.createDirectory(dir.resolve("in"));
+        assertThrows(IOException.class, () -> Files.move(dir, dir.resolve("in").resolve("x")));
+        assertTrue(Files.isDirectory(dir.resolve("in")));
     }
 
     @Test
@@ -512,7 +557,6 @@ class GocryptFsProviderOperationsTest {
         Path copy = nio.getPath("/attr-tree-copy");
         Files.copy(dir, copy, StandardCopyOption.COPY_ATTRIBUTES);
         assertTrue(Files.isDirectory(copy));
-        assertTrue(Files.exists(copy.resolve("f.txt")));
         assertEquals(time.toMillis(), Files.getLastModifiedTime(copy).toMillis());
     }
 

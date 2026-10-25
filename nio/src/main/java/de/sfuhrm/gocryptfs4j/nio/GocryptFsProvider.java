@@ -14,9 +14,11 @@ import java.nio.channels.SeekableByteChannel;
 import java.nio.file.AccessMode;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.CopyOption;
+import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileStore;
+import java.nio.file.FileSystemException;
 import java.nio.file.FileSystem;
 import java.nio.file.FileSystemAlreadyExistsException;
 import java.nio.file.LinkOption;
@@ -506,12 +508,15 @@ public final class GocryptFsProvider extends FileSystemProvider {
     // ------------------------------------------------------------------
 
     /**
-     * Copies a file, symbolic link or directory tree.
+     * Copies a file, symbolic link or directory.
      *
-     * <p>Symbolic links are followed unless {@link LinkOption#NOFOLLOW_LINKS} is
-     * given. With {@link StandardCopyOption#COPY_ATTRIBUTES} the times and, on
-     * POSIX systems, the permissions, owner and group are copied to the target.
-     * Symbolic links are reproduced as links and never receive attributes.</p>
+     * <p>As specified by {@link java.nio.file.Files#copy(Path, Path, CopyOption...)},
+     * copying a directory creates only the (empty) target directory; its entries
+     * are not copied. Copying a path onto itself is a no-op. Symbolic links are
+     * followed unless {@link LinkOption#NOFOLLOW_LINKS} is given. With
+     * {@link StandardCopyOption#COPY_ATTRIBUTES} the times and, on POSIX systems,
+     * the permissions, owner and group are copied to the target. Symbolic links
+     * are reproduced as links and never receive attributes.</p>
      *
      * @param source  the path to copy
      * @param target  the copy target
@@ -519,36 +524,66 @@ public final class GocryptFsProvider extends FileSystemProvider {
      * @throws NullPointerException if {@code source} or {@code target} is {@code null}
      * @throws FileAlreadyExistsException if the target exists and
      *                                    {@link StandardCopyOption#REPLACE_EXISTING} is not given
+     * @throws DirectoryNotEmptyException if the target is a non-empty directory and
+     *                                    {@link StandardCopyOption#REPLACE_EXISTING} is given
      * @throws IOException on filesystem errors
      */
     @Override
     public void copy(Path source, Path target, CopyOption... options) throws IOException {
         Objects.requireNonNull(source, "source");
         Objects.requireNonNull(target, "target");
-        Set<CopyOption> opts = options.length == 0
-                ? Collections.<CopyOption>emptySet()
-                : new HashSet<>(Arrays.asList(options));
-        boolean replace = opts.contains(StandardCopyOption.REPLACE_EXISTING);
-        boolean copyAttributes = opts.contains(StandardCopyOption.COPY_ATTRIBUTES);
-
+        Set<CopyOption> opts = toOptionSet(options);
         GocryptFsPath s = toAbsolute(source);
         if (!opts.contains(LinkOption.NOFOLLOW_LINKS)) {
             s = (GocryptFsPath) s.toRealPath();
         }
         GocryptFsPath t = toAbsolute(target);
+        if (s.equals(t) || toAbsolute(source).equals(t)) {
+            return;
+        }
+        copyEntry(s, t, opts, false);
+    }
+
+    private static Set<CopyOption> toOptionSet(CopyOption... options) {
+        return options.length == 0
+                ? Collections.<CopyOption>emptySet()
+                : new HashSet<>(Arrays.asList(options));
+    }
+
+    /**
+     * Copies one entry; with {@code recursive} the children of a directory are
+     * copied as well (used by {@link #move}).
+     *
+     * @param s         the absolute, resolved source
+     * @param t         the absolute target
+     * @param opts      the copy options
+     * @param recursive whether to copy directory contents
+     * @throws IOException on filesystem errors
+     */
+    private void copyEntry(GocryptFsPath s, GocryptFsPath t, Set<CopyOption> opts,
+                           boolean recursive) throws IOException {
+        boolean replace = opts.contains(StandardCopyOption.REPLACE_EXISTING);
+        boolean copyAttributes = opts.contains(StandardCopyOption.COPY_ATTRIBUTES);
         GocryptFs fs = core(s);
 
-        if (replace && exists(t)) {
-            deleteRecursively(t);
-        } else if (!replace && exists(t)) {
-            throw new FileAlreadyExistsException(t.toString());
+        if (exists(t)) {
+            if (!replace) {
+                throw new FileAlreadyExistsException(t.toString());
+            }
+            if (fs.stat(t.toString()).isDirectory() && !fs.list(t.toString()).isEmpty()) {
+                throw new DirectoryNotEmptyException(t.toString());
+            }
+            fs.delete(t.toString());
         }
 
         DirEntry se = fs.stat(s.toString());
         if (se.isDirectory()) {
             fs.mkdir(t.toString());
-            for (DirEntry child : fs.list(s.toString())) {
-                copy(s.resolve(child.plainName()), t.resolve(child.plainName()), options);
+            if (recursive) {
+                for (DirEntry child : fs.list(s.toString())) {
+                    copyEntry(s.resolve(child.plainName()), t.resolve(child.plainName()),
+                            opts, true);
+                }
             }
             if (copyAttributes) {
                 copyAttributes(s, t, false);
@@ -638,20 +673,24 @@ public final class GocryptFsProvider extends FileSystemProvider {
     public void move(Path source, Path target, CopyOption... options) throws IOException {
         Objects.requireNonNull(source, "source");
         Objects.requireNonNull(target, "target");
-        Set<CopyOption> opts = options.length == 0
-                ? Collections.<CopyOption>emptySet()
-                : new HashSet<>(Arrays.asList(options));
+        Set<CopyOption> opts = toOptionSet(options);
         if (opts.contains(StandardCopyOption.ATOMIC_MOVE)) {
             throw new AtomicMoveNotSupportedException(source.toString(), target.toString(),
                     "atomic moves are not supported");
         }
-        if (toAbsolute(source).equals(toAbsolute(target))) {
+        GocryptFsPath s = toAbsolute(source);
+        GocryptFsPath t = toAbsolute(target);
+        if (s.equals(t)) {
             return;
         }
-        List<CopyOption> copyOptions = new ArrayList<>(opts);
-        copyOptions.add(LinkOption.NOFOLLOW_LINKS);
-        copy(source, target, copyOptions.toArray(new CopyOption[0]));
-        deleteRecursively(toAbsolute(source));
+        if (t.startsWith(s)) {
+            throw new FileSystemException(s.toString(), t.toString(),
+                    "cannot move a path into its own subtree");
+        }
+        Set<CopyOption> copyOpts = new HashSet<>(opts);
+        copyOpts.add(LinkOption.NOFOLLOW_LINKS);
+        copyEntry(s, t, copyOpts, true);
+        deleteRecursively(s);
     }
 
     /**
