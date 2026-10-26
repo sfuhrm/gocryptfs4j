@@ -583,6 +583,29 @@ class GocryptFsTest {
     }
 
     @Test
+    void listSkipsUnsafeDecryptedNames() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+            fs.createFile("/ok.txt");
+
+            byte[] iv = fs.readDirIV(fs.cipherRoot());
+            Path root = fs.cipherRoot();
+            String[] unsafe = {"..", ".", "a/b", "a\\b", "a\u0000b"};
+            for (String name : unsafe) {
+                String cName = fs.cipherNameFor(name, iv);
+                Files.write(root.resolve(cName), new byte[0]);
+            }
+
+            List<String> names = fs.list("/").stream()
+                    .map(DirEntry::plainName).collect(Collectors.toList());
+            assertEquals(1, names.size());
+            assertEquals("ok.txt", names.get(0));
+        }
+    }
+
+    @Test
     void oversizedLongNameFileRejected() throws IOException {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);

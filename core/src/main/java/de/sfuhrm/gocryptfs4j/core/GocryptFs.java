@@ -790,6 +790,11 @@ public final class GocryptFs implements AutoCloseable {
                     // Skip undecryptable (corrupt) entries.
                     continue;
                 }
+                if (!isValidPlainName(plainName)) {
+                    // Skip names that would escape the directory in plaintext
+                    // space (e.g. "..", "/" or a NUL byte).
+                    continue;
+                }
 
                 DirEntry.Kind kind;
                 long size;
@@ -813,6 +818,27 @@ public final class GocryptFs implements AutoCloseable {
             }
         }
         return out;
+    }
+
+    /**
+     * Returns whether a decrypted name is safe to use as a single path
+     * component.
+     *
+     * @param name the decrypted name
+     * @return {@code false} if {@code name} is empty, {@code "."}, {@code ".."},
+     *         or contains a path separator or NUL byte
+     */
+    private static boolean isValidPlainName(String name) {
+        if (name.isEmpty() || name.equals(".") || name.equals("..")) {
+            return false;
+        }
+        for (int i = 0; i < name.length(); i++) {
+            char c = name.charAt(i);
+            if (c == '/' || c == '\\' || c == '\0') {
+                return false;
+            }
+        }
+        return true;
     }
 
     // ------------------------------------------------------------------
