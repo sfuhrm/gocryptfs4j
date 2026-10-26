@@ -16,6 +16,7 @@ import java.nio.file.attribute.GroupPrincipal;
 import java.nio.file.attribute.UserPrincipal;
 import java.nio.file.attribute.UserPrincipalLookupService;
 import java.util.Collections;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -141,6 +142,50 @@ class GocryptFsFeaturesTest {
 
             ws.close();
             assertFalse(key.isValid());
+        }
+    }
+
+    @Test
+    void watchKeyResetReoffersStrandedEvents() throws Exception {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        try (de.sfuhrm.gocryptfs4j.core.GocryptFs fs =
+                     de.sfuhrm.gocryptfs4j.core.GocryptFs.create(cipherDir, "pw".toCharArray())) {
+            // just create the filesystem layout
+        }
+        GocryptFsProvider provider = new GocryptFsProvider();
+        try (FileSystem nio = provider.newFileSystem(cipherDir, "pw".toCharArray())) {
+            // A long interval keeps the automatic scheduler out of the way; the
+            // test drives scans manually for determinism.
+            GocryptFsWatchService ws = new GocryptFsWatchService((GocryptFsFileSystem) nio, 60_000L);
+            Path root = nio.getPath("/");
+            WatchKey key = root.register(ws,
+                    StandardWatchEventKinds.ENTRY_CREATE,
+                    StandardWatchEventKinds.ENTRY_MODIFY);
+
+            Files.write(root.resolve("a.txt"), "a".getBytes(StandardCharsets.UTF_8));
+            ws.scan();
+            WatchKey first = ws.poll(2, TimeUnit.SECONDS);
+            assertNotNull(first, "the first change must signal the key");
+            assertSame(key, first);
+            assertTrue(first.pollEvents().stream().anyMatch(
+                    e -> e.kind() == StandardWatchEventKinds.ENTRY_CREATE));
+
+            // A change queued while the key is still signalled (before reset()).
+            Files.write(root.resolve("b.txt"), "b".getBytes(StandardCharsets.UTF_8));
+            ws.scan();
+
+            // Reset must re-offer the key because the queue is non-empty.
+            assertTrue(first.reset());
+
+            WatchKey second = ws.poll(2, TimeUnit.SECONDS);
+            assertNotNull(second, "reset must re-offer a key with queued events");
+            assertSame(key, second);
+            assertTrue(second.pollEvents().stream().anyMatch(
+                    e -> e.kind() == StandardWatchEventKinds.ENTRY_CREATE
+                            && "b.txt".equals(((Path) e.context()).getFileName().toString())));
+
+            ws.close();
         }
     }
 

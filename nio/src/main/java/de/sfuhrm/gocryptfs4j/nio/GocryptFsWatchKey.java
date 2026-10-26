@@ -236,10 +236,16 @@ final class GocryptFsWatchKey implements WatchKey {
     }
 
     /**
-     * Resets the key, clearing the signalled state and taking a fresh snapshot.
+     * Resets the key, clearing the signalled state so that further events
+     * signal the key again.
+     *
+     * <p>If events were queued while the key was still signalled, the key is
+     * re-offered so those events are not stranded. The directory snapshot is
+     * intentionally left untouched: {@link #scan()} updates it, and taking a
+     * fresh snapshot here would discard changes made since the last scan.</p>
      *
      * @return {@code true} if the key was reset, {@code false} if it is no
-     *         longer valid or the snapshot could not be taken
+     *         longer valid
      */
     @Override
     public boolean reset() {
@@ -249,11 +255,8 @@ final class GocryptFsWatchKey implements WatchKey {
                 return false;
             }
             signalled = false;
-            try {
-                snapshot = listSnapshot();
-            } catch (IOException e) {
-                cancel();
-                return false;
+            if (!queue.isEmpty()) {
+                signal();
             }
             return true;
         }
