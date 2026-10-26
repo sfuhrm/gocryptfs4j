@@ -792,7 +792,7 @@ public final class GocryptFs implements AutoCloseable {
                     size = 0;
                 } else if (attrs.isSymbolicLink()) {
                     kind = DirEntry.Kind.SYMLINK;
-                    size = readSymlink(p).length();
+                    size = readSymlink(p).getBytes(StandardCharsets.UTF_8).length;
                 } else if (attrs.isRegularFile()) {
                     kind = DirEntry.Kind.FILE;
                     size = contentEnc.cipherSizeToPlainSize(attrs.size());
@@ -888,7 +888,7 @@ public final class GocryptFs implements AutoCloseable {
             size = 0;
         } else if (attrs.isSymbolicLink()) {
             kind = DirEntry.Kind.SYMLINK;
-            size = readSymlink(r.cipherPath).length();
+            size = readSymlink(r.cipherPath).getBytes(StandardCharsets.UTF_8).length;
         } else if (attrs.isRegularFile()) {
             kind = DirEntry.Kind.FILE;
             size = contentEnc.cipherSizeToPlainSize(attrs.size());

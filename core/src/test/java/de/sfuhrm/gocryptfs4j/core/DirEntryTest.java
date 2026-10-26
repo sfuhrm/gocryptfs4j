@@ -119,4 +119,28 @@ class DirEntryTest {
             assertEquals("target.txt".length(), link.size());
         }
     }
+
+    @Test
+    void symlinkSizeCountsUtf8Bytes() throws Exception {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        String target = "Gr\u00fc\u00dfe-\u00d6l"; // "Grüße-Öl"
+        int utf8Bytes = target.getBytes(StandardCharsets.UTF_8).length;
+        assertNotEquals(target.length(), utf8Bytes);
+
+        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+            fs.createSymlink("/link", target);
+        }
+
+        try (GocryptFs fs = GocryptFs.open(cipherDir, "pw".toCharArray())) {
+            DirEntry listed = fs.list("/").stream()
+                    .filter(e -> e.plainName().equals("link"))
+                    .findFirst().orElseThrow(() -> new AssertionError("link not found"));
+            assertEquals(utf8Bytes, listed.size());
+
+            assertEquals(utf8Bytes, fs.stat("/link").size());
+            assertEquals(target, fs.readSymlinkTarget("/link"));
+        }
+    }
 }
