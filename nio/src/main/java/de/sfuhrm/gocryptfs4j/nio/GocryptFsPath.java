@@ -7,6 +7,7 @@ import org.jspecify.annotations.Nullable;
 import java.io.File;
 import java.io.IOException;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.FileSystem;
 import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
@@ -488,7 +489,31 @@ final class GocryptFsPath implements Path {
      */
     @Override
     public URI toUri() {
-        return URI.create(fs.uri().toString().replaceAll("/$", "") + (absolute ? path : "/" + path));
+        URI fsUri = fs.uri();
+        String p = absolute ? path : "/" + path;
+        return URI.create(fsUri.getScheme() + "://" + fsUri.getRawAuthority() + encodePath(p));
+    }
+
+    /**
+     * Percent-encodes a path, leaving the {@code "/"} separators and unreserved
+     * characters intact.
+     *
+     * @param p the path to encode
+     * @return the percent-encoded path
+     */
+    private static String encodePath(String p) {
+        StringBuilder sb = new StringBuilder();
+        for (byte b : p.getBytes(StandardCharsets.UTF_8)) {
+            if ((b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+                    || (b >= '0' && b <= '9') || b == '-' || b == '_'
+                    || b == '.' || b == '~' || b == '/') {
+                sb.append((char) b);
+            } else {
+                sb.append('%');
+                sb.append(String.format("%02X", b & 0xFF));
+            }
+        }
+        return sb.toString();
     }
 
     /**

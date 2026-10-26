@@ -6,6 +6,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.net.URI;
 import java.nio.file.FileSystem;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -163,6 +164,15 @@ class GocryptFsPathTest {
 
         assertTrue(relative.toUri().toString().startsWith("gocryptfs://"));
         assertThrows(UnsupportedOperationException.class, relative::toFile);
+    }
+
+    @Test
+    void toUriHandlesSpecialCharacters() {
+        URI uri = nio.getPath("/a b#c%d?e").toUri();
+        assertEquals("gocryptfs", uri.getScheme());
+        assertEquals("/a b#c%d?e", uri.getPath());
+
+        assertEquals("/x y", nio.getPath("x y").toUri().getPath());
     }
 
     @Test
