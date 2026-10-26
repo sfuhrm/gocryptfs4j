@@ -490,6 +490,32 @@ class GocryptFsTest {
     }
 
     @Test
+    void deleteLongNamedDirectoryRemovesNameFile() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        StringBuilder longName = new StringBuilder();
+        for (int i = 0; i < 40; i++) {
+            longName.append("segment").append(i).append('-');
+        }
+        String name = longName.toString();
+
+        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+            fs.mkdir("/" + name);
+
+            GocryptFs.Resolved r = fs.resolve("/" + name);
+            Path cipherPath = r.cipherPath;
+            Path nameFile = cipherPath.resolveSibling(r.cipherName + ".name");
+            assertTrue(Files.exists(nameFile), "long directories use a .name support file");
+
+            fs.delete("/" + name);
+
+            assertFalse(Files.exists(cipherPath, LinkOption.NOFOLLOW_LINKS));
+            assertFalse(Files.exists(nameFile), "the .name support file must be removed");
+        }
+    }
+
+    @Test
     void cipherInputStreamWipesReadAheadBufferOnClose() throws Exception {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);

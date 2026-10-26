@@ -1238,13 +1238,25 @@ public final class GocryptFs implements AutoCloseable {
             Files.delete(r.cipherPath);
         } else {
             Files.delete(r.cipherPath);
-            String cipherName = r.cipherName;
-            Path cipherParent = r.cipherParent;
-            if (!plaintextNames && cipherName != null && cipherParent != null
-                    && nameTransform.isLongContent(cipherName)) {
-                Files.deleteIfExists(cipherParent.resolve(cipherName + Constants.LONG_NAME_SUFFIX));
-            }
         }
+        removeLongName(r);
+    }
+
+    /**
+     * Removes the long-name support file (if any) for the resolved ciphertext
+     * entry. Used for both files and directories.
+     *
+     * @param r the resolved path whose long-name support file may be removed
+     * @throws IOException on filesystem errors
+     */
+    private void removeLongName(Resolved r) throws IOException {
+        String cipherName = r.cipherName;
+        Path cipherParent = r.cipherParent;
+        if (plaintextNames || cipherName == null || cipherParent == null
+                || !nameTransform.isLongContent(cipherName)) {
+            return;
+        }
+        Files.deleteIfExists(cipherParent.resolve(cipherName + Constants.LONG_NAME_SUFFIX));
     }
 
     /**
@@ -1298,13 +1310,7 @@ public final class GocryptFs implements AutoCloseable {
         }
         prepareLongName(to);
         Files.move(from.cipherPath, to.cipherPath);
-
-        String fromName = from.cipherName;
-        Path fromParent = from.cipherParent;
-        if (!plaintextNames && fromName != null && fromParent != null
-                && nameTransform.isLongContent(fromName)) {
-            Files.deleteIfExists(fromParent.resolve(fromName + Constants.LONG_NAME_SUFFIX));
-        }
+        removeLongName(from);
     }
 
     /**
