@@ -16,9 +16,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -103,5 +105,39 @@ class CipherFileMockTest {
 
         assertEquals(enc.plainBS, cf.plainSize());
         verify(channel).size();
+    }
+
+    @Test
+    void smallWritesToSameBlockReadItOnce() throws Exception {
+        ContentEnc enc = enc();
+        byte[] header = FileHeader.random().pack();
+        byte[] fileId = FileHeader.parse(header).id();
+        byte[] block = enc.encryptBlock(new byte[(int) enc.plainBS], 0, fileId);
+        byte[] whole = new byte[header.length + block.length];
+        System.arraycopy(header, 0, whole, 0, header.length);
+        System.arraycopy(block, 0, whole, header.length, block.length);
+
+        FileChannel channel = mock(FileChannel.class);
+        when(channel.size()).thenReturn((long) whole.length);
+        when(channel.read(any(ByteBuffer.class), anyLong())).thenAnswer(inv -> {
+            ByteBuffer bb = inv.getArgument(0);
+            long pos = inv.getArgument(1);
+            if (pos >= whole.length) {
+                return -1;
+            }
+            int n = (int) Math.min(bb.remaining(), whole.length - pos);
+            bb.put(whole, (int) pos, n);
+            return n;
+        });
+
+        CipherFile cf = newCipherFile(channel, enc);
+
+        cf.write(ByteBuffer.wrap(new byte[]{1}), 0);
+        cf.write(ByteBuffer.wrap(new byte[]{2}), 1);
+        cf.write(ByteBuffer.wrap(new byte[]{3}), 2);
+
+        // The first write read-modify-writes block 0; the next two merge into
+        // the one-block write-back buffer without re-reading it.
+        verify(channel, times(1)).read(any(ByteBuffer.class), eq((long) Constants.HEADER_LEN));
     }
 }

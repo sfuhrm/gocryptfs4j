@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.ClosedChannelException;
 import java.nio.channels.FileChannel;
+import java.nio.channels.NonWritableChannelException;
 import java.nio.channels.WritableByteChannel;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
@@ -35,6 +36,9 @@ public final class CipherFile implements AutoCloseable {
     /** The underlying cipher file channel. */
     private final FileChannel channel;
 
+    /** Whether the channel was opened for writing. */
+    private final boolean writable;
+
     /** The content-encryption helper. */
     private final ContentEnc enc;
 
@@ -56,17 +60,42 @@ public final class CipherFile implements AutoCloseable {
     /** Whether the file id has been loaded from the header. */
     private boolean fileIdLoaded;
 
+    /** Cached plaintext size, or {@code -1} if not yet determined. */
+    private long cachedPlainSize = -1;
+
+    /** Write-back buffer holding the most recently written plaintext block. */
+    private final byte[] wbPlain;
+
+    /** The block number buffered in {@link #wbPlain}, or {@code -1} if none. */
+    private long wbBlockNo = -1;
+
+    /** The number of valid plaintext bytes in {@link #wbPlain}. */
+    private int wbLen;
+
     /**
      * Creates an instance over an open channel.
+     *
+     * @param channel  the underlying file channel
+     * @param enc      the content-encryption helper
+     * @param writable whether the channel permits writes
+     */
+    private CipherFile(FileChannel channel, ContentEnc enc, boolean writable) {
+        this.channel = channel;
+        this.enc = enc;
+        this.writable = writable;
+        this.blockCipher = new byte[(int) enc.cipherBS];
+        this.blockPlain = new byte[(int) enc.plainBS];
+        this.wbPlain = new byte[(int) enc.plainBS];
+    }
+
+    /**
+     * Creates an instance over an open, writable channel.
      *
      * @param channel the underlying file channel
      * @param enc     the content-encryption helper
      */
     private CipherFile(FileChannel channel, ContentEnc enc) {
-        this.channel = channel;
-        this.enc = enc;
-        this.blockCipher = new byte[(int) enc.cipherBS];
-        this.blockPlain = new byte[(int) enc.plainBS];
+        this(channel, enc, true);
     }
 
     /**
@@ -106,7 +135,7 @@ public final class CipherFile implements AutoCloseable {
         } else {
             ch = FileChannel.open(cipherPath, StandardOpenOption.READ);
         }
-        return new CipherFile(ch, enc);
+        return new CipherFile(ch, enc, writable);
     }
 
     /**
@@ -140,11 +169,10 @@ public final class CipherFile implements AutoCloseable {
      * @throws IOException on filesystem errors
      */
     public synchronized long plainSize() throws IOException {
-        long cipherSize = channel.size();
-        if (cipherSize == 0) {
-            return 0;
+        if (cachedPlainSize < 0) {
+            cachedPlainSize = enc.cipherSizeToPlainSize(channel.size());
         }
-        return enc.cipherSizeToPlainSize(cipherSize);
+        return cachedPlainSize;
     }
 
     /**
@@ -162,6 +190,7 @@ public final class CipherFile implements AutoCloseable {
         if (plainOffset < 0) {
             throw new IllegalArgumentException("negative offset: " + plainOffset);
         }
+        flushWriteBack();
         long size = plainSize();
         if (plainOffset >= size) {
             return -1;
@@ -218,6 +247,9 @@ public final class CipherFile implements AutoCloseable {
      */
     public synchronized int write(ByteBuffer src, long plainOffset) throws IOException {
         Objects.requireNonNull(src, "src");
+        if (!writable) {
+            throw new NonWritableChannelException();
+        }
         if (plainOffset < 0) {
             throw new IllegalArgumentException("negative offset: " + plainOffset);
         }
@@ -242,11 +274,19 @@ public final class CipherFile implements AutoCloseable {
         long firstBlock = plainOffset / enc.plainBS;
         long lastBlock = (plainOffset + length - 1) / enc.plainBS;
         int blockCount = (int) (lastBlock - firstBlock + 1);
+
+        // A write that does not continue into the buffered block must flush it.
+        if (wbBlockNo >= 0 && wbBlockNo != firstBlock) {
+            flushWriteBack();
+        }
+
         ensureBulk(blockCount);
         byte[] cipherBuf = Objects.requireNonNull(bulkCipher, "bulkCipher");
         byte[] plainBuf = Objects.requireNonNull(bulkPlain, "bulkPlain");
 
         int plainPos = 0;
+        int lastStart = 0;
+        int lastLen = 0;
         for (long b = firstBlock; b <= lastBlock; b++) {
             long blockStart = b * enc.plainBS;
             long lo = Math.max(plainOffset, blockStart);
@@ -254,23 +294,44 @@ public final class CipherFile implements AutoCloseable {
             int segLen = (int) (hi - lo);
             int segSkip = (int) (lo - blockStart);
 
+            int blockPlainLen;
             if (segSkip == 0 && segLen == enc.plainBS) {
                 src.get(plainBuf, plainPos, segLen);
-                plainPos += segLen;
+                blockPlainLen = segLen;
+            } else if (b == wbBlockNo) {
+                blockPlainLen = Math.max(wbLen, segSkip + segLen);
+                System.arraycopy(wbPlain, 0, plainBuf, plainPos, wbLen);
+                for (int i = wbLen; i < segSkip; i++) {
+                    plainBuf[plainPos + i] = 0;
+                }
+                src.get(plainBuf, plainPos + segSkip, segLen);
             } else {
                 byte[] old = readPlainBlock(b);
-                int blockPlainLen = Math.max(old.length, segSkip + segLen);
+                blockPlainLen = Math.max(old.length, segSkip + segLen);
                 System.arraycopy(old, 0, plainBuf, plainPos, old.length);
                 for (int i = old.length; i < segSkip; i++) {
                     plainBuf[plainPos + i] = 0;
                 }
                 src.get(plainBuf, plainPos + segSkip, segLen);
-                plainPos += blockPlainLen;
             }
+
+            if (b == lastBlock) {
+                lastStart = plainPos;
+                lastLen = blockPlainLen;
+            }
+            plainPos += blockPlainLen;
         }
 
-        int cipherLength = enc.encryptBlocks(plainBuf, 0, plainPos, firstBlock, fileId, cipherBuf, 0);
-        writeCipherRange(enc.blockNoToCipherOff(firstBlock), cipherBuf, 0, cipherLength);
+        // Write every block except the last one, which is kept in the write-back
+        // buffer so a later small write into it merges without a full
+        // read-decrypt-merge-encrypt cycle.
+        int cipherLen = enc.encryptBlocks(plainBuf, 0, lastStart, firstBlock, fileId, cipherBuf, 0);
+        writeCipherRange(enc.blockNoToCipherOff(firstBlock), cipherBuf, 0, cipherLen);
+        System.arraycopy(plainBuf, lastStart, wbPlain, 0, lastLen);
+        wbBlockNo = lastBlock;
+        wbLen = lastLen;
+
+        cachedPlainSize = Math.max(oldSize, plainOffset + length);
         return length;
     }
 
@@ -290,11 +351,15 @@ public final class CipherFile implements AutoCloseable {
             return;
         }
         if (newPlainSize == 0) {
+            wbBlockNo = -1;
+            wbLen = 0;
             channel.truncate(0);
             fileId = null;
             fileIdLoaded = true;
+            cachedPlainSize = 0;
             return;
         }
+        flushWriteBack();
         byte[] fileId = ensureFileId();
 
         if (newPlainSize > oldSize) {
@@ -318,6 +383,7 @@ public final class CipherFile implements AutoCloseable {
             writeCipherRange(enc.blockNoToCipherOff(blockNo), cipherBlock);
             channel.truncate(enc.plainSizeToCipherSize(newPlainSize));
         }
+        cachedPlainSize = newPlainSize;
     }
 
     /**
@@ -348,6 +414,22 @@ public final class CipherFile implements AutoCloseable {
             fileId = h.id();
         }
         return fileId;
+    }
+
+    /**
+     * Encrypts and writes the buffered write-back block, if any.
+     *
+     * @throws IOException on filesystem or encryption errors
+     */
+    private void flushWriteBack() throws IOException {
+        if (wbBlockNo < 0) {
+            return;
+        }
+        byte[] id = fileId;
+        int cipherLen = enc.encryptBlocks(wbPlain, 0, wbLen, wbBlockNo, id, blockCipher, 0);
+        writeCipherRange(enc.blockNoToCipherOff(wbBlockNo), blockCipher, 0, cipherLen);
+        wbBlockNo = -1;
+        wbLen = 0;
     }
 
     /**
@@ -561,6 +643,7 @@ public final class CipherFile implements AutoCloseable {
      * @throws IOException on filesystem errors
      */
     public synchronized void force(boolean metaData) throws IOException {
+        flushWriteBack();
         channel.force(metaData);
     }
 
@@ -574,19 +657,26 @@ public final class CipherFile implements AutoCloseable {
     @Override
     public synchronized void close() throws IOException {
         try {
-            channel.close();
+            flushWriteBack();
         } finally {
-            Arrays.fill(blockCipher, (byte) 0);
-            Arrays.fill(blockPlain, (byte) 0);
-            byte[] bulk = bulkCipher;
-            if (bulk != null) {
-                Arrays.fill(bulk, (byte) 0);
-                bulkCipher = null;
-            }
-            bulk = bulkPlain;
-            if (bulk != null) {
-                Arrays.fill(bulk, (byte) 0);
-                bulkPlain = null;
+            try {
+                channel.close();
+            } finally {
+                Arrays.fill(blockCipher, (byte) 0);
+                Arrays.fill(blockPlain, (byte) 0);
+                Arrays.fill(wbPlain, (byte) 0);
+                wbBlockNo = -1;
+                wbLen = 0;
+                byte[] bulk = bulkCipher;
+                if (bulk != null) {
+                    Arrays.fill(bulk, (byte) 0);
+                    bulkCipher = null;
+                }
+                bulk = bulkPlain;
+                if (bulk != null) {
+                    Arrays.fill(bulk, (byte) 0);
+                    bulkPlain = null;
+                }
             }
         }
     }
