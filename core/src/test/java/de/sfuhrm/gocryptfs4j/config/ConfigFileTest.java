@@ -25,6 +25,10 @@ class ConfigFileTest {
 
     private static final char[] PASSWORD = "secretpw".toCharArray();
 
+    /** A dummy, well-formed encrypted key (nonce + key + tag) for configs that only test other fields. */
+    private static final String VALID_ENCRYPTED_KEY =
+            Base64.getEncoder().encodeToString(new byte[64]);
+
     @Test
     void createWithXchachaSetsFlag() {
         ConfigFile cf = ConfigFile.create(Keys.randomBytes(Constants.KEY_LEN), PASSWORD, false,
@@ -231,6 +235,58 @@ class ConfigFileTest {
     }
 
     @Test
+    void loadRejectsMalformedJson() throws Exception {
+        Path dir = Files.createTempDirectory("gocryptfs4j-");
+        try {
+            Path conf = dir.resolve("gocryptfs.conf");
+            Files.write(conf, "{not valid json".getBytes(StandardCharsets.UTF_8));
+            assertThrows(IOException.class, () -> ConfigFile.load(conf));
+        } finally {
+            Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
+    void loadRejectsInvalidEncryptedKey() throws Exception {
+        Path dir = Files.createTempDirectory("gocryptfs4j-");
+        try {
+            assertThrows(IOException.class,
+                    () -> ConfigFile.load(writeConfWithEncryptedKey(dir, "!!!not base64!!!")));
+        } finally {
+            Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
+    void loadRejectsTooShortEncryptedKey() throws Exception {
+        Path dir = Files.createTempDirectory("gocryptfs4j-");
+        try {
+            assertThrows(IOException.class, () -> ConfigFile.load(
+                    writeConfWithEncryptedKey(dir, Base64.getEncoder().encodeToString(new byte[4]))));
+        } finally {
+            Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
+    void decryptMasterKeyRejectsMissingOrInvalidEncryptedKey() throws Exception {
+        byte[] masterKey = Keys.randomBytes(Constants.KEY_LEN);
+        ConfigFile cf = ConfigFile.create(masterKey, PASSWORD, false, ContentCipherType.AES_GCM);
+
+        cf.encryptedKey = null;
+        assertThrows(IOException.class, () -> cf.decryptMasterKey(PASSWORD));
+
+        cf.encryptedKey = "!!!not base64!!!";
+        assertThrows(IOException.class, () -> cf.decryptMasterKey(PASSWORD));
+
+        cf.encryptedKey = Base64.getEncoder().encodeToString(new byte[4]);
+        assertThrows(IOException.class, () -> cf.decryptMasterKey(PASSWORD));
+    }
+
+    @Test
     void loadRejectsOverlongFido2Parameters() throws Exception {
         Path dir = Files.createTempDirectory("gocryptfs4j-");
         String salt32 = Base64.getEncoder().encodeToString(new byte[32]);
@@ -282,7 +338,7 @@ class ConfigFileTest {
     private static Path writeConf(Path dir, String saltB64, int n, int r, int p, int keyLen,
                                   String featureFlags, String fido2) throws IOException {
         StringBuilder json = new StringBuilder();
-        json.append("{\"Creator\":\"test\",\"EncryptedKey\":\"\",");
+        json.append("{\"Creator\":\"test\",\"EncryptedKey\":\"").append(VALID_ENCRYPTED_KEY).append("\",");
         json.append("\"ScryptObject\":{\"Salt\":\"").append(saltB64).append("\",");
         json.append("\"N\":").append(n).append(",\"R\":").append(r)
                 .append(",\"P\":").append(p).append(",\"KeyLen\":").append(keyLen).append("},");
@@ -291,6 +347,18 @@ class ConfigFileTest {
             json.append(",\"FIDO2\":").append(fido2);
         }
         json.append('}');
+        Path conf = dir.resolve("gocryptfs.conf");
+        Files.write(conf, json.toString().getBytes(StandardCharsets.UTF_8));
+        return conf;
+    }
+
+    private static Path writeConfWithEncryptedKey(Path dir, String encryptedKeyB64) throws IOException {
+        String salt32 = Base64.getEncoder().encodeToString(new byte[32]);
+        StringBuilder json = new StringBuilder();
+        json.append("{\"Creator\":\"test\",\"EncryptedKey\":\"").append(encryptedKeyB64).append("\",");
+        json.append("\"ScryptObject\":{\"Salt\":\"").append(salt32).append("\",");
+        json.append("\"N\":").append(1 << 16).append(",\"R\":8,\"P\":1,\"KeyLen\":32},");
+        json.append("\"Version\":2,\"FeatureFlags\":[\"HKDF\",\"GCMIV128\"]}");
         Path conf = dir.resolve("gocryptfs.conf");
         Files.write(conf, json.toString().getBytes(StandardCharsets.UTF_8));
         return conf;

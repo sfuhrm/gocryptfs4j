@@ -101,7 +101,12 @@ public final class ConfigFile {
         Objects.requireNonNull(path, "path");
         byte[] bytes = IoUtil.readBounded(path, Constants.CONFIG_MAX_SIZE);
         String json = new String(bytes, StandardCharsets.UTF_8);
-        ConfigFile cf = GSON.fromJson(json, ConfigFile.class);
+        ConfigFile cf;
+        try {
+            cf = GSON.fromJson(json, ConfigFile.class);
+        } catch (RuntimeException e) {
+            throw new IOException("malformed config file", e);
+        }
         if (cf == null) {
             throw new IOException("empty config file");
         }
@@ -128,6 +133,7 @@ public final class ConfigFile {
                 }
             }
         }
+        validateEncryptedKey();
         validateScrypt();
         if (isFeatureFlagSet(Constants.FLAG_FIDO2)) {
             if (fido2 == null) {
@@ -157,6 +163,30 @@ public final class ConfigFile {
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * Validates the encrypted master key field.
+     *
+     * @throws IOException if the encrypted key is missing, not valid Base64 or
+     *                     too short to hold a nonce, the master key and the GCM
+     *                     authentication tag
+     */
+    private void validateEncryptedKey() throws IOException {
+        if (encryptedKey == null || encryptedKey.isEmpty()) {
+            throw new IOException("encrypted key is missing");
+        }
+        byte[] keyBytes;
+        try {
+            keyBytes = Base64.getDecoder().decode(encryptedKey);
+        } catch (IllegalArgumentException e) {
+            throw new IOException("invalid encrypted key", e);
+        }
+        int ivLen = isFeatureFlagSet(Constants.FLAG_HKDF) ? Constants.DEFAULT_IV_BITS / 8 : 96 / 8;
+        int minLen = ivLen + Constants.KEY_LEN + Constants.AUTH_TAG_LEN;
+        if (keyBytes.length < minLen) {
+            throw new IOException("encrypted key too short: " + keyBytes.length + " bytes");
         }
     }
 
@@ -322,6 +352,7 @@ public final class ConfigFile {
     public byte[] decryptMasterKey(byte[] secret) throws IOException {
         Objects.requireNonNull(secret, "secret");
         validateScrypt();
+        validateEncryptedKey();
         ScryptKdf s = scryptObject;
         byte[] scryptHash = Keys.scrypt(secret, decode(s.salt), s.n, s.r, s.p, s.keyLen);
         byte[] contentKey = null;
