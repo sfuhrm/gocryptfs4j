@@ -19,10 +19,13 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.CharBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.util.ArrayList;
@@ -801,20 +804,54 @@ public final class ConfigFile {
      * Writes the config as JSON (with a trailing newline) to {@code path},
      * optionally overwriting an existing file.
      *
+     * <p>The config is written to a temporary file in the same directory,
+     * flushed to disk and then atomically moved into place, so a crash or a
+     * full disk never leaves {@code path} truncated or half-written. On POSIX
+     * filesystems the file is given mode {@code 0400}, matching gocryptfs.</p>
+     *
      * @param path      the path to write to
      * @param overwrite whether to replace an existing file
-     * @throws IOException on filesystem errors
+     * @throws IOException on filesystem errors, or if the file exists and
+     *                     {@code overwrite} is {@code false}
      * @throws NullPointerException if {@code path} is {@code null}
      */
     public void writeTo(Path path, boolean overwrite) throws IOException {
         Objects.requireNonNull(path, "path");
         String json = GSON.toJson(this) + "\n";
         byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
-        if (overwrite) {
-            Files.write(path, bytes, StandardOpenOption.CREATE,
-                    StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
-        } else {
-            Files.write(path, bytes, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+
+        Path absolute = path.toAbsolutePath();
+        Path dir = absolute.getParent();
+        if (dir == null) {
+            throw new IOException("cannot determine parent directory of " + path);
+        }
+        Path temp = Files.createTempFile(dir, ".gocryptfs-", ".tmp");
+        boolean moved = false;
+        try {
+            try (FileChannel channel = FileChannel.open(temp,
+                    StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
+                ByteBuffer buffer = ByteBuffer.wrap(bytes);
+                while (buffer.hasRemaining()) {
+                    channel.write(buffer);
+                }
+                channel.force(true);
+            }
+            try {
+                Files.setPosixFilePermissions(temp, PosixFilePermissions.fromString("r--------"));
+            } catch (UnsupportedOperationException e) {
+                // Non-POSIX filesystem: leave the default permissions.
+            }
+            if (overwrite) {
+                Files.move(temp, absolute, StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING);
+            } else {
+                Files.move(temp, absolute);
+            }
+            moved = true;
+        } finally {
+            if (!moved) {
+                Files.deleteIfExists(temp);
+            }
         }
     }
 }
