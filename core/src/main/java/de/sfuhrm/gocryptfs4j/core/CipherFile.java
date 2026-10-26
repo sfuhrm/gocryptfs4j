@@ -29,6 +29,9 @@ public final class CipherFile implements AutoCloseable {
     /** A shared, immutable empty byte array. */
     private static final byte[] EMPTY = new byte[0];
 
+    /** Maximum plaintext bytes processed per bulk read or write call. */
+    private static final int MAX_BULK_BYTES = 256 * 1024;
+
     /** The underlying cipher file channel. */
     private final FileChannel channel;
 
@@ -167,7 +170,7 @@ public final class CipherFile implements AutoCloseable {
         if (maxLen == 0) {
             return 0;
         }
-        long length = Math.min(maxLen, size - plainOffset);
+        long length = Math.min(Math.min(maxLen, size - plainOffset), MAX_BULK_BYTES);
 
         byte[] fileId = fileId();
         if (fileId == null) {
@@ -222,6 +225,7 @@ public final class CipherFile implements AutoCloseable {
         if (length == 0) {
             return 0;
         }
+        length = Math.min(length, MAX_BULK_BYTES);
 
         // Zero-pad any hole up to a block boundary so that the ciphertext file
         // always consists of whole blocks except possibly the last one.

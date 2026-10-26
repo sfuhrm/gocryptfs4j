@@ -1072,7 +1072,15 @@ public final class GocryptFs implements AutoCloseable {
         }
         Resolved r = resolve(plainFile);
         try (CipherFile cf = openCipherFile(r.cipherPath, true)) {
-            cf.write(ByteBuffer.wrap(data), offset);
+            ByteBuffer buf = ByteBuffer.wrap(data);
+            long pos = offset;
+            while (buf.hasRemaining()) {
+                int n = cf.write(buf, pos);
+                if (n <= 0) {
+                    throw new IOException("no progress writing to " + plainFile);
+                }
+                pos += n;
+            }
         }
     }
 

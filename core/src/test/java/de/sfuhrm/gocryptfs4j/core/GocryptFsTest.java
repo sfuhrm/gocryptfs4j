@@ -218,6 +218,23 @@ class GocryptFsTest {
     }
 
     @Test
+    void writeLargeFileLoopsOverShortWrites() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        byte[] data = new byte[256 * 1024 * 2 + 123];
+        for (int i = 0; i < data.length; i++) {
+            data[i] = (byte) (i * 29);
+        }
+
+        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+            fs.createFile("/large.bin");
+            fs.write("/large.bin", 0, data);
+            assertArrayEquals(data, fs.readAll("/large.bin"));
+        }
+    }
+
+    @Test
     void openWriteOverwritesExistingContent() throws IOException {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);

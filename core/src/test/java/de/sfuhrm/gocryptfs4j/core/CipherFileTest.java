@@ -88,6 +88,35 @@ class CipherFileTest {
     }
 
     @Test
+    void readCapsSingleCallAtMaxBulkBytes() throws IOException {
+        ContentEnc enc = enc();
+        int bulk = 256 * 1024;
+        byte[] data = new byte[bulk * 2 + 123];
+        Arrays.fill(data, (byte) 0x11);
+
+        try (CipherFile cf = CipherFile.open(newFile(), enc, true)) {
+            cf.write(ByteBuffer.wrap(data), 0);
+
+            ByteBuffer dst = ByteBuffer.allocate(data.length);
+            int n = cf.read(dst, 0);
+            assertEquals(bulk, n);
+            assertEquals(bulk, dst.position());
+        }
+    }
+
+    @Test
+    void writeCapsSingleCallAtMaxBulkBytes() throws IOException {
+        ContentEnc enc = enc();
+        int bulk = 256 * 1024;
+        byte[] data = new byte[bulk * 2 + 123];
+        Arrays.fill(data, (byte) 0x22);
+
+        try (CipherFile cf = CipherFile.open(newFile(), enc, true)) {
+            assertEquals(bulk, cf.write(ByteBuffer.wrap(data), 0));
+        }
+    }
+
+    @Test
     void readBeyondEofReturnsMinusOne() throws IOException {
         byte[] data = new byte[100];
         try (CipherFile cf = CipherFile.open(newFile(), enc(), true)) {
