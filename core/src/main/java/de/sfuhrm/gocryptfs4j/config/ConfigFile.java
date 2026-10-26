@@ -432,6 +432,8 @@ public final class ConfigFile {
      * @param password  the new password, encoded as UTF-8
      * @throws NullPointerException if {@code masterKey} or {@code password} is {@code null}
      * @throws IllegalArgumentException if {@code masterKey} is not 32 bytes long
+     * @throws IllegalStateException if the config uses FIDO2 key protection, which
+     *                               cannot be changed to a password
      */
     public void reencryptMasterKey(byte[] masterKey, char[] password) {
         Objects.requireNonNull(masterKey, "masterKey");
@@ -439,6 +441,10 @@ public final class ConfigFile {
         if (masterKey.length != Constants.KEY_LEN) {
             throw new IllegalArgumentException("master key must be "
                     + Constants.KEY_LEN + " bytes");
+        }
+        if (isFeatureFlagSet(Constants.FLAG_FIDO2)) {
+            throw new IllegalStateException(
+                    "cannot change the password of a FIDO2-protected filesystem");
         }
         ScryptKdf s = scryptObject;
         if (s == null) {

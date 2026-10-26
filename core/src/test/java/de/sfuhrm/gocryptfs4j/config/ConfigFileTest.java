@@ -153,6 +153,17 @@ class ConfigFileTest {
     }
 
     @Test
+    void reencryptMasterKeyRejectsFido2Config() {
+        byte[] masterKey = Keys.randomBytes(Constants.KEY_LEN);
+        Fido2Params fido2 = new Fido2Params(new byte[]{1, 2, 3}, new byte[32], null);
+        ConfigFile cf = ConfigFile.create(masterKey, "secret".getBytes(StandardCharsets.UTF_8),
+                false, ContentCipherType.AES_GCM, fido2);
+        assertTrue(cf.isFeatureFlagSet(Constants.FLAG_FIDO2));
+        assertThrows(IllegalStateException.class,
+                () -> cf.reencryptMasterKey(masterKey, "new-pw".toCharArray()));
+    }
+
+    @Test
     void passwordIsEncodedAsUtf8() throws Exception {
         // German umlauts: UTF-8 is multi-byte and differs from low-byte truncation.
         String password = "Gr\u00fc\u00dfe-\u00d6l-\u00e4\u00f6\u00fc";
