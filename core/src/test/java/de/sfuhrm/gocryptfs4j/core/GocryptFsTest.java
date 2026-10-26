@@ -14,6 +14,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.FileSystemException;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -357,8 +358,8 @@ class GocryptFsTest {
         Files.createDirectory(cipherDir);
 
         StringBuilder longName = new StringBuilder();
-        for (int i = 0; i < 40; i++) {
-            longName.append("segment").append(i).append('-');
+        for (int i = 0; i < 220; i++) {
+            longName.append('x');
         }
         String name = longName.toString();
 
@@ -495,8 +496,8 @@ class GocryptFsTest {
         Files.createDirectory(cipherDir);
 
         StringBuilder longName = new StringBuilder();
-        for (int i = 0; i < 40; i++) {
-            longName.append("segment").append(i).append('-');
+        for (int i = 0; i < 220; i++) {
+            longName.append('x');
         }
         String name = longName.toString();
 
@@ -562,13 +563,33 @@ class GocryptFsTest {
     }
 
     @Test
+    void nameTooLongRejected() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 256; i++) {
+            sb.append('x');
+        }
+        String tooLong = sb.toString();
+
+        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+            FileSystemException e = assertThrows(FileSystemException.class,
+                    () -> fs.createFile("/" + tooLong));
+            assertTrue(e.getMessage().contains("File name too long"), e.getMessage());
+            assertThrows(FileSystemException.class, () -> fs.mkdir("/" + tooLong));
+            assertThrows(FileSystemException.class, () -> fs.createSymlink("/" + tooLong, "target"));
+        }
+    }
+
+    @Test
     void oversizedLongNameFileRejected() throws IOException {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
 
         StringBuilder longName = new StringBuilder();
-        for (int i = 0; i < 40; i++) {
-            longName.append("segment").append(i).append('-');
+        for (int i = 0; i < 220; i++) {
+            longName.append('x');
         }
         String name = longName.toString();
 

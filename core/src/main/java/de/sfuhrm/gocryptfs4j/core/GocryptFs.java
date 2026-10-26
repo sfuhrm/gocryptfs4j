@@ -22,6 +22,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.FileSystemException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
@@ -554,10 +555,15 @@ public final class GocryptFs implements AutoCloseable {
      * @param dirIV     the 16-byte directory IV
      * @return the ciphertext name
      * @throws NullPointerException if {@code plainName} or {@code dirIV} is {@code null}
+     * @throws FileSystemException if {@code plainName} is longer than the 255-byte
+     *                             name limit
      */
-    public String cipherNameFor(String plainName, byte[] dirIV) {
+    public String cipherNameFor(String plainName, byte[] dirIV) throws IOException {
         Objects.requireNonNull(plainName, "plainName");
         Objects.requireNonNull(dirIV, "dirIV");
+        if (plainName.getBytes(StandardCharsets.UTF_8).length > Constants.NAME_MAX) {
+            throw new FileSystemException(plainName, null, "File name too long");
+        }
         if (plaintextNames) {
             return plainName;
         }
