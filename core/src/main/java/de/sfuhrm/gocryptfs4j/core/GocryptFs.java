@@ -796,9 +796,16 @@ public final class GocryptFs implements AutoCloseable {
                     }
                     if (t == NameTransform.LONG_NAME_CONTENT) {
                         Path nameFile = cipherDir.resolve(cName + Constants.LONG_NAME_SUFFIX);
-                        cipherName = new String(
-                                IoUtil.readBounded(nameFile, Constants.LONG_NAME_CONTENT_MAX_SIZE),
-                                StandardCharsets.UTF_8);
+                        byte[] nameBytes;
+                        try {
+                            nameBytes = IoUtil.readBounded(nameFile,
+                                    Constants.LONG_NAME_CONTENT_MAX_SIZE);
+                        } catch (IOException e) {
+                            // A missing, oversized or otherwise unreadable .name
+                            // file is treated like a corrupt name: skip it.
+                            continue;
+                        }
+                        cipherName = new String(nameBytes, StandardCharsets.UTF_8);
                     }
                 }
 

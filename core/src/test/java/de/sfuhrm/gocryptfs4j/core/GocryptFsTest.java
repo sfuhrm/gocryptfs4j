@@ -627,7 +627,7 @@ class GocryptFsTest {
     }
 
     @Test
-    void oversizedLongNameFileRejected() throws IOException {
+    void oversizedLongNameFileSkipped() throws IOException {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
 
@@ -644,9 +644,34 @@ class GocryptFsTest {
             Path nameFile = cipherDir.resolve(cipherName + ".name");
             assertTrue(Files.exists(nameFile), "long names use a .name support file");
 
-            // Oversized .name content must be rejected without being buffered.
+            // Oversized .name content must be skipped like a corrupt name,
+            // without breaking the whole listing or being buffered.
             Files.write(nameFile, new byte[8192]);
-            assertThrows(IOException.class, () -> fs.list("/"));
+            assertTrue(fs.list("/").isEmpty());
+        }
+    }
+
+    @Test
+    void missingLongNameFileSkipped() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        StringBuilder longName = new StringBuilder();
+        for (int i = 0; i < 220; i++) {
+            longName.append('x');
+        }
+        String name = longName.toString();
+
+        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+            fs.createFile("/" + name);
+            String cipherName = fs.list("/").get(0).cipherName();
+            assertNotNull(cipherName);
+            Path nameFile = cipherDir.resolve(cipherName + ".name");
+            assertTrue(Files.exists(nameFile), "long names use a .name support file");
+
+            // A missing .name file must be skipped like a corrupt name.
+            Files.delete(nameFile);
+            assertTrue(fs.list("/").isEmpty());
         }
     }
 
