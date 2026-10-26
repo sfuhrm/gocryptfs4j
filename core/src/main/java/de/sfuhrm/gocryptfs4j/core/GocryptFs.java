@@ -500,6 +500,32 @@ public final class GocryptFs implements AutoCloseable {
         return plaintextNames;
     }
 
+    /**
+     * Changes the password protecting this filesystem's master key and writes
+     * the updated {@code gocryptfs.conf} atomically.
+     *
+     * <p>This is the equivalent of gocryptfs's {@code -passwd}. The master key
+     * itself is unchanged, so the ciphertext of every existing file remains
+     * valid; only the scrypt salt and the encrypted master-key blob are
+     * rewritten. The supplied password is read but neither retained nor wiped
+     * by this class, so the caller should clear it when it is no longer
+     * needed.</p>
+     *
+     * @param password the new password, encoded as UTF-8; read but neither
+     *                 retained nor wiped by this class
+     * @throws IOException on filesystem errors, or if the config cannot be
+     *                     written atomically
+     * @throws NullPointerException if {@code password} is {@code null}
+     * @throws IllegalStateException if this filesystem is protected by a FIDO2
+     *                               token, whose key protection cannot be
+     *                               changed to a password
+     */
+    public void changePassword(char[] password) throws IOException {
+        Objects.requireNonNull(password, "password");
+        config.reencryptMasterKey(masterKey, password);
+        config.writeTo(cipherRoot.resolve(Constants.CONF_DEFAULT_NAME), true);
+    }
+
     // ------------------------------------------------------------------
     // Directory IV management
     // ------------------------------------------------------------------

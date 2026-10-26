@@ -191,6 +191,32 @@ class GocryptFsTest {
     }
 
     @Test
+    void changePasswordReencryptsAndWritesAtomically() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        byte[] secret = "hello gocryptfs".getBytes(StandardCharsets.UTF_8);
+        char[] oldPassword = "old-password".toCharArray();
+        char[] newPassword = "new-password".toCharArray();
+
+        try (GocryptFs fs = GocryptFs.create(cipherDir, oldPassword)) {
+            fs.createFile("/hello.txt");
+            fs.write("/hello.txt", 0, secret);
+
+            fs.changePassword(newPassword);
+
+            // The filesystem is still usable after the change, and the config
+            // on disk was rewritten (atomically) in place.
+            assertArrayEquals(secret, fs.readAll("/hello.txt"));
+        }
+
+        try (GocryptFs fs = GocryptFs.open(cipherDir, newPassword)) {
+            assertArrayEquals(secret, fs.readAll("/hello.txt"));
+        }
+        assertThrows(IOException.class, () -> GocryptFs.open(cipherDir, oldPassword));
+    }
+
+    @Test
     void openWriteStreaming() throws IOException {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
