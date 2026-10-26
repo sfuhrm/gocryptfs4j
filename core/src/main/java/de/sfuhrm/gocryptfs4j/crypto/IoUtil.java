@@ -4,6 +4,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 
 /**
@@ -26,15 +28,26 @@ public final class IoUtil {
      * exceeded, so a rogue or corrupt file cannot cause an out-of-memory
      * condition.</p>
      *
+     * <p>The path must be a regular file (not followed as a symlink), so a FIFO
+     * or device masquerading as a config, {@code gocryptfs.diriv} or long-name
+     * file cannot block the read forever.</p>
+     *
      * @param path     the file to read
      * @param maxBytes the maximum number of bytes to accept
      * @return the file contents, at most {@code maxBytes} bytes
-     * @throws IOException if the file cannot be read or exceeds {@code maxBytes}
+     * @throws IOException if the file cannot be read, is not a regular file, or
+     *                     exceeds {@code maxBytes}
      * @throws NullPointerException if {@code path} is {@code null}
      */
     public static byte[] readBounded(Path path, int maxBytes) throws IOException {
         if (maxBytes < 0) {
             throw new IllegalArgumentException("negative limit: " + maxBytes);
+        }
+        if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
+            throw new NoSuchFileException(path.toString());
+        }
+        if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IOException("not a regular file: " + path);
         }
         try (InputStream in = Files.newInputStream(path)) {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
