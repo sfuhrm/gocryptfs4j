@@ -222,9 +222,9 @@ public final class ConfigFile {
         if (s.p < Constants.SCRYPT_MIN_P || s.p > Constants.SCRYPT_MAX_P) {
             throw new IOException("scrypt P out of range: " + s.p);
         }
-        long memory = 128L * s.n * s.r;
-        if (memory > Constants.SCRYPT_MAX_MEMORY) {
-            throw new IOException("scrypt memory cost too high: " + memory + " bytes");
+        long cost = 128L * s.n * s.r * s.p;
+        if (cost > Constants.SCRYPT_MAX_MEMORY) {
+            throw new IOException("scrypt cost too high: " + cost + " bytes");
         }
         if (s.salt == null) {
             throw new IOException("scrypt salt is missing");

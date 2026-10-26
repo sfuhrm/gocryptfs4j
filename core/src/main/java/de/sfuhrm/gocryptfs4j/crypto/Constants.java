@@ -144,8 +144,18 @@ public final class Constants {
     /** Maximum accepted scrypt salt length in bytes. */
     public static final int SCRYPT_MAX_SALT_LEN = 64;
 
-    /** Maximum accepted scrypt working memory in bytes ({@code 128 * N * R}). */
-    public static final long SCRYPT_MAX_MEMORY = 1L << 30;
+    /**
+     * Maximum accepted scrypt cost in bytes ({@code 128 * N * R * P}).
+     *
+     * <p>{@code P} multiplies the per-pass working memory ({@code 128 * N * R})
+     * that a parallel scrypt implementation holds at once and, even for the
+     * serial reference implementation, scales the total CPU work. Bounding only
+     * {@code 128 * N * R} would let a large {@code P} request unbounded CPU. The
+     * 512 MiB ceiling keeps the allocation within a default JVM heap: the
+     * previous 1 GiB limit allowed {@code N=2^20, R=8} (1 GiB) and threw
+     * {@code OutOfMemoryError}.</p>
+     */
+    public static final long SCRYPT_MAX_MEMORY = 512L << 20;
 
     /**
      * Maximum accepted size of a {@code gocryptfs.conf} file in bytes. A real

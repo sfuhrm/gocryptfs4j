@@ -215,9 +215,15 @@ class ConfigFileTest {
             // KeyLen must be the 32 bytes gocryptfs uses.
             assertThrows(IOException.class, () -> ConfigFile.load(
                     writeConf(dir, salt32, 1 << 16, 8, 1, 16, flags, null)));
-            // 128 * N * R exceeding the memory bound (128 * 2^20 * 32 = 4 GiB).
+            // 128 * N * R * P exceeding the cost bound (128 * 2^20 * 32 * 1 = 4 GiB).
             assertThrows(IOException.class, () -> ConfigFile.load(
                     writeConf(dir, salt32, 1 << 20, 32, 1, 32, flags, null)));
+            // N=2^20 with R=8 alone is 1 GiB and must now be rejected.
+            assertThrows(IOException.class, () -> ConfigFile.load(
+                    writeConf(dir, salt32, 1 << 20, 8, 1, 32, flags, null)));
+            // P now scales the bound: default N,R with P=16 reaches 1 GiB as well.
+            assertThrows(IOException.class, () -> ConfigFile.load(
+                    writeConf(dir, salt32, 1 << 16, 8, 16, 32, flags, null)));
             // Salt too short / too long.
             String salt8 = Base64.getEncoder().encodeToString(new byte[8]);
             assertThrows(IOException.class, () -> ConfigFile.load(
