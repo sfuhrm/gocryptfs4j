@@ -26,6 +26,7 @@ import java.nio.file.FileSystemException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
+import java.nio.file.NotDirectoryException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
@@ -643,6 +644,7 @@ public final class GocryptFs implements AutoCloseable {
         for (int i = 0; i < comps.size() - 1; i++) {
             String cName = cipherNameFor(comps.get(i), curIV);
             cur = cur.resolve(cName);
+            checkIntermediateDirectory(cur);
             curIV = readDirIV(cur);
         }
         if (comps.isEmpty()) {
@@ -672,10 +674,27 @@ public final class GocryptFs implements AutoCloseable {
         for (String c : comps) {
             String cName = cipherNameFor(c, curIV);
             cur = cur.resolve(cName);
+            checkIntermediateDirectory(cur);
             curIV = readDirIV(cur);
         }
         String cName = cipherNameFor(plainName, curIV);
         return new Resolved(cur.resolve(cName), cur, curIV, cName, plainName);
+    }
+
+    /**
+     * Verifies that an intermediate path component is a real directory, not a
+     * symbolic link. Following a symlink here would allow escaping the cipher
+     * root (for example in plaintext-names mode, where a symlink such as
+     * {@code /l -> /etc} could redirect writes outside the root).
+     *
+     * @param dir the resolved intermediate component
+     * @throws NotDirectoryException if {@code dir} is not a directory or is a
+     *                               symbolic link
+     */
+    private static void checkIntermediateDirectory(Path dir) throws IOException {
+        if (!Files.isDirectory(dir, LinkOption.NOFOLLOW_LINKS)) {
+            throw new NotDirectoryException(dir.toString());
+        }
     }
 
     /**

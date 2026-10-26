@@ -16,6 +16,7 @@ import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileSystemException;
 import java.nio.file.NoSuchFileException;
+import java.nio.file.NotDirectoryException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
@@ -349,6 +350,26 @@ class GocryptFsTest {
             fs.createFile("/sub/gocryptfs.conf");
             assertTrue(fs.list("/sub").stream()
                     .anyMatch(e -> e.plainName().equals("gocryptfs.conf")));
+        }
+    }
+
+    @Test
+    void resolveDoesNotFollowSymlinkOutOfRoot() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        Path target = Files.createTempDirectory("gocryptfs-symlink-target");
+
+        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray(), true)) {
+            fs.createSymlink("/l", target.toString());
+
+            // Traversing the symlink as an intermediate component must be
+            // rejected rather than followed, so nothing is written outside.
+            assertThrows(NotDirectoryException.class, () -> fs.mkdir("/l/x"));
+            assertThrows(NotDirectoryException.class, () -> fs.createFile("/l/x"));
+            assertFalse(Files.exists(target.resolve("x")),
+                    "must not write outside the cipher root");
+        } finally {
+            Files.deleteIfExists(target);
         }
     }
 
