@@ -39,7 +39,9 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * A Java API to a gocryptfs cipher directory.
@@ -96,6 +98,9 @@ public final class GocryptFs implements AutoCloseable {
 
     /** Whether deterministic (no per-directory IV) name encryption is used. */
     private final boolean deterministicNames;
+
+    /** Cache of per-directory IVs, keyed by cipher directory path. */
+    private final Map<Path, byte[]> dirIvCache = new ConcurrentHashMap<>();
 
     /**
      * Creates an instance, called after the master key has been unlocked.
@@ -515,6 +520,10 @@ public final class GocryptFs implements AutoCloseable {
         if (deterministicNames) {
             return nameTransform.zeroDirIV();
         }
+        byte[] cached = dirIvCache.get(cipherDir);
+        if (cached != null) {
+            return cached.clone();
+        }
         Path p = cipherDir.resolve(Constants.DIR_IV_FILENAME);
         byte[] data = IoUtil.readBounded(p, Constants.DIR_IV_LEN);
         if (data.length != Constants.DIR_IV_LEN) {
@@ -522,7 +531,8 @@ public final class GocryptFs implements AutoCloseable {
         }
         for (byte b : data) {
             if (b != 0) {
-                return data;
+                dirIvCache.put(cipherDir, data);
+                return data.clone();
             }
         }
         throw new IOException("diriv is all-zero in " + cipherDir);
@@ -543,6 +553,19 @@ public final class GocryptFs implements AutoCloseable {
         Path p = cipherDir.resolve(Constants.DIR_IV_FILENAME);
         Files.write(p, Keys.randomBytes(Constants.DIR_IV_LEN),
                 StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+        dirIvCache.remove(cipherDir);
+    }
+
+    /**
+     * Removes any cached directory IVs at or below {@code dir}.
+     *
+     * @param dir the cipher directory whose subtree is no longer valid
+     */
+    private void invalidateDirIvCache(Path dir) {
+        if (dirIvCache.isEmpty()) {
+            return;
+        }
+        dirIvCache.keySet().removeIf(k -> k.startsWith(dir));
     }
 
     // ------------------------------------------------------------------
@@ -1306,6 +1329,7 @@ public final class GocryptFs implements AutoCloseable {
             Files.delete(r.cipherPath);
         }
         removeLongName(r);
+        invalidateDirIvCache(r.cipherPath);
     }
 
     /**
@@ -1377,6 +1401,8 @@ public final class GocryptFs implements AutoCloseable {
         prepareLongName(to);
         Files.move(from.cipherPath, to.cipherPath);
         removeLongName(from);
+        invalidateDirIvCache(from.cipherPath);
+        invalidateDirIvCache(to.cipherPath);
     }
 
     /**
@@ -1426,6 +1452,7 @@ public final class GocryptFs implements AutoCloseable {
 
     @Override
     public void close() {
+        dirIvCache.clear();
         eme.wipe();
         contentEnc.wipe();
         Keys.wipe(masterKey);
