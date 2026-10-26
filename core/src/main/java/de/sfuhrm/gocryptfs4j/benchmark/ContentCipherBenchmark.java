@@ -146,6 +146,45 @@ public final class ContentCipherBenchmark {
     }
 
     /**
+     * Runs the benchmark from the command line.
+     *
+     * <p>Usage: {@code ContentCipherBenchmark [seconds]}. The optional
+     * {@code seconds} argument is the measurement duration per cipher and
+     * direction; it defaults to 5 seconds.</p>
+     *
+     * @param args an optional number of seconds to run
+     */
+    public static void main(String[] args) {
+        int seconds = 5;
+        if (args.length > 0) {
+            if (args.length > 1) {
+                usage();
+                return;
+            }
+            try {
+                seconds = Integer.parseInt(args[0]);
+            } catch (NumberFormatException e) {
+                usage();
+                return;
+            }
+            if (seconds <= 0) {
+                usage();
+                return;
+            }
+        }
+        for (Result r : benchmark(Duration.ofSeconds(seconds))) {
+            System.out.println(r);
+        }
+    }
+
+    /**
+     * Prints the command-line usage to stderr.
+     */
+    private static void usage() {
+        System.err.println("Usage: ContentCipherBenchmark [seconds]");
+    }
+
+    /**
      * Builds the {@link ContentEnc} for a cipher type, mirroring
      * {@code ConfigFile#contentEnc}.
      *
