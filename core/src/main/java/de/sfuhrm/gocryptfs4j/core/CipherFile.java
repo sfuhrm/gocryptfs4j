@@ -126,7 +126,7 @@ public final class CipherFile implements AutoCloseable {
      * @throws IOException on filesystem errors
      * @throws NullPointerException if {@code cipherPath} or {@code enc} is {@code null}
      */
-    public static CipherFile open(Path cipherPath, ContentEnc enc, boolean writable) throws IOException {
+    static CipherFile open(Path cipherPath, ContentEnc enc, boolean writable) throws IOException {
         Objects.requireNonNull(cipherPath, "cipherPath");
         Objects.requireNonNull(enc, "enc");
         FileChannel ch;

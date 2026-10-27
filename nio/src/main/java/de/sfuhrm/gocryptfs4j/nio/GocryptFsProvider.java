@@ -315,7 +315,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
         Objects.requireNonNull(options, "options");
         GocryptFsPath p = resolve(path);
         GocryptFs fs = core(p);
-        GocryptFs.Resolved r = fs.resolve(p.toString());
+        String plain = p.toString();
 
         boolean create = options.contains(StandardOpenOption.CREATE);
         boolean createNew = options.contains(StandardOpenOption.CREATE_NEW);
@@ -328,19 +328,25 @@ public final class GocryptFsProvider extends FileSystemProvider {
             read = true;
         }
 
-        boolean exists = java.nio.file.Files.exists(r.cipherPath, LinkOption.NOFOLLOW_LINKS);
+        boolean exists;
+        try {
+            fs.stat(plain);
+            exists = true;
+        } catch (NoSuchFileException e) {
+            exists = false;
+        }
         boolean created = false;
         if (createNew && exists) {
-            throw new FileAlreadyExistsException(p.toString());
+            throw new FileAlreadyExistsException(plain);
         }
         if ((create || createNew) && !exists) {
-            fs.createFile(p.toString());
+            fs.createFile(plain);
             created = true;
         } else if (!exists) {
-            throw new NoSuchFileException(p.toString());
+            throw new NoSuchFileException(plain);
         }
 
-        CipherFile cf = fs.openCipherFile(r.cipherPath, write);
+        CipherFile cf = fs.openCipherFile(plain, write);
         long position = 0;
         if (truncate && write) {
             cf.truncate(0);

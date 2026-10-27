@@ -70,7 +70,7 @@ final class GocryptFsPosixFileAttributeView implements PosixFileAttributeView {
      * @throws IOException on filesystem errors
      */
     private Path cipherPath() throws IOException {
-        return fs.core().resolve(target().toString()).cipherPath;
+        return fs.core().stat(target().toString()).cipherPath();
     }
 
     /**
