@@ -6,9 +6,9 @@
 [![Coverage](https://raw.githubusercontent.com/sfuhrm/gocryptfs4j/gh-pages/jacoco.svg)]() 
 [![ReleaseDate](https://img.shields.io/github/release-date/sfuhrm/gocryptfs4j)](https://github.com/sfuhrm/gocryptfs4j/releases)
 [![Maven Central](https://img.shields.io/maven-central/v/de.sfuhrm/gocryptfs4j)](https://central.sonatype.com/artifact/de.sfuhrm/gocryptfs4j)
-[![javadoc core](https://javadoc.io/badge2/de.sfuhrm/gocryptfs4j-core/0.5.0/javadoc%20core.svg)](https://javadoc.io/doc/de.sfuhrm/gocryptfs4j-core)
-[![javadoc nio](https://javadoc.io/badge2/de.sfuhrm/gocryptfs4j-nio/0.5.0/javadoc%20nio.svg)](https://javadoc.io/doc/de.sfuhrm/gocryptfs4j-nio)
-[![javadoc libfido2](https://javadoc.io/badge2/de.sfuhrm/gocryptfs4j-libfido2/0.5.0/javadoc%20libfido2.svg)](https://javadoc.io/doc/de.sfuhrm/gocryptfs4j-libfido2)
+[![javadoc core](https://javadoc.io/badge2/de.sfuhrm/gocryptfs4j-core/0.6.0/javadoc%20core.svg)](https://javadoc.io/doc/de.sfuhrm/gocryptfs4j-core)
+[![javadoc nio](https://javadoc.io/badge2/de.sfuhrm/gocryptfs4j-nio/0.6.0/javadoc%20nio.svg)](https://javadoc.io/doc/de.sfuhrm/gocryptfs4j-nio)
+[![javadoc libfido2](https://javadoc.io/badge2/de.sfuhrm/gocryptfs4j-libfido2/0.6.0/javadoc%20libfido2.svg)](https://javadoc.io/doc/de.sfuhrm/gocryptfs4j-libfido2)
 
 A pure Java implementation of the [gocryptfs](https://github.com/rfjakob/gocryptfs)
 forward-mode on-disk format. It lets Java applications create, read and write
@@ -160,9 +160,10 @@ import de.sfuhrm.gocryptfs4j.core.GocryptFs;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 
 // Create a new encrypted filesystem. The directory must exist and be empty.
-Path cipherDir = Path.of("/data/cipher");
+Path cipherDir = Paths.get("/data/cipher");
 try (GocryptFs fs = GocryptFs.create(cipherDir, "my-password".toCharArray())) {
     fs.mkdir("/docs");
     fs.createFile("/docs/hello.txt");
@@ -195,24 +196,28 @@ The provider is registered as a service, so it can be obtained via
 
 ```java
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.Map;
 
 Map<String, Object> env = new HashMap<>();
-env.put("cipherDir", Path.of("/data/cipher"));   // Path or String
+env.put("cipherDir", Paths.get("/data/cipher"));   // Path or String
 env.put("password", "my-password".toCharArray()); // char[]
 
 try (FileSystem fs = FileSystems.newFileSystem(URI.create("gocryptfs:///"), env)) {
     Path root = fs.getPath("/");
 
     Files.createDirectory(root.resolve("docs"));
-    Files.writeString(root.resolve("docs/hello.txt"), "hello gocryptfs");
+    Files.write(root.resolve("docs/hello.txt"),
+            "hello gocryptfs".getBytes(StandardCharsets.UTF_8));
 
-    String content = Files.readString(root.resolve("docs/hello.txt"));
+    String content = new String(
+            Files.readAllBytes(root.resolve("docs/hello.txt")), StandardCharsets.UTF_8);
 }
 ```
 
@@ -222,7 +227,7 @@ Alternatively, instantiate the provider directly:
 import de.sfuhrm.gocryptfs4j.nio.GocryptFsProvider;
 
 try (FileSystem fs = new GocryptFsProvider()
-        .newFileSystem(Path.of("/data/cipher"), "my-password".toCharArray())) {
+        .newFileSystem(Paths.get("/data/cipher"), "my-password".toCharArray())) {
     // ... use java.nio.file.Files on fs.getPath("/") as above
 }
 ```
@@ -320,7 +325,7 @@ The `core` module (the plain Java API):
 <dependency>
     <groupId>de.sfuhrm</groupId>
     <artifactId>gocryptfs4j-core</artifactId>
-    <version>0.5.0</version>
+    <version>0.6.0</version>
 </dependency>
 ```
 
@@ -331,7 +336,7 @@ on, and re-exports, the `core` module:
 <dependency>
     <groupId>de.sfuhrm</groupId>
     <artifactId>gocryptfs4j-nio</artifactId>
-    <version>0.5.0</version>
+    <version>0.6.0</version>
 </dependency>
 ```
 
@@ -341,7 +346,7 @@ For FIDO2 support, add the `libfido2` module as well (it depends on `core`):
 <dependency>
     <groupId>de.sfuhrm</groupId>
     <artifactId>gocryptfs4j-libfido2</artifactId>
-    <version>0.5.0</version>
+    <version>0.6.0</version>
 </dependency>
 ```
 
