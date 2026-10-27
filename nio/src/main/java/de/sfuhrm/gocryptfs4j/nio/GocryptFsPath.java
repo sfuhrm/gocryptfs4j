@@ -416,26 +416,50 @@ final class GocryptFsPath implements Path {
      *
      * @param options the link options
      * @return the real path
+     * @throws NoSuchFileException if the file does not exist
      * @throws IOException on filesystem errors while resolving links
      */
     @Override
     public Path toRealPath(LinkOption... options) throws IOException {
         Path abs = toAbsolutePath().normalize();
         if (Arrays.asList(options).contains(LinkOption.NOFOLLOW_LINKS)) {
+            fs.core().stat(abs.toString());
             return abs;
         }
-        return resolveLinks(abs, 0);
+        return resolveLinks(abs, 0, true);
+    }
+
+    /**
+     * Resolves this path to a real path, following symbolic links unless
+     * {@link LinkOption#NOFOLLOW_LINKS} is given, without requiring the file to
+     * exist.
+     *
+     * <p>This lenient resolver is for internal callers that already verify
+     * existence themselves and must be able to resolve (for example) a target
+     * path that is about to be created.</p>
+     *
+     * @param options the link options
+     * @return the resolved path, even if it does not exist
+     * @throws IOException on filesystem errors while resolving links
+     */
+    GocryptFsPath toRealPathLenient(LinkOption... options) throws IOException {
+        Path abs = toAbsolutePath().normalize();
+        if (Arrays.asList(options).contains(LinkOption.NOFOLLOW_LINKS)) {
+            return (GocryptFsPath) abs;
+        }
+        return resolveLinks(abs, 0, false);
     }
 
     /**
      * Resolves symbolic links in {@code abs}, returning the fully-resolved path.
      *
-     * @param abs   the absolute path to resolve
-     * @param depth the current recursion depth
+     * @param abs    the absolute path to resolve
+     * @param depth  the current recursion depth
+     * @param strict whether to throw {@link NoSuchFileException} for a missing component
      * @return the resolved path
      * @throws IOException if the link chain is too deep or a lookup fails
      */
-    private Path resolveLinks(Path abs, int depth) throws IOException {
+    private GocryptFsPath resolveLinks(Path abs, int depth, boolean strict) throws IOException {
         if (depth > 40) {
             throw new IOException("too many levels of symbolic links: " + path);
         }
@@ -453,21 +477,26 @@ final class GocryptFsPath implements Path {
                 continue;
             }
             Path candidate = result.resolve(elem);
+            DirEntry e;
             try {
-                DirEntry e = core.stat(candidate.toString());
-                if (e.isSymbolicLink()) {
-                    String target = core.readSymlinkTarget(candidate.toString());
-                    Path t = target.startsWith("/")
-                            ? fs.getPath(target) : result.resolve(target);
-                    result = resolveLinks(t.normalize(), depth + 1);
-                } else {
-                    result = candidate;
-                }
+                e = core.stat(candidate.toString());
             } catch (NoSuchFileException ex) {
+                if (strict) {
+                    throw new NoSuchFileException(candidate.toString());
+                }
+                result = candidate;
+                continue;
+            }
+            if (e.isSymbolicLink()) {
+                String target = core.readSymlinkTarget(candidate.toString());
+                Path t = target.startsWith("/")
+                        ? fs.getPath(target) : result.resolve(target);
+                result = resolveLinks(t.normalize(), depth + 1, strict);
+            } else {
                 result = candidate;
             }
         }
-        return result.normalize();
+        return (GocryptFsPath) result.normalize();
     }
 
     /**

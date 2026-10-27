@@ -111,10 +111,19 @@ public final class GocryptFsProvider extends FileSystemProvider {
      * @param core      the freshly opened core instance
      * @return the registered filesystem
      * @throws FileSystemAlreadyExistsException if the cipher directory is already open
+     * @throws IOException if the real path of the cipher directory cannot be resolved
      */
-    private FileSystem register(Path cipherDir, GocryptFs core) {
-        String key = cipherDir.toAbsolutePath().normalize().toString();
-        GocryptFsFileSystem fs = new GocryptFsFileSystem(this, core, key);
+    private FileSystem register(Path cipherDir, GocryptFs core) throws IOException {
+        String key = cipherDir.toRealPath().toString();
+        GocryptFsFileSystem fs;
+        try {
+            fs = new GocryptFsFileSystem(this, core, key);
+        } catch (RuntimeException e) {
+            // Do not leak the freshly opened key material if the filesystem
+            // cannot be constructed.
+            core.close();
+            throw e;
+        }
         GocryptFsFileSystem existing = filesystems.putIfAbsent(key, fs);
         if (existing != null) {
             // Do not leak the freshly opened key material for a filesystem that
@@ -281,7 +290,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
      */
     private static GocryptFsPath resolve(Path path, LinkOption... options) throws IOException {
         GocryptFsPath p = toAbsolute(path);
-        return noFollow(options) ? p : (GocryptFsPath) p.toRealPath();
+        return noFollow(options) ? p : p.toRealPathLenient();
     }
 
     // ------------------------------------------------------------------
@@ -425,7 +434,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
             throws IOException {
         Objects.requireNonNull(dir, "dir");
         GocryptFsPath d = toAbsolute(dir);
-        GocryptFsPath target = (GocryptFsPath) d.toRealPath();
+        GocryptFsPath target = d.toRealPathLenient();
         GocryptFs fs = core(target);
         List<Path> entries = new ArrayList<>();
         for (DirEntry e : fs.list(target.toString())) {
@@ -541,7 +550,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
         Set<CopyOption> opts = toOptionSet(options);
         GocryptFsPath s = toAbsolute(source);
         if (!opts.contains(LinkOption.NOFOLLOW_LINKS)) {
-            s = (GocryptFsPath) s.toRealPath();
+            s = s.toRealPathLenient();
         }
         GocryptFsPath t = toAbsolute(target);
         if (s.equals(t) || toAbsolute(source).equals(t)) {

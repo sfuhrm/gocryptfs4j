@@ -10,6 +10,7 @@ import java.net.URI;
 import java.nio.file.FileSystem;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.WatchEvent;
@@ -193,7 +194,9 @@ class GocryptFsPathTest {
         assertEquals("/link", link.toRealPath(LinkOption.NOFOLLOW_LINKS).toString());
 
         Path missing = nio.getPath("/missing");
-        assertEquals("/missing", missing.toRealPath().toString());
+        assertThrows(NoSuchFileException.class, missing::toRealPath);
+        assertThrows(NoSuchFileException.class,
+                () -> missing.toRealPath(LinkOption.NOFOLLOW_LINKS));
         assertEquals("/file.txt", nio.getPath("file.txt")
                 .toRealPath(LinkOption.NOFOLLOW_LINKS).toString());
     }

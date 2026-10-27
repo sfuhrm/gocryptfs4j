@@ -1095,7 +1095,12 @@ public final class GocryptFs implements AutoCloseable {
         Objects.requireNonNull(plainFile, "plainFile");
         Resolved r = resolve(plainFile);
         CipherFile cf = openCipherFile(r.cipherPath, false);
-        return new CipherInputStream(cf);
+        try {
+            return new CipherInputStream(cf);
+        } catch (RuntimeException e) {
+            cf.close();
+            throw e;
+        }
     }
 
     /**
@@ -1114,8 +1119,13 @@ public final class GocryptFs implements AutoCloseable {
         Objects.requireNonNull(plainFile, "plainFile");
         Resolved r = resolve(plainFile);
         CipherFile cf = openCipherFile(r.cipherPath, true);
-        cf.truncate(0);
-        return Channels.newOutputStream(cf.writeChannel(0));
+        try {
+            cf.truncate(0);
+            return Channels.newOutputStream(cf.writeChannel(0));
+        } catch (IOException | RuntimeException e) {
+            cf.close();
+            throw e;
+        }
     }
 
     /**
@@ -1340,7 +1350,18 @@ public final class GocryptFs implements AutoCloseable {
         Resolved r = resolveParent(plainDir);
         prepareLongName(r);
         Files.createDirectory(r.cipherPath);
-        writeDirIV(r.cipherPath);
+        try {
+            writeDirIV(r.cipherPath);
+        } catch (IOException | RuntimeException e) {
+            try {
+                Files.deleteIfExists(r.cipherPath.resolve(Constants.DIR_IV_FILENAME));
+                Files.deleteIfExists(r.cipherPath);
+                removeLongName(r);
+            } catch (IOException cleanup) {
+                e.addSuppressed(cleanup);
+            }
+            throw e;
+        }
     }
 
     /**
