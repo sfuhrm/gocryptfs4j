@@ -59,7 +59,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * instantiate directly. The environment must contain {@code cipherDir} (a
  * {@link Path} or {@link String}) and either {@code password} (a {@code char[]})
  * for password-protected filesystems or {@code fido2Token} (a
- * {@link Fido2Token}) for FIDO2-protected ones.</p>
+ * {@link Fido2Token}) for FIDO2-protected ones. The optional
+ * {@code windowsSeparators} entry (a {@code Boolean}) controls whether
+ * backslashes are treated as path separators.</p>
  */
 public final class GocryptFsProvider extends FileSystemProvider {
 
@@ -83,9 +85,24 @@ public final class GocryptFsProvider extends FileSystemProvider {
      * @throws NullPointerException if {@code cipherDir} or {@code password} is {@code null}
      */
     public FileSystem newFileSystem(Path cipherDir, char[] password) throws IOException {
+        return newFileSystem(cipherDir, password, false);
+    }
+
+    /**
+     * Opens a filesystem directly, without a URI.
+     *
+     * @param cipherDir         the ciphertext directory
+     * @param password          the password to unlock the master key with
+     * @param windowsSeparators whether {@code "\"} is treated as a path separator
+     * @return the opened filesystem
+     * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code cipherDir} or {@code password} is {@code null}
+     */
+    public FileSystem newFileSystem(Path cipherDir, char[] password, boolean windowsSeparators)
+            throws IOException {
         Objects.requireNonNull(cipherDir, "cipherDir");
         Objects.requireNonNull(password, "password");
-        return register(cipherDir, GocryptFs.open(cipherDir, password));
+        return register(cipherDir, GocryptFs.open(cipherDir, password), windowsSeparators);
     }
 
     /**
@@ -98,9 +115,24 @@ public final class GocryptFsProvider extends FileSystemProvider {
      * @throws NullPointerException if {@code cipherDir} or {@code token} is {@code null}
      */
     public FileSystem newFileSystem(Path cipherDir, Fido2Token token) throws IOException {
+        return newFileSystem(cipherDir, token, false);
+    }
+
+    /**
+     * Opens a FIDO2-protected filesystem directly, without a URI.
+     *
+     * @param cipherDir         the ciphertext directory
+     * @param token             the FIDO2 token implementation to unlock the master key with
+     * @param windowsSeparators whether {@code "\"} is treated as a path separator
+     * @return the opened filesystem
+     * @throws IOException on filesystem errors or if the token interaction fails
+     * @throws NullPointerException if {@code cipherDir} or {@code token} is {@code null}
+     */
+    public FileSystem newFileSystem(Path cipherDir, Fido2Token token, boolean windowsSeparators)
+            throws IOException {
         Objects.requireNonNull(cipherDir, "cipherDir");
         Objects.requireNonNull(token, "token");
-        return register(cipherDir, GocryptFs.open(cipherDir, token));
+        return register(cipherDir, GocryptFs.open(cipherDir, token), windowsSeparators);
     }
 
     /**
@@ -113,11 +145,12 @@ public final class GocryptFsProvider extends FileSystemProvider {
      * @throws FileSystemAlreadyExistsException if the cipher directory is already open
      * @throws IOException if the real path of the cipher directory cannot be resolved
      */
-    private FileSystem register(Path cipherDir, GocryptFs core) throws IOException {
+    private FileSystem register(Path cipherDir, GocryptFs core, boolean windowsSeparators)
+            throws IOException {
         String key = cipherDir.toRealPath().toString();
         GocryptFsFileSystem fs;
         try {
-            fs = new GocryptFsFileSystem(this, core, key);
+            fs = new GocryptFsFileSystem(this, core, key, windowsSeparators);
         } catch (RuntimeException e) {
             // Do not leak the freshly opened key material if the filesystem
             // cannot be constructed.
@@ -148,7 +181,10 @@ public final class GocryptFsProvider extends FileSystemProvider {
      * Opens a filesystem from a {@code gocryptfs} URI.
      *
      * <p>The environment must contain {@code cipherDir} and either {@code password}
-     * (a {@code char[]}) or {@code fido2Token} (a {@link Fido2Token}).</p>
+     * (a {@code char[]}) or {@code fido2Token} (a {@link Fido2Token}). The
+     * optional {@code windowsSeparators} entry (a {@code Boolean}, default
+     * {@code false}) controls whether {@code "\"} is treated as a path
+     * separator.</p>
      *
      * @throws NullPointerException if {@code uri} is {@code null}
      * @throws IllegalArgumentException if the scheme is not {@code gocryptfs}, the
@@ -165,6 +201,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
         Object cipherDir = env == null ? null : env.get("cipherDir");
         Object password = env == null ? null : env.get("password");
         Object fido2Token = env == null ? null : env.get("fido2Token");
+        Object windowsSeparators = env == null ? null : env.get("windowsSeparators");
         if (cipherDir == null) {
             throw new IllegalArgumentException("environment must contain 'cipherDir'");
         }
@@ -174,17 +211,24 @@ public final class GocryptFsProvider extends FileSystemProvider {
             throw new IllegalArgumentException(
                     "environment must contain either 'password' or 'fido2Token', not both");
         }
+        boolean wsep = false;
+        if (windowsSeparators != null) {
+            if (!(windowsSeparators instanceof Boolean)) {
+                throw new IllegalArgumentException("windowsSeparators must be a Boolean");
+            }
+            wsep = (Boolean) windowsSeparators;
+        }
         if (password != null) {
             if (!(password instanceof char[])) {
                 throw new IllegalArgumentException("password must be a char[]");
             }
-            return newFileSystem(dir, (char[]) password);
+            return newFileSystem(dir, (char[]) password, wsep);
         }
         if (fido2Token != null) {
             if (!(fido2Token instanceof Fido2Token)) {
                 throw new IllegalArgumentException("fido2Token must be a Fido2Token");
             }
-            return newFileSystem(dir, (Fido2Token) fido2Token);
+            return newFileSystem(dir, (Fido2Token) fido2Token, wsep);
         }
         throw new IllegalArgumentException("environment must contain 'password' or 'fido2Token'");
     }

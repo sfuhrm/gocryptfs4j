@@ -94,8 +94,25 @@ class GocryptFsPathTest {
         assertEquals("/a/c", nio.getPath("/a/./b/../c").toString());
         assertEquals("/", nio.getPath("/..").toString());
         assertEquals("a/b", nio.getPath("a//b/").toString());
-        assertEquals("a/b", nio.getPath("a\\b").toString());
+        assertEquals("a\\b", nio.getPath("a\\b").toString());
         assertEquals("../x", nio.getPath("../x").toString());
+    }
+
+    @Test
+    void windowsSeparatorsConfigured() throws IOException {
+        Path dir = Files.createTempDirectory("gocryptfs-wsep-");
+        try {
+            try (GocryptFs ignored = GocryptFs.create(dir, "pw".toCharArray())) {
+                // empty filesystem
+            }
+            try (FileSystem ws = new GocryptFsProvider()
+                    .newFileSystem(dir, "pw".toCharArray(), true)) {
+                assertEquals("a/b", ws.getPath("a\\b").toString());
+                assertEquals("/x", ws.getPath("/").resolve("\\x").toString());
+            }
+        } finally {
+            deleteRecursively(dir);
+        }
     }
 
     @Test

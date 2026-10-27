@@ -55,18 +55,24 @@ public final class GocryptFsFileSystem extends FileSystem {
     /** Whether the filesystem is still open. */
     private volatile boolean open = true;
 
+    /** Whether backslashes are treated as path separators. */
+    private final boolean windowsSeparators;
+
     /**
      * Creates a filesystem. Called by the provider when a cipher directory is
      * opened.
      *
-     * @param provider the provider that created this filesystem
-     * @param core     the core gocryptfs instance
-     * @param key      the absolute, normalized cipher directory key
+     * @param provider          the provider that created this filesystem
+     * @param core              the core gocryptfs instance
+     * @param key               the absolute, normalized cipher directory key
+     * @param windowsSeparators whether {@code "\"} is treated as a path separator
      */
-    GocryptFsFileSystem(GocryptFsProvider provider, GocryptFs core, String key) {
+    GocryptFsFileSystem(GocryptFsProvider provider, GocryptFs core, String key,
+                        boolean windowsSeparators) {
         this.provider = provider;
         this.core = core;
         this.key = key;
+        this.windowsSeparators = windowsSeparators;
         this.uri = URI.create("gocryptfs://" + urlEncode(key) + "/");
         this.root = GocryptFsPath.absolute(this, "/");
         this.userPrincipalLookupService = new GocryptFsUserPrincipalLookupService(this);
@@ -207,6 +213,15 @@ public final class GocryptFsFileSystem extends FileSystem {
     @Override
     public String getSeparator() {
         return "/";
+    }
+
+    /**
+     * Returns whether backslashes are treated as path separators.
+     *
+     * @return {@code true} if {@code "\"} is treated as a path separator
+     */
+    boolean windowsSeparators() {
+        return windowsSeparators;
     }
 
     /**

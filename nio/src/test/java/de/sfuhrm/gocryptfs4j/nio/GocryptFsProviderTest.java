@@ -210,6 +210,28 @@ class GocryptFsProviderTest {
     }
 
     @Test
+    void windowsSeparatorsViaUriEnvironment() throws IOException {
+        Path cipherDir = tmp.resolve("cipher-wsep");
+        Files.createDirectory(cipherDir);
+        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+            // just create
+        }
+
+        GocryptFsProvider provider = new GocryptFsProvider();
+        Map<String, Object> env = new HashMap<>();
+        env.put("cipherDir", cipherDir);
+        env.put("password", "pw".toCharArray());
+        env.put("windowsSeparators", Boolean.TRUE);
+        try (FileSystem nio = provider.newFileSystem(URI.create("gocryptfs:///"), env)) {
+            assertEquals("a/b", nio.getPath("a\\b").toString());
+        }
+
+        env.put("windowsSeparators", "not-a-boolean");
+        assertThrows(IllegalArgumentException.class,
+                () -> provider.newFileSystem(URI.create("gocryptfs:///"), env));
+    }
+
+    @Test
     void uriValidation() {
         GocryptFsProvider provider = new GocryptFsProvider();
         assertEquals("gocryptfs", provider.getScheme());

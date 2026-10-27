@@ -83,18 +83,21 @@ final class GocryptFsPath implements Path {
     }
 
     /**
-     * Normalizes a path string by replacing backslashes, removing redundant
-     * separators and {@code "."} segments and collapsing {@code ".."} segments.
+     * Normalizes a path string, removing redundant separators and {@code "."}
+     * segments and collapsing {@code ".."} segments. Backslashes are treated as
+     * separators only when the filesystem is configured with
+     * {@code windowsSeparators}; otherwise they are preserved as ordinary name
+     * characters.
      *
      * @param path the path string
      * @return the normalized path string
      * @throws IllegalArgumentException if {@code path} is {@code null}
      */
-    private static String normalize(String path) {
+    private String normalize(String path) {
         if (path == null) {
             throw new IllegalArgumentException("null path");
         }
-        String cleaned = path.replace('\\', '/');
+        String cleaned = fs.windowsSeparators() ? path.replace('\\', '/') : path;
         boolean isAbs = cleaned.startsWith("/");
         Deque<String> stack = new ArrayDeque<>();
         for (String seg : cleaned.split("/")) {
@@ -325,7 +328,7 @@ final class GocryptFsPath implements Path {
         if (other == null) {
             return this;
         }
-        String o = other.replace('\\', '/');
+        String o = fs.windowsSeparators() ? other.replace('\\', '/') : other;
         if (o.startsWith("/")) {
             return new GocryptFsPath(fs, o, true);
         }

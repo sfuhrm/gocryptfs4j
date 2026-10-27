@@ -231,6 +231,12 @@ FIDO2-protected filesystems work the same way: pass a `Fido2Token` to
 `newFileSystem(Path, Fido2Token)`, or put it under the `fido2Token` environment
 key (instead of `password`) when using the URI form.
 
+By default the NIO view treats `\` as an ordinary character, so a file whose
+plaintext name contains a backslash (legal on Linux) can be both listed and
+opened. Set the `windowsSeparators` environment key to `true` (or use the
+`newFileSystem(Path, char[], boolean)` overload) to treat `\` as a path
+separator, as on Windows.
+
 > Note: the NIO view exposes basic attributes (type, size, times) and, when the
 > backing filesystem supports it, the POSIX attributes (permissions, owner and
 > group). gocryptfs does not store ownership or permissions itself, so these are
