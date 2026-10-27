@@ -68,10 +68,10 @@ class GocryptFsFido2Test {
         assertEquals(32, config.fido2.hmacSalt.length);
         assertArrayEquals(token.lastCredentialId, config.fido2.credentialId);
         // The credential ID must be stored as a standard base64 string, not as a
-        // JSON number array (Gson's default for byte[]). Gson escapes the base64
-        // padding '=' as "\u003d".
+        // JSON number array (Gson's default for byte[]). HTML escaping is
+        // disabled, so the base64 padding '=' is stored verbatim.
         String encoded = Base64.getEncoder().encodeToString(token.lastCredentialId);
-        assertTrue(json.contains(encoded.replace("=", "\\u003d")), json);
+        assertTrue(json.contains(encoded), json);
     }
 
     @Test

@@ -1,5 +1,7 @@
 package de.sfuhrm.gocryptfs4j.nio;
 
+import org.jspecify.annotations.Nullable;
+
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
 import java.nio.file.attribute.GroupPrincipal;
@@ -26,10 +28,10 @@ final class GocryptFsPosixFileAttributes implements PosixFileAttributes {
     private final BasicFileAttributes basic;
 
     /** The owner of the backing file, or {@code null} if unknown. */
-    private final UserPrincipal owner;
+    private final @Nullable UserPrincipal owner;
 
     /** The group of the backing file, or {@code null} if unknown. */
-    private final GroupPrincipal group;
+    private final @Nullable GroupPrincipal group;
 
     /** The permissions of the backing file; never {@code null}. */
     private final Set<PosixFilePermission> permissions;
@@ -43,8 +45,8 @@ final class GocryptFsPosixFileAttributes implements PosixFileAttributes {
      * @param permissions the permissions, or {@code null} for none
      * @throws NullPointerException if {@code basic} is {@code null}
      */
-    GocryptFsPosixFileAttributes(BasicFileAttributes basic, UserPrincipal owner,
-                                 GroupPrincipal group, Set<PosixFilePermission> permissions) {
+    GocryptFsPosixFileAttributes(BasicFileAttributes basic, @Nullable UserPrincipal owner,
+                                 @Nullable GroupPrincipal group, Set<PosixFilePermission> permissions) {
         this.basic = Objects.requireNonNull(basic, "basic");
         this.owner = owner;
         this.group = group;
@@ -149,6 +151,7 @@ final class GocryptFsPosixFileAttributes implements PosixFileAttributes {
      * @return the owner, or {@code null} if unknown
      */
     @Override
+    @SuppressWarnings("NullAway")
     public UserPrincipal owner() {
         return owner;
     }
@@ -159,6 +162,7 @@ final class GocryptFsPosixFileAttributes implements PosixFileAttributes {
      * @return the group, or {@code null} if unknown
      */
     @Override
+    @SuppressWarnings("NullAway")
     public GroupPrincipal group() {
         return group;
     }

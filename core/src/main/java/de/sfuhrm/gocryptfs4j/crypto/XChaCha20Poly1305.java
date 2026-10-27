@@ -112,10 +112,7 @@ public final class XChaCha20Poly1305 implements ContentCipher {
         Objects.requireNonNull(plaintext, "plaintext");
         Objects.requireNonNull(nonce, "nonce");
         checkUsable();
-        if (nonce.length != Constants.XCHACHA_NONCE_LEN) {
-            throw new IllegalArgumentException("XChaCha20-Poly1305 nonce must be "
-                    + Constants.XCHACHA_NONCE_LEN + " bytes");
-        }
+        checkNonce(nonce);
         AEADCipher cipher = encryptCipher.get();
         cipher.init(true, new AEADParameters(new KeyParameter(key), Constants.AUTH_TAG_LEN * 8, nonce, aad));
         byte[] out = new byte[cipher.getOutputSize(plaintext.length)];
@@ -146,10 +143,7 @@ public final class XChaCha20Poly1305 implements ContentCipher {
         Objects.requireNonNull(ciphertext, "ciphertext");
         Objects.requireNonNull(nonce, "nonce");
         checkUsable();
-        if (nonce.length != Constants.XCHACHA_NONCE_LEN) {
-            throw new IllegalArgumentException("XChaCha20-Poly1305 nonce must be "
-                    + Constants.XCHACHA_NONCE_LEN + " bytes");
-        }
+        checkNonce(nonce);
         AEADCipher cipher = decryptCipher.get();
         cipher.init(false, new AEADParameters(new KeyParameter(key), Constants.AUTH_TAG_LEN * 8, nonce, aad));
         byte[] out = new byte[cipher.getOutputSize(ciphertext.length)];

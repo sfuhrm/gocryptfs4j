@@ -145,20 +145,7 @@ public final class CipherFile implements AutoCloseable {
      * @throws IOException if the file header is corrupt
      */
     public synchronized byte @Nullable [] fileId() throws IOException {
-        if (!fileIdLoaded) {
-            long size = channel.size();
-            if (size == 0) {
-                fileId = null;
-            } else {
-                byte[] hdr = readCipherRange(0, Constants.HEADER_LEN);
-                if (hdr.length < Constants.HEADER_LEN) {
-                    throw new IOException("corrupt file header");
-                }
-                fileId = FileHeader.parse(hdr).id();
-            }
-            fileIdLoaded = true;
-        }
-        byte[] id = fileId;
+        byte[] id = loadFileId();
         return id == null ? null : id.clone();
     }
 
@@ -387,13 +374,12 @@ public final class CipherFile implements AutoCloseable {
     }
 
     /**
-     * Returns the file id, minting and writing a fresh header if the file is
-     * empty.
+     * Loads the file id from the header if it has not been loaded yet.
      *
-     * @return the 16-byte file id
-     * @throws IOException on filesystem errors
+     * @return the 16-byte file id, or {@code null} if the file is empty
+     * @throws IOException on filesystem errors or a corrupt header
      */
-    private byte[] ensureFileId() throws IOException {
+    private byte @Nullable [] loadFileId() throws IOException {
         if (!fileIdLoaded) {
             long size = channel.size();
             if (size == 0) {
@@ -407,13 +393,26 @@ public final class CipherFile implements AutoCloseable {
             }
             fileIdLoaded = true;
         }
-        if (fileId == null) {
+        return fileId;
+    }
+
+    /**
+     * Returns the file id, minting and writing a fresh header if the file is
+     * empty.
+     *
+     * @return the 16-byte file id
+     * @throws IOException on filesystem errors
+     */
+    private byte[] ensureFileId() throws IOException {
+        byte[] id = loadFileId();
+        if (id == null) {
             // The file is empty (or was truncated to empty): mint a fresh header.
             FileHeader h = FileHeader.random();
             writeCipherRange(0, h.pack());
             fileId = h.id();
+            id = fileId;
         }
-        return fileId;
+        return id;
     }
 
     /**

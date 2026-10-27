@@ -50,7 +50,10 @@ import java.util.Properties;
 public final class ConfigFile {
 
     /** Gson instance used to parse and serialize configuration files. */
-    private static final Gson GSON = new GsonBuilder().create();
+    private static final Gson GSON = new GsonBuilder()
+            .disableHtmlEscaping()
+            .setPrettyPrinting()
+            .create();
 
     /**
      * The Creator string written to new config files, for example
