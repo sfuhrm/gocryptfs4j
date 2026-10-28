@@ -45,8 +45,8 @@ class Fido2ParamsTest {
         Fido2Params params = new Fido2Params(new byte[]{1}, new byte[]{2}, options);
 
         options.add("pin=true");
-        assertEquals(Collections.singletonList("uv=false"), params.assertOptions);
-        assertThrows(UnsupportedOperationException.class, () -> params.assertOptions.add("x"));
-        assertNull(new Fido2Params(new byte[]{1}, new byte[]{2}, null).assertOptions);
+        assertEquals(Collections.singletonList("uv=false"), params.assertOptions());
+        assertThrows(UnsupportedOperationException.class, () -> params.assertOptions().add("x"));
+        assertNull(new Fido2Params(new byte[]{1}, new byte[]{2}, null).assertOptions());
     }
 }

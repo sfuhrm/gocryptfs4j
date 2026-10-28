@@ -20,7 +20,6 @@ import java.nio.file.NotDirectoryException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
@@ -125,9 +124,9 @@ class GocryptFsTest {
     @Test
     void constructorAbortWipesMasterKey() throws Exception {
         // A non-HKDF config with a short master key makes the constructor fail
-        // while deriving the EME key, after the master key was handed over.
+        // while deriving the EME key, after the master key was handed over. A
+        // freshly constructed ConfigFile has no feature flags, so HKDF is off.
         ConfigFile config = new ConfigFile();
-        config.featureFlags = new ArrayList<>();
         byte[] masterKey = new byte[16];
         Arrays.fill(masterKey, (byte) 0x5a);
 

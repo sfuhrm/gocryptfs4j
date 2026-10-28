@@ -1,5 +1,6 @@
 package de.sfuhrm.gocryptfs4j.config;
 
+import com.google.gson.Gson;
 import de.sfuhrm.gocryptfs4j.crypto.Constants;
 import de.sfuhrm.gocryptfs4j.crypto.ContentEnc;
 import de.sfuhrm.gocryptfs4j.crypto.Keys;
@@ -35,8 +36,8 @@ class ConfigFileTest {
         ConfigFile cf = ConfigFile.create(Keys.randomBytes(Constants.KEY_LEN), PASSWORD, false,
                 ContentCipherType.XCHACHA20_POLY1305);
         assertTrue(cf.xchacha());
-        assertTrue(cf.featureFlags.contains(Constants.FLAG_XCHACHA));
-        assertFalse(cf.featureFlags.contains(Constants.FLAG_GCM_IV128));
+        assertTrue(cf.featureFlags().contains(Constants.FLAG_XCHACHA));
+        assertFalse(cf.featureFlags().contains(Constants.FLAG_GCM_IV128));
     }
 
     @Test
@@ -44,9 +45,9 @@ class ConfigFileTest {
         ConfigFile cf = ConfigFile.create(Keys.randomBytes(Constants.KEY_LEN), PASSWORD, false,
                 ContentCipherType.AES_SIV);
         assertTrue(cf.aessiv());
-        assertTrue(cf.featureFlags.contains(Constants.FLAG_AES_SIV));
-        assertTrue(cf.featureFlags.contains(Constants.FLAG_GCM_IV128));
-        assertFalse(cf.featureFlags.contains(Constants.FLAG_XCHACHA));
+        assertTrue(cf.featureFlags().contains(Constants.FLAG_AES_SIV));
+        assertTrue(cf.featureFlags().contains(Constants.FLAG_GCM_IV128));
+        assertFalse(cf.featureFlags().contains(Constants.FLAG_XCHACHA));
     }
 
     @Test
@@ -55,16 +56,16 @@ class ConfigFileTest {
                 ContentCipherType.AES_GCM);
         assertFalse(cf.xchacha());
         assertFalse(cf.aessiv());
-        assertTrue(cf.featureFlags.contains(Constants.FLAG_GCM_IV128));
-        assertFalse(cf.featureFlags.contains(Constants.FLAG_XCHACHA));
+        assertTrue(cf.featureFlags().contains(Constants.FLAG_GCM_IV128));
+        assertFalse(cf.featureFlags().contains(Constants.FLAG_XCHACHA));
     }
 
     @Test
     void creatorCarriesProjectVersion() {
         ConfigFile cf = ConfigFile.create(Keys.randomBytes(Constants.KEY_LEN), PASSWORD, false,
                 ContentCipherType.AES_GCM);
-        assertTrue(cf.creator.startsWith("gocryptfs4j "), cf.creator);
-        assertTrue(cf.creator.matches("gocryptfs4j \\d+\\.\\d+.*"), cf.creator);
+        assertTrue(cf.creator().startsWith("gocryptfs4j "), cf.creator());
+        assertTrue(cf.creator().matches("gocryptfs4j \\d+\\.\\d+.*"), cf.creator());
     }
 
     @ParameterizedTest
@@ -290,18 +291,14 @@ class ConfigFileTest {
     }
 
     @Test
-    void decryptMasterKeyRejectsMissingOrInvalidEncryptedKey() throws Exception {
-        byte[] masterKey = Keys.randomBytes(Constants.KEY_LEN);
-        ConfigFile cf = ConfigFile.create(masterKey, PASSWORD, false, ContentCipherType.AES_GCM);
-
-        cf.encryptedKey = null;
-        assertThrows(IOException.class, () -> cf.decryptMasterKey(PASSWORD));
-
-        cf.encryptedKey = "!!!not base64!!!";
-        assertThrows(IOException.class, () -> cf.decryptMasterKey(PASSWORD));
-
-        cf.encryptedKey = Base64.getEncoder().encodeToString(new byte[4]);
-        assertThrows(IOException.class, () -> cf.decryptMasterKey(PASSWORD));
+    void decryptMasterKeyRejectsMissingOrInvalidEncryptedKey() {
+        assertThrows(IOException.class,
+                () -> parseWithEncryptedKey(null).decryptMasterKey(PASSWORD));
+        assertThrows(IOException.class,
+                () -> parseWithEncryptedKey("!!!not base64!!!").decryptMasterKey(PASSWORD));
+        assertThrows(IOException.class,
+                () -> parseWithEncryptedKey(Base64.getEncoder().encodeToString(new byte[4]))
+                        .decryptMasterKey(PASSWORD));
     }
 
     @Test
@@ -371,15 +368,32 @@ class ConfigFileTest {
     }
 
     private static Path writeConfWithEncryptedKey(Path dir, String encryptedKeyB64) throws IOException {
+        Path conf = dir.resolve("gocryptfs.conf");
+        Files.write(conf, confJsonWithEncryptedKey(encryptedKeyB64).getBytes(StandardCharsets.UTF_8));
+        return conf;
+    }
+
+    /**
+     * Builds a {@link ConfigFile} directly with Gson (bypassing {@code load()}'s
+     * validation) with the given encrypted key, or without an encrypted key when
+     * {@code null}. The scrypt object is valid so that only the encrypted key is
+     * the problem.
+     */
+    private static ConfigFile parseWithEncryptedKey(String encryptedKeyB64) {
+        return new Gson().fromJson(confJsonWithEncryptedKey(encryptedKeyB64), ConfigFile.class);
+    }
+
+    private static String confJsonWithEncryptedKey(String encryptedKeyB64) {
         String salt32 = Base64.getEncoder().encodeToString(new byte[32]);
         StringBuilder json = new StringBuilder();
-        json.append("{\"Creator\":\"test\",\"EncryptedKey\":\"").append(encryptedKeyB64).append("\",");
+        json.append("{\"Creator\":\"test\",");
+        if (encryptedKeyB64 != null) {
+            json.append("\"EncryptedKey\":\"").append(encryptedKeyB64).append("\",");
+        }
         json.append("\"ScryptObject\":{\"Salt\":\"").append(salt32).append("\",");
         json.append("\"N\":").append(1 << 16).append(",\"R\":8,\"P\":1,\"KeyLen\":32},");
         json.append("\"Version\":2,\"FeatureFlags\":[\"HKDF\",\"GCMIV128\"]}");
-        Path conf = dir.resolve("gocryptfs.conf");
-        Files.write(conf, json.toString().getBytes(StandardCharsets.UTF_8));
-        return conf;
+        return json.toString();
     }
 
     @Test

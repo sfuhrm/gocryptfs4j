@@ -31,6 +31,7 @@ import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.Properties;
@@ -64,35 +65,89 @@ public final class ConfigFile {
 
     /** The creator string written by gocryptfs. */
     @SerializedName("Creator")
-    public String creator;
+    private String creator;
 
     /** Base64-encoded encrypted master key. */
     @SerializedName("EncryptedKey")
-    public String encryptedKey;
+    private String encryptedKey;
 
     /** The scrypt key-derivation parameters. */
     @SerializedName("ScryptObject")
-    public ScryptKdf scryptObject;
+    private ScryptKdf scryptObject;
 
     /** The on-disk format version. */
     @SerializedName("Version")
-    public int version;
+    private int version;
 
     /** The feature flags enabled for this filesystem, or {@code null}. */
     @SerializedName("FeatureFlags")
-    public @Nullable List<String> featureFlags;
+    private @Nullable List<String> featureFlags;
 
     /** The configured long-name limit, or {@code null} for the default. */
     @SerializedName("LongNameMax")
-    public @Nullable Integer longNameMax;
+    private @Nullable Integer longNameMax;
 
     /** FIDO2 key-protection data, or {@code null} if unused. */
     @SerializedName("FIDO2")
-    public @Nullable Fido2Params fido2;
+    private @Nullable Fido2Params fido2;
 
     /** Creates an empty config file (used by Gson and {@link #create}). */
     @SuppressWarnings("NullAway.Init")
     public ConfigFile() {
+    }
+
+    /**
+     * Returns the creator string written by gocryptfs.
+     *
+     * @return the creator string
+     */
+    public String creator() {
+        return creator;
+    }
+
+    /**
+     * Returns the base64-encoded encrypted master key.
+     *
+     * @return the encrypted master key
+     */
+    public String encryptedKey() {
+        return encryptedKey;
+    }
+
+    /**
+     * Returns the scrypt key-derivation parameters.
+     *
+     * @return the scrypt parameters
+     */
+    public ScryptKdf scryptObject() {
+        return scryptObject;
+    }
+
+    /**
+     * Returns the on-disk format version.
+     *
+     * @return the version
+     */
+    public int version() {
+        return version;
+    }
+
+    /**
+     * Returns the feature flags enabled for this filesystem, or {@code null}.
+     *
+     * @return an unmodifiable view of the feature flags
+     */
+    public @Nullable List<String> featureFlags() {
+        return featureFlags == null ? null : Collections.unmodifiableList(featureFlags);
+    }
+
+    /**
+     * Returns the FIDO2 key-protection data, or {@code null} if unused.
+     *
+     * @return the FIDO2 parameters
+     */
+    public @Nullable Fido2Params fido2() {
+        return fido2;
     }
 
     /**
@@ -145,25 +200,28 @@ public final class ConfigFile {
             if (fido2 == null) {
                 throw new IOException("FIDO2 feature flag is set but the FIDO2 object is missing");
             }
-            if (fido2.credentialId == null || fido2.credentialId.length == 0) {
+            byte[] credentialId = fido2.credentialId();
+            if (credentialId == null || credentialId.length == 0) {
                 throw new IOException("FIDO2 credential ID is missing");
             }
-            if (fido2.credentialId.length > Constants.FIDO2_MAX_CREDENTIAL_ID_LEN) {
+            if (credentialId.length > Constants.FIDO2_MAX_CREDENTIAL_ID_LEN) {
                 throw new IOException("FIDO2 credential ID too long: "
-                        + fido2.credentialId.length);
+                        + credentialId.length);
             }
-            if (fido2.hmacSalt == null || fido2.hmacSalt.length == 0) {
+            byte[] hmacSalt = fido2.hmacSalt();
+            if (hmacSalt == null || hmacSalt.length == 0) {
                 throw new IOException("FIDO2 HMAC salt is missing");
             }
-            if (fido2.hmacSalt.length > Constants.FIDO2_MAX_HMAC_SALT_LEN) {
-                throw new IOException("FIDO2 HMAC salt too long: " + fido2.hmacSalt.length);
+            if (hmacSalt.length > Constants.FIDO2_MAX_HMAC_SALT_LEN) {
+                throw new IOException("FIDO2 HMAC salt too long: " + hmacSalt.length);
             }
-            if (fido2.assertOptions != null) {
-                if (fido2.assertOptions.size() > Constants.FIDO2_MAX_ASSERT_OPTIONS) {
+            List<String> assertOptions = fido2.assertOptions();
+            if (assertOptions != null) {
+                if (assertOptions.size() > Constants.FIDO2_MAX_ASSERT_OPTIONS) {
                     throw new IOException("too many FIDO2 assertion options: "
-                            + fido2.assertOptions.size());
+                            + assertOptions.size());
                 }
-                for (String option : fido2.assertOptions) {
+                for (String option : assertOptions) {
                     if (option.length() > Constants.FIDO2_MAX_ASSERT_OPTION_LEN) {
                         throw new IOException("FIDO2 assertion option too long");
                     }
@@ -210,34 +268,34 @@ public final class ConfigFile {
         if (s == null) {
             throw new IOException("scrypt object is missing");
         }
-        if (s.keyLen != Constants.KEY_LEN) {
-            throw new IOException("unsupported scrypt KeyLen " + s.keyLen
+        if (s.keyLen() != Constants.KEY_LEN) {
+            throw new IOException("unsupported scrypt KeyLen " + s.keyLen()
                     + " (want " + Constants.KEY_LEN + ")");
         }
         int minN = 1 << Constants.SCRYPT_MIN_LOG_N;
         int maxN = 1 << Constants.SCRYPT_MAX_LOG_N;
-        if (s.n < minN || s.n > maxN || (s.n & (s.n - 1)) != 0) {
-            throw new IOException("scrypt N out of range: " + s.n);
+        if (s.n() < minN || s.n() > maxN || (s.n() & (s.n() - 1)) != 0) {
+            throw new IOException("scrypt N out of range: " + s.n());
         }
-        if (s.r < Constants.SCRYPT_MIN_R || s.r > Constants.SCRYPT_MAX_R) {
-            throw new IOException("scrypt R out of range: " + s.r);
+        if (s.r() < Constants.SCRYPT_MIN_R || s.r() > Constants.SCRYPT_MAX_R) {
+            throw new IOException("scrypt R out of range: " + s.r());
         }
-        if (s.p < Constants.SCRYPT_MIN_P || s.p > Constants.SCRYPT_MAX_P) {
-            throw new IOException("scrypt P out of range: " + s.p);
+        if (s.p() < Constants.SCRYPT_MIN_P || s.p() > Constants.SCRYPT_MAX_P) {
+            throw new IOException("scrypt P out of range: " + s.p());
         }
-        long cost = 128L * s.n * s.r * s.p;
+        long cost = 128L * s.n() * s.r() * s.p();
         if (cost > Constants.SCRYPT_MAX_MEMORY) {
             throw new IOException("scrypt cost too high: " + cost + " bytes");
         }
-        if (s.salt == null) {
+        if (s.salt() == null) {
             throw new IOException("scrypt salt is missing");
         }
-        if (s.salt.length() > 4 * Constants.SCRYPT_MAX_SALT_LEN) {
+        if (s.salt().length() > 4 * Constants.SCRYPT_MAX_SALT_LEN) {
             throw new IOException("scrypt salt too long");
         }
         byte[] salt;
         try {
-            salt = Base64.getDecoder().decode(s.salt);
+            salt = Base64.getDecoder().decode(s.salt());
         } catch (IllegalArgumentException e) {
             throw new IOException("invalid scrypt salt", e);
         }
@@ -360,7 +418,7 @@ public final class ConfigFile {
         validateScrypt();
         validateEncryptedKey();
         ScryptKdf s = scryptObject;
-        byte[] scryptHash = Keys.scrypt(secret, decode(s.salt), s.n, s.r, s.p, s.keyLen);
+        byte[] scryptHash = Keys.scrypt(secret, decode(s.salt()), s.n(), s.r(), s.p(), s.keyLen());
         byte[] contentKey = null;
         try {
             // gocryptfs always protects the master key with AES-256-GCM, even
@@ -459,7 +517,7 @@ public final class ConfigFile {
 
         byte[] passwordBytes = charsToBytes(password);
         byte[] salt = Keys.randomBytes(Constants.KEY_LEN);
-        byte[] scryptHash = Keys.scrypt(passwordBytes, salt, s.n, s.r, s.p, s.keyLen);
+        byte[] scryptHash = Keys.scrypt(passwordBytes, salt, s.n(), s.r(), s.p(), s.keyLen());
         byte[] contentKey = null;
         try {
             // The master key is always protected with AES-256-GCM; the content
@@ -484,7 +542,8 @@ public final class ConfigFile {
             System.arraycopy(ct, 0, encrypted, nonce.length, ct.length);
 
             encryptedKey = Base64.getEncoder().encodeToString(encrypted);
-            s.salt = Base64.getEncoder().encodeToString(salt);
+            scryptObject = new ScryptKdf(Base64.getEncoder().encodeToString(salt),
+                    s.n(), s.r(), s.p(), s.keyLen());
         } finally {
             Keys.wipe(contentKey);
             Keys.wipe(scryptHash);
@@ -756,16 +815,13 @@ public final class ConfigFile {
         cf.featureFlags = flags;
         cf.fido2 = fido2;
 
-        ScryptKdf sk = new ScryptKdf();
-        sk.salt = Base64.getEncoder().encodeToString(Keys.randomBytes(Constants.KEY_LEN));
-        sk.n = 1 << 16;
-        sk.r = 8;
-        sk.p = 1;
-        sk.keyLen = Constants.KEY_LEN;
+        ScryptKdf sk = new ScryptKdf(
+                Base64.getEncoder().encodeToString(Keys.randomBytes(Constants.KEY_LEN)),
+                1 << 16, 8, 1, Constants.KEY_LEN);
         cf.scryptObject = sk;
 
         byte[] scryptHash = Keys.scrypt(
-                secret, decode(sk.salt), sk.n, sk.r, sk.p, sk.keyLen);
+                secret, decode(sk.salt()), sk.n(), sk.r(), sk.p(), sk.keyLen());
         byte[] contentKey = null;
         try {
             // The master key is always protected with AES-256-GCM; the content

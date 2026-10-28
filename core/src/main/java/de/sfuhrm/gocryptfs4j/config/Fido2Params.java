@@ -34,16 +34,16 @@ public final class Fido2Params {
     /** Base64-encoded FIDO2 credential ID. */
     @SerializedName("CredentialID")
     @JsonAdapter(Base64ByteArrayAdapter.class)
-    public byte[] credentialId;
+    private byte @Nullable [] credentialId;
 
     /** Base64-encoded salt for the FIDO2 {@code hmac-secret} extension. */
     @SerializedName("HMACSalt")
     @JsonAdapter(Base64ByteArrayAdapter.class)
-    public byte[] hmacSalt;
+    private byte @Nullable [] hmacSalt;
 
     /** Options to pass to the FIDO2 assertion, or {@code null} if unused. */
     @SerializedName("AssertOptions")
-    public @Nullable List<String> assertOptions;
+    private @Nullable List<String> assertOptions;
 
     /** Creates an empty parameter object (used by Gson). */
     @SuppressWarnings("NullAway.Init")
@@ -64,6 +64,33 @@ public final class Fido2Params {
         this.assertOptions = assertOptions == null
                 ? null
                 : Collections.unmodifiableList(new ArrayList<>(assertOptions));
+    }
+
+    /**
+     * Returns a copy of the credential ID, or {@code null} if unset.
+     *
+     * @return the credential ID
+     */
+    public byte @Nullable [] credentialId() {
+        return credentialId == null ? null : credentialId.clone();
+    }
+
+    /**
+     * Returns a copy of the HMAC-secret salt, or {@code null} if unset.
+     *
+     * @return the HMAC-secret salt
+     */
+    public byte @Nullable [] hmacSalt() {
+        return hmacSalt == null ? null : hmacSalt.clone();
+    }
+
+    /**
+     * Returns the assertion options, or {@code null} if unused.
+     *
+     * @return an unmodifiable view of the assertion options
+     */
+    public @Nullable List<String> assertOptions() {
+        return assertOptions == null ? null : Collections.unmodifiableList(assertOptions);
     }
 
     /**

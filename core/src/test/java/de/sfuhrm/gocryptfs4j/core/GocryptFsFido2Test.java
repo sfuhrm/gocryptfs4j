@@ -64,9 +64,9 @@ class GocryptFsFido2Test {
 
         ConfigFile config = ConfigFile.load(cipherDir.resolve(Constants.CONF_DEFAULT_NAME));
         assertTrue(config.isFeatureFlagSet(Constants.FLAG_FIDO2));
-        assertNotNull(config.fido2);
-        assertEquals(32, config.fido2.hmacSalt.length);
-        assertArrayEquals(token.lastCredentialId, config.fido2.credentialId);
+        assertNotNull(config.fido2());
+        assertEquals(32, config.fido2().hmacSalt().length);
+        assertArrayEquals(token.lastCredentialId, config.fido2().credentialId());
         // The credential ID must be stored as a standard base64 string, not as a
         // JSON number array (Gson's default for byte[]). HTML escaping is
         // disabled, so the base64 padding '=' is stored verbatim.
@@ -116,7 +116,7 @@ class GocryptFsFido2Test {
 
         ConfigFile config = ConfigFile.load(cipherDir.resolve(Constants.CONF_DEFAULT_NAME));
         assertTrue(config.xchacha());
-        assertEquals(Collections.singletonList("uv=1"), config.fido2.assertOptions);
+        assertEquals(Collections.singletonList("uv=1"), config.fido2().assertOptions());
 
         try (GocryptFs fs = GocryptFs.open(cipherDir, token)) {
             assertArrayEquals(new byte[]{1, 2, 3}, fs.readAll("/a"));

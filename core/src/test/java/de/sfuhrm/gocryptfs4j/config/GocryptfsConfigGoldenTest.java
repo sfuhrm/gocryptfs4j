@@ -33,7 +33,7 @@ class GocryptfsConfigGoldenTest {
     void decryptsGocryptFsV011Config() throws Exception {
         ConfigFile cf = ConfigFile.load(resource("gocryptfs-v0.11.conf"));
 
-        assertEquals(2, cf.version);
+        assertEquals(2, cf.version());
         assertTrue(cf.isFeatureFlagSet(Constants.FLAG_GCM_IV128));
         assertTrue(cf.isFeatureFlagSet(Constants.FLAG_DIR_IV));
         assertTrue(cf.isFeatureFlagSet(Constants.FLAG_EME_NAMES));

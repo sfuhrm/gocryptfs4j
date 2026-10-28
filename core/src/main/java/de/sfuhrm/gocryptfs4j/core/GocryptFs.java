@@ -234,14 +234,19 @@ public final class GocryptFs implements AutoCloseable {
         Objects.requireNonNull(token, "token");
         Path confPath = cipherDir.resolve(Constants.CONF_DEFAULT_NAME);
         ConfigFile config = ConfigFile.load(confPath);
-        if (!config.isFeatureFlagSet(Constants.FLAG_FIDO2) || config.fido2 == null) {
+        Fido2Params params = config.fido2();
+        if (!config.isFeatureFlagSet(Constants.FLAG_FIDO2) || params == null) {
             throw new IOException("filesystem is not protected by a FIDO2 token");
         }
-        Fido2Params params = config.fido2;
-        List<String> assertOptions = params.assertOptions == null
+        byte[] credentialId = params.credentialId();
+        byte[] hmacSalt = params.hmacSalt();
+        if (credentialId == null || hmacSalt == null) {
+            throw new IOException("FIDO2 parameters are incomplete");
+        }
+        List<String> assertOptions = params.assertOptions() == null
                 ? Collections.<String>emptyList()
-                : params.assertOptions;
-        byte[] secret = token.hmacSecret(params.credentialId, params.hmacSalt, assertOptions);
+                : params.assertOptions();
+        byte[] secret = token.hmacSecret(credentialId, hmacSalt, assertOptions);
         try {
             byte[] masterKey = config.decryptMasterKey(secret);
             return new GocryptFs(cipherDir, config, masterKey);
