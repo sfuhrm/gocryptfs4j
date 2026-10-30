@@ -8,6 +8,9 @@ on:
     - cron: '0 3 * * 0'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   interop:
     runs-on: ubuntu-latest
