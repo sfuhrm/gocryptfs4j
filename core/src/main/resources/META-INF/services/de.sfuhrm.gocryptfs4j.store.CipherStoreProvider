@@ -1,1 +1,2 @@
+de.sfuhrm.gocryptfs4j.store.local.PathCipherStoreProvider
 de.sfuhrm.gocryptfs4j.store.memory.MapCipherStoreProvider
