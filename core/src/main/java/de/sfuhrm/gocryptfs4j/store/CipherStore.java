@@ -3,7 +3,6 @@ package de.sfuhrm.gocryptfs4j.store;
 import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
-import java.nio.channels.SeekableByteChannel;
 import java.nio.file.AccessMode;
 import java.nio.file.attribute.FileTime;
 import java.nio.file.attribute.GroupPrincipal;
@@ -163,16 +162,16 @@ public interface CipherStore extends AutoCloseable {
      * <p>Stores that cannot update the middle of an object (for example object
      * stores) should return a channel that buffers the whole object locally and
      * writes it back on close. The returned channel supports the
-     * {@link java.nio.channels.SeekableByteChannel} operations used by the
-     * encrypted file layer: positioned read, positioned write, {@code size()} and
-     * {@code truncate(long)}.</p>
+     * {@link CipherChannel} operations used by the encrypted file layer:
+     * positioned read, positioned write, {@code size()}, {@code truncate(long)}
+     * and {@code force(boolean)}.</p>
      *
      * @param name     the ciphertext file path
      * @param writable whether the file should be opened for writing
      * @return the opened channel
      * @throws IOException on storage errors
      */
-    SeekableByteChannel open(String name, boolean writable) throws IOException;
+    CipherChannel open(String name, boolean writable) throws IOException;
 
     /**
      * Checks access to a ciphertext entry. Existence (no modes) is assumed to

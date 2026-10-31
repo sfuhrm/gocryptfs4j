@@ -11,6 +11,7 @@ import de.sfuhrm.gocryptfs4j.crypto.Hkdf;
 import de.sfuhrm.gocryptfs4j.crypto.Keys;
 import de.sfuhrm.gocryptfs4j.fido2.Fido2Token;
 import de.sfuhrm.gocryptfs4j.names.NameTransform;
+import de.sfuhrm.gocryptfs4j.store.CipherChannel;
 import de.sfuhrm.gocryptfs4j.store.CipherNode;
 import de.sfuhrm.gocryptfs4j.store.CipherStore;
 import de.sfuhrm.gocryptfs4j.store.CipherStores;
@@ -22,7 +23,6 @@ import java.io.OutputStream;
 import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
-import java.nio.channels.SeekableByteChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AccessMode;
 import java.nio.file.DirectoryNotEmptyException;
@@ -1035,7 +1035,7 @@ public final class GocryptFs implements AutoCloseable {
      */
     CipherFile openCipherFileByName(String cipherFile, boolean writable) throws IOException {
         Objects.requireNonNull(cipherFile, "cipherFile");
-        SeekableByteChannel channel = store.open(cipherFile, writable);
+        CipherChannel channel = store.open(cipherFile, writable);
         return CipherFile.open(channel, contentEnc, writable);
     }
 

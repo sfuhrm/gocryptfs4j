@@ -3,6 +3,8 @@ package de.sfuhrm.gocryptfs4j.core;
 import de.sfuhrm.gocryptfs4j.crypto.Constants;
 import de.sfuhrm.gocryptfs4j.crypto.ContentEnc;
 import de.sfuhrm.gocryptfs4j.crypto.Keys;
+import de.sfuhrm.gocryptfs4j.store.CipherChannel;
+import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -10,11 +12,9 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
 import java.nio.channels.WritableByteChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -39,10 +39,9 @@ class CipherFileTest {
     }
 
     private static CipherFile open(Path p, ContentEnc enc, boolean writable) throws IOException {
-        FileChannel ch = writable
-                ? FileChannel.open(p, StandardOpenOption.READ, StandardOpenOption.WRITE)
-                : FileChannel.open(p, StandardOpenOption.READ);
-        return CipherFile.open(ch, enc, writable);
+        PathCipherStore store = new PathCipherStore(p.getParent());
+        CipherChannel channel = store.open(p.toAbsolutePath().toString(), writable);
+        return CipherFile.open(channel, enc, writable);
     }
 
     private static byte[] readAll(CipherFile cf) throws IOException {

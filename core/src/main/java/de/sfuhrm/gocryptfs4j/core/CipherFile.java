@@ -3,14 +3,13 @@ package de.sfuhrm.gocryptfs4j.core;
 import de.sfuhrm.gocryptfs4j.crypto.Constants;
 import de.sfuhrm.gocryptfs4j.crypto.ContentEnc;
 import de.sfuhrm.gocryptfs4j.crypto.FileHeader;
+import de.sfuhrm.gocryptfs4j.store.CipherChannel;
 import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.ClosedChannelException;
-import java.nio.channels.FileChannel;
 import java.nio.channels.NonWritableChannelException;
-import java.nio.channels.SeekableByteChannel;
 import java.nio.channels.WritableByteChannel;
 import java.security.GeneralSecurityException;
 import java.util.Arrays;
@@ -33,7 +32,7 @@ public final class CipherFile implements AutoCloseable {
     private static final int MAX_BULK_BYTES = 256 * 1024;
 
     /** The underlying cipher file channel. */
-    private final SeekableByteChannel channel;
+    private final CipherChannel channel;
 
     /** Whether the channel was opened for writing. */
     private final boolean writable;
@@ -78,7 +77,7 @@ public final class CipherFile implements AutoCloseable {
      * @param enc      the content-encryption helper
      * @param writable whether the channel permits writes
      */
-    private CipherFile(SeekableByteChannel channel, ContentEnc enc, boolean writable) {
+    private CipherFile(CipherChannel channel, ContentEnc enc, boolean writable) {
         this.channel = channel;
         this.enc = enc;
         this.writable = writable;
@@ -93,7 +92,7 @@ public final class CipherFile implements AutoCloseable {
      * @param channel the underlying file channel
      * @param enc     the content-encryption helper
      */
-    private CipherFile(SeekableByteChannel channel, ContentEnc enc) {
+    private CipherFile(CipherChannel channel, ContentEnc enc) {
         this(channel, enc, true);
     }
 
@@ -124,7 +123,7 @@ public final class CipherFile implements AutoCloseable {
      * @return the opened cipher file
      * @throws NullPointerException if {@code channel} or {@code enc} is {@code null}
      */
-    static CipherFile open(SeekableByteChannel channel, ContentEnc enc, boolean writable) {
+    static CipherFile open(CipherChannel channel, ContentEnc enc, boolean writable) {
         Objects.requireNonNull(channel, "channel");
         Objects.requireNonNull(enc, "enc");
         return new CipherFile(channel, enc, writable);
@@ -633,9 +632,7 @@ public final class CipherFile implements AutoCloseable {
      */
     public synchronized void force(boolean metaData) throws IOException {
         flushWriteBack();
-        if (channel instanceof FileChannel) {
-            ((FileChannel) channel).force(metaData);
-        }
+        channel.force(metaData);
     }
 
     /**

@@ -4,12 +4,11 @@ import de.sfuhrm.gocryptfs4j.crypto.Constants;
 import de.sfuhrm.gocryptfs4j.crypto.ContentEnc;
 import de.sfuhrm.gocryptfs4j.crypto.FileHeader;
 import de.sfuhrm.gocryptfs4j.crypto.Keys;
+import de.sfuhrm.gocryptfs4j.store.CipherChannel;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Constructor;
 import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
-import java.nio.channels.SeekableByteChannel;
 import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -23,7 +22,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Tests {@link CipherFile} against a mocked {@link FileChannel} to exercise
+ * Tests {@link CipherFile} against a mocked {@link CipherChannel} to exercise
  * conditions that are hard to produce with a real file (partial reads/writes,
  * delegation of close, empty-file short-circuits).
  */
@@ -33,15 +32,15 @@ class CipherFileMockTest {
         return new ContentEnc(Keys.randomBytes(Constants.KEY_LEN), Constants.DEFAULT_IV_BITS / 8);
     }
 
-    private static CipherFile newCipherFile(FileChannel channel, ContentEnc enc) throws Exception {
-        Constructor<CipherFile> ctor = CipherFile.class.getDeclaredConstructor(SeekableByteChannel.class, ContentEnc.class);
+    private static CipherFile newCipherFile(CipherChannel channel, ContentEnc enc) throws Exception {
+        Constructor<CipherFile> ctor = CipherFile.class.getDeclaredConstructor(CipherChannel.class, ContentEnc.class);
         ctor.setAccessible(true);
         return ctor.newInstance(channel, enc);
     }
 
     @Test
     void readOnEmptyFileReturnsMinusOneWithoutReading() throws Exception {
-        FileChannel channel = mock(FileChannel.class);
+        CipherChannel channel = mock(CipherChannel.class);
         when(channel.size()).thenReturn(0L);
         CipherFile cf = newCipherFile(channel, enc());
 
@@ -52,7 +51,7 @@ class CipherFileMockTest {
     @Test
     void fileIdParsesHeaderDespitePartialReads() throws Exception {
         byte[] header = FileHeader.random().pack();
-        FileChannel channel = mock(FileChannel.class);
+        CipherChannel channel = mock(CipherChannel.class);
         when(channel.size()).thenReturn((long) header.length);
         long[] pos = {0};
         when(channel.position(anyLong())).thenAnswer(inv -> {
@@ -80,7 +79,7 @@ class CipherFileMockTest {
 
     @Test
     void writeHandlesPartialChannelWrites() throws Exception {
-        FileChannel channel = mock(FileChannel.class);
+        CipherChannel channel = mock(CipherChannel.class);
         when(channel.size()).thenReturn(0L);
         long[] pos = {0};
         when(channel.position(anyLong())).thenAnswer(inv -> {
@@ -108,7 +107,7 @@ class CipherFileMockTest {
 
     @Test
     void plainSizeDelegatesToChannelSize() throws Exception {
-        FileChannel channel = mock(FileChannel.class);
+        CipherChannel channel = mock(CipherChannel.class);
         ContentEnc enc = enc();
         when(channel.size()).thenReturn(Constants.HEADER_LEN + enc.cipherBS);
         CipherFile cf = newCipherFile(channel, enc());
@@ -127,7 +126,7 @@ class CipherFileMockTest {
         System.arraycopy(header, 0, whole, 0, header.length);
         System.arraycopy(block, 0, whole, header.length, block.length);
 
-        FileChannel channel = mock(FileChannel.class);
+        CipherChannel channel = mock(CipherChannel.class);
         when(channel.size()).thenReturn((long) whole.length);
         long[] pos = {0};
         int[] readsAtHeaderLen = {0};

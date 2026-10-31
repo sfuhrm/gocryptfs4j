@@ -1,5 +1,6 @@
 package de.sfuhrm.gocryptfs4j.store.memory;
 
+import de.sfuhrm.gocryptfs4j.store.CipherChannel;
 import de.sfuhrm.gocryptfs4j.store.CipherNode;
 import de.sfuhrm.gocryptfs4j.store.CipherStore;
 import org.jspecify.annotations.Nullable;
@@ -7,7 +8,6 @@ import org.jspecify.annotations.Nullable;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.NonWritableChannelException;
-import java.nio.channels.SeekableByteChannel;
 import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.NoSuchFileException;
@@ -30,7 +30,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>The ciphertext tree is stored as three collections: regular files (blobs),
  * symbolic links and directory markers. File content is opened through a
- * {@link SeekableByteChannel} that operates on an in-memory byte array, so the
+ * {@link CipherChannel} that operates on an in-memory byte array, so the
  * encrypted-file layer works exactly as it does on a local or remote store.</p>
  *
  * <p>This class is thread-safe and is intended both as a test fixture and as a
@@ -198,7 +198,7 @@ public final class MapCipherStore implements CipherStore {
     }
 
     @Override
-    public SeekableByteChannel open(String name, boolean writable) throws IOException {
+    public CipherChannel open(String name, boolean writable) throws IOException {
         if (!files.containsKey(name)) {
             throw new NoSuchFileException(name);
         }
@@ -377,10 +377,10 @@ public final class MapCipherStore implements CipherStore {
     }
 
     /**
-     * A {@link SeekableByteChannel} over an in-memory byte array. Writable
+     * A {@link CipherChannel} over an in-memory byte array. Writable
      * channels persist their contents back to the store on {@link #close()}.
      */
-    private final class MemoryChannel implements SeekableByteChannel {
+    private final class MemoryChannel implements CipherChannel {
 
         private final String name;
         private final boolean writable;
@@ -428,7 +428,7 @@ public final class MapCipherStore implements CipherStore {
         }
 
         @Override
-        public SeekableByteChannel position(long newPosition) throws IOException {
+        public CipherChannel position(long newPosition) throws IOException {
             ensureOpen();
             if (newPosition < 0) {
                 throw new IllegalArgumentException("negative position");
@@ -444,7 +444,7 @@ public final class MapCipherStore implements CipherStore {
         }
 
         @Override
-        public SeekableByteChannel truncate(long size) throws IOException {
+        public CipherChannel truncate(long size) throws IOException {
             ensureOpen();
             if (!writable) {
                 throw new NonWritableChannelException();
@@ -459,6 +459,11 @@ public final class MapCipherStore implements CipherStore {
         @Override
         public boolean isOpen() {
             return open;
+        }
+
+        @Override
+        public void force(boolean metaData) {
+            // In-memory storage has no force primitive.
         }
 
         @Override

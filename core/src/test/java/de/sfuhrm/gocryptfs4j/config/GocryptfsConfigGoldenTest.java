@@ -1,9 +1,9 @@
 package de.sfuhrm.gocryptfs4j.config;
 
 import de.sfuhrm.gocryptfs4j.crypto.Constants;
-import de.sfuhrm.gocryptfs4j.crypto.IoUtil;
 import org.junit.jupiter.api.Test;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Objects;
@@ -31,7 +31,7 @@ class GocryptfsConfigGoldenTest {
     }
 
     private static ConfigFile load(String name) throws Exception {
-        return ConfigFile.fromBytes(IoUtil.readBounded(resource(name), Constants.CONFIG_MAX_SIZE));
+        return ConfigFile.fromBytes(Files.readAllBytes(resource(name)));
     }
 
     @Test

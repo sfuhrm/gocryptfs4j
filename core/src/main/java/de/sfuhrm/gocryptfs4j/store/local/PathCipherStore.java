@@ -1,17 +1,20 @@
 package de.sfuhrm.gocryptfs4j.store.local;
 
 import de.sfuhrm.gocryptfs4j.crypto.IoUtil;
+import de.sfuhrm.gocryptfs4j.store.CipherChannel;
 import de.sfuhrm.gocryptfs4j.store.CipherNode;
 import de.sfuhrm.gocryptfs4j.store.CipherStore;
 import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
-import java.nio.channels.SeekableByteChannel;
 import java.nio.file.AccessMode;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
@@ -84,7 +87,16 @@ public final class PathCipherStore implements CipherStore {
 
     @Override
     public byte[] readSmall(String name, int maxBytes) throws IOException {
-        return IoUtil.readBounded(path(name), maxBytes);
+        Path p = path(name);
+        if (!Files.exists(p, LinkOption.NOFOLLOW_LINKS)) {
+            throw new NoSuchFileException(p.toString());
+        }
+        if (!Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IOException("not a regular file: " + p);
+        }
+        try (InputStream in = Files.newInputStream(p)) {
+            return IoUtil.readBounded(in, maxBytes);
+        }
     }
 
     @Override
@@ -191,12 +203,12 @@ public final class PathCipherStore implements CipherStore {
     }
 
     @Override
-    public SeekableByteChannel open(String name, boolean writable) throws IOException {
+    public CipherChannel open(String name, boolean writable) throws IOException {
         Path p = path(name);
-        if (writable) {
-            return FileChannel.open(p, StandardOpenOption.READ, StandardOpenOption.WRITE);
-        }
-        return FileChannel.open(p, StandardOpenOption.READ);
+        FileChannel ch = writable
+                ? FileChannel.open(p, StandardOpenOption.READ, StandardOpenOption.WRITE)
+                : FileChannel.open(p, StandardOpenOption.READ);
+        return new FileChannelAdapter(ch);
     }
 
     @Override
@@ -247,6 +259,66 @@ public final class PathCipherStore implements CipherStore {
     @Override
     public void close() {
         // No resources to release.
+    }
+
+    /**
+     * Adapts a {@link FileChannel} to the {@link CipherChannel} contract,
+     * delegating {@link #force(boolean)} to {@link FileChannel#force(boolean)}.
+     */
+    private static final class FileChannelAdapter implements CipherChannel {
+
+        private final FileChannel channel;
+
+        FileChannelAdapter(FileChannel channel) {
+            this.channel = channel;
+        }
+
+        @Override
+        public int read(ByteBuffer dst) throws IOException {
+            return channel.read(dst);
+        }
+
+        @Override
+        public int write(ByteBuffer src) throws IOException {
+            return channel.write(src);
+        }
+
+        @Override
+        public long position() throws IOException {
+            return channel.position();
+        }
+
+        @Override
+        public CipherChannel position(long newPosition) throws IOException {
+            channel.position(newPosition);
+            return this;
+        }
+
+        @Override
+        public long size() throws IOException {
+            return channel.size();
+        }
+
+        @Override
+        public CipherChannel truncate(long size) throws IOException {
+            channel.truncate(size);
+            return this;
+        }
+
+        @Override
+        public boolean isOpen() {
+            return channel.isOpen();
+        }
+
+        @Override
+        public void close() throws IOException {
+            channel.close();
+        }
+
+        @Override
+        public void force(boolean metaData) throws IOException {
+            channel.force(metaData);
+        }
     }
 
     /**
