@@ -96,7 +96,11 @@ public final class PathCipherStore implements CipherStore {
         if (!Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS)) {
             throw new IOException("not a regular file: " + p);
         }
-        try (InputStream in = Files.newInputStream(p)) {
+        // Open without following symlinks so a symlink swapped in between the
+        // check above and the open cannot redirect the read to another file.
+        // The regular-file check still runs first because opening a FIFO for
+        // reading would otherwise block until a writer appears.
+        try (InputStream in = Files.newInputStream(p, LinkOption.NOFOLLOW_LINKS)) {
             return IoUtil.readBounded(in, maxBytes);
         }
     }

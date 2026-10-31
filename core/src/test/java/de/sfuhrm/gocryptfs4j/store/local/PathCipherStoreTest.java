@@ -55,6 +55,17 @@ class PathCipherStoreTest {
     }
 
     @Test
+    void readSmallRejectsSymlink() throws Exception {
+        Path dir = Files.createDirectory(tmp.resolve("cipher"));
+        Path target = dir.resolve("real");
+        Files.write(target, "hello".getBytes(StandardCharsets.UTF_8));
+        Path link = dir.resolve("link");
+        Files.createSymbolicLink(link, target);
+        PathCipherStore store = new PathCipherStore(dir);
+        assertThrows(IOException.class, () -> store.readSmall(link.toString(), 100));
+    }
+
+    @Test
     void writeSmallCreatesNewFile() throws Exception {
         Path dir = Files.createDirectory(tmp.resolve("cipher"));
         PathCipherStore store = new PathCipherStore(dir);
