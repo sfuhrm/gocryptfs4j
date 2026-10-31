@@ -8,6 +8,7 @@ import org.jspecify.annotations.Nullable;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.NonWritableChannelException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.NoSuchFileException;
@@ -35,6 +36,11 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>This class is thread-safe and is intended both as a test fixture and as a
  * minimal reference for writing a remote backend.</p>
+ *
+ * <p>Timestamps are not persisted: every entry reports the Unix epoch
+ * ({@code 1970-01-01T00:00:00Z}) for its last-modified, last-access and
+ * creation time, and {@link #setTimes(String, FileTime, FileTime, FileTime)}
+ * is a no-op.</p>
  */
 public final class MapCipherStore implements CipherStore {
 
@@ -61,7 +67,7 @@ public final class MapCipherStore implements CipherStore {
     }
 
     @Override
-    public byte[] readSmall(String name, int maxBytes) throws IOException {
+    public synchronized byte[] readSmall(String name, int maxBytes) throws IOException {
         Objects.requireNonNull(name, "name");
         byte[] data = files.get(name);
         if (data == null) {
@@ -74,24 +80,27 @@ public final class MapCipherStore implements CipherStore {
     }
 
     @Override
-    public void writeSmall(String name, byte[] data, boolean overwrite) throws IOException {
+    public synchronized void writeSmall(String name, byte[] data, boolean overwrite)
+            throws IOException {
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(data, "data");
         if (!overwrite && exists(name)) {
             throw new FileAlreadyExistsException(name);
         }
+        ensureParent(name);
         files.put(name, data.clone());
     }
 
     @Override
-    public CipherNode stat(String name) throws IOException {
+    public synchronized CipherNode stat(String name) throws IOException {
         Objects.requireNonNull(name, "name");
         if (dirs.contains(name)) {
             return node(name, CipherNode.Kind.DIRECTORY, 0);
         }
         String target = symlinks.get(name);
         if (target != null) {
-            return node(name, CipherNode.Kind.SYMLINK, target.length());
+            return node(name, CipherNode.Kind.SYMLINK,
+                    target.getBytes(StandardCharsets.UTF_8).length);
         }
         byte[] data = files.get(name);
         if (data != null) {
@@ -101,7 +110,7 @@ public final class MapCipherStore implements CipherStore {
     }
 
     @Override
-    public List<CipherNode> list(String dir) throws IOException {
+    public synchronized List<CipherNode> list(String dir) throws IOException {
         Objects.requireNonNull(dir, "dir");
         if (!dirs.contains(dir)) {
             throw new NoSuchFileException(dir);
@@ -114,25 +123,27 @@ public final class MapCipherStore implements CipherStore {
     }
 
     @Override
-    public void createFile(String name) throws IOException {
+    public synchronized void createFile(String name) throws IOException {
         Objects.requireNonNull(name, "name");
         if (exists(name)) {
             throw new FileAlreadyExistsException(name);
         }
+        ensureParent(name);
         files.put(name, new byte[0]);
     }
 
     @Override
-    public void mkdir(String name) throws IOException {
+    public synchronized void mkdir(String name) throws IOException {
         Objects.requireNonNull(name, "name");
         if (exists(name)) {
             throw new FileAlreadyExistsException(name);
         }
+        ensureParent(name);
         dirs.add(name);
     }
 
     @Override
-    public void delete(String name) throws IOException {
+    public synchronized void delete(String name) throws IOException {
         Objects.requireNonNull(name, "name");
         if (dirs.contains(name)) {
             if (!children(name).isEmpty()) {
@@ -151,7 +162,8 @@ public final class MapCipherStore implements CipherStore {
     }
 
     @Override
-    public void rename(String from, String to, boolean replaceExisting) throws IOException {
+    public synchronized void rename(String from, String to, boolean replaceExisting)
+            throws IOException {
         Objects.requireNonNull(from, "from");
         Objects.requireNonNull(to, "to");
         if (!exists(from)) {
@@ -179,17 +191,18 @@ public final class MapCipherStore implements CipherStore {
     }
 
     @Override
-    public void createSymlink(String name, String target) throws IOException {
+    public synchronized void createSymlink(String name, String target) throws IOException {
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(target, "target");
         if (exists(name)) {
             throw new FileAlreadyExistsException(name);
         }
+        ensureParent(name);
         symlinks.put(name, target);
     }
 
     @Override
-    public String readSymlink(String name) throws IOException {
+    public synchronized String readSymlink(String name) throws IOException {
         Objects.requireNonNull(name, "name");
         String target = symlinks.get(name);
         if (target == null) {
@@ -199,9 +212,9 @@ public final class MapCipherStore implements CipherStore {
     }
 
     @Override
-    public void setTimes(String name, @Nullable FileTime lastModifiedTime,
-                         @Nullable FileTime lastAccessTime, @Nullable FileTime creationTime)
-            throws IOException {
+    public synchronized void setTimes(String name, @Nullable FileTime lastModifiedTime,
+                                      @Nullable FileTime lastAccessTime,
+                                      @Nullable FileTime creationTime) throws IOException {
         Objects.requireNonNull(name, "name");
         if (!exists(name)) {
             throw new NoSuchFileException(name);
@@ -210,7 +223,7 @@ public final class MapCipherStore implements CipherStore {
     }
 
     @Override
-    public CipherChannel open(String name, boolean writable) throws IOException {
+    public synchronized CipherChannel open(String name, boolean writable) throws IOException {
         Objects.requireNonNull(name, "name");
         if (!files.containsKey(name)) {
             throw new NoSuchFileException(name);
@@ -256,6 +269,20 @@ public final class MapCipherStore implements CipherStore {
 
     private boolean exists(String name) {
         return dirs.contains(name) || symlinks.containsKey(name) || files.containsKey(name);
+    }
+
+    /**
+     * Verifies that the parent directory of {@code name} exists, throwing
+     * {@link NoSuchFileException} otherwise. This mirrors a real filesystem,
+     * where entries can only be created below an existing directory.
+     *
+     * @param name the entry name whose parent to verify
+     * @throws NoSuchFileException if the parent directory does not exist
+     */
+    private void ensureParent(String name) throws NoSuchFileException {
+        if (!dirs.contains(parentOf(name))) {
+            throw new NoSuchFileException(name);
+        }
     }
 
     /**
