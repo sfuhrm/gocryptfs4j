@@ -12,16 +12,19 @@ import de.sfuhrm.gocryptfs4j.fido2.Fido2Token;
 import de.sfuhrm.gocryptfs4j.names.NameTransform;
 import de.sfuhrm.gocryptfs4j.store.CipherNode;
 import de.sfuhrm.gocryptfs4j.store.CipherStore;
+import de.sfuhrm.gocryptfs4j.store.CipherStores;
 import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
 import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.nio.channels.SeekableByteChannel;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AccessMode;
 import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileSystemException;
@@ -29,8 +32,11 @@ import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.NotDirectoryException;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.nio.file.attribute.FileTime;
+import java.nio.file.attribute.GroupPrincipal;
+import java.nio.file.attribute.PosixFileAttributes;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.UserPrincipal;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -39,6 +45,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -333,6 +340,58 @@ public final class GocryptFs implements AutoCloseable {
 
 
     /**
+     * Opens a cipher store identified by a URI, dispatching on the URI scheme to
+     * a registered {@link de.sfuhrm.gocryptfs4j.store.CipherStoreProvider}.
+     *
+     * @param uri      the URI identifying the store
+     * @param env      backend-specific options, or {@code null} for defaults
+     * @param password the password to unlock the master key with
+     * @return the opened filesystem
+     * @throws IOException if no provider handles the scheme, or opening fails
+     * @throws NullPointerException if {@code uri} or {@code password} is {@code null}
+     */
+    public static GocryptFs open(URI uri, Map<String, ?> env, char[] password) throws IOException {
+        Objects.requireNonNull(uri, "uri");
+        Objects.requireNonNull(password, "password");
+        return open(CipherStores.newStore(uri, env), password);
+    }
+
+    /**
+     * Creates a new filesystem in a cipher store identified by a URI.
+     *
+     * @param uri      the URI identifying the store
+     * @param env      backend-specific options, or {@code null} for defaults
+     * @param password the password to protect the master key with
+     * @return the opened filesystem
+     * @throws IOException if no provider handles the scheme, or creation fails
+     */
+    public static GocryptFs create(URI uri, Map<String, ?> env, char[] password) throws IOException {
+        return create(uri, env, password, false, ContentCipherType.AES_GCM);
+    }
+
+    /**
+     * Creates a new filesystem in a cipher store identified by a URI, optionally
+     * with plaintext names and a custom content cipher.
+     *
+     * @param uri            the URI identifying the store
+     * @param env            backend-specific options, or {@code null} for defaults
+     * @param password       the password to protect the master key with
+     * @param plaintextNames whether to store file names unencrypted
+     * @param cipherType     the content-encryption cipher
+     * @return the opened filesystem
+     * @throws IOException if no provider handles the scheme, or creation fails
+     * @throws NullPointerException if {@code uri}, {@code password} or {@code cipherType} is {@code null}
+     */
+    public static GocryptFs create(URI uri, Map<String, ?> env, char[] password,
+                                   boolean plaintextNames, ContentCipherType cipherType)
+            throws IOException {
+        Objects.requireNonNull(uri, "uri");
+        Objects.requireNonNull(password, "password");
+        Objects.requireNonNull(cipherType, "cipherType");
+        return create(CipherStores.newStore(uri, env), password, plaintextNames, cipherType);
+    }
+
+    /**
      * Creates a new gocryptfs filesystem in {@code cipherDir} (which must exist
      * and be empty) and opens it.
      *
@@ -388,6 +447,34 @@ public final class GocryptFs implements AutoCloseable {
             throw new IOException("cipher dir does not exist: " + dir);
         }
         return create(new PathCipherStore(dir), password, plaintextNames, cipherType);
+    }
+
+    /**
+     * Creates a new filesystem in the given cipher store (whose root must be
+     * empty).
+     *
+     * @param store    the ciphertext-side store, whose root must be empty
+     * @param password the password to protect the master key with
+     * @return the opened filesystem
+     * @throws IOException on storage errors
+     */
+    public static GocryptFs create(CipherStore store, char[] password) throws IOException {
+        return create(store, password, false, ContentCipherType.AES_GCM);
+    }
+
+    /**
+     * Creates a new filesystem in the given cipher store, optionally with
+     * plaintext (unencrypted) names.
+     *
+     * @param store          the ciphertext-side store, whose root must be empty
+     * @param password       the password to protect the master key with
+     * @param plaintextNames whether to store file names unencrypted
+     * @return the opened filesystem
+     * @throws IOException on storage errors
+     */
+    public static GocryptFs create(CipherStore store, char[] password, boolean plaintextNames)
+            throws IOException {
+        return create(store, password, plaintextNames, ContentCipherType.AES_GCM);
     }
 
     /**
@@ -995,7 +1082,7 @@ public final class GocryptFs implements AutoCloseable {
                 size = node.size();
             }
 
-            out.add(new DirEntry(plainName, cName, localPath(join(cipherDir, cName)), kind, size,
+            out.add(new DirEntry(plainName, cName, null, kind, size,
                     node.lastModifiedTime(), node.lastAccessTime(),
                     node.creationTime(), node.fileKey()));
         }
@@ -1110,7 +1197,7 @@ public final class GocryptFs implements AutoCloseable {
             size = node.size();
         }
         String plainName = r.plainName.isEmpty() ? "/" : r.plainName;
-        return new DirEntry(plainName, r.cipherName, localPath(r.cipherPath), kind, size,
+        return new DirEntry(plainName, r.cipherName, store.posixAttributes(r.cipherPath), kind, size,
                 node.lastModifiedTime(), node.lastAccessTime(), node.creationTime(),
                 node.fileKey());
     }
@@ -1301,6 +1388,83 @@ public final class GocryptFs implements AutoCloseable {
         Objects.requireNonNull(plainPath, "plainPath");
         Resolved r = resolve(plainPath);
         store.setTimes(r.cipherPath, lastModifiedTime, lastAccessTime, createTime);
+    }
+
+    /**
+     * Checks access to a plaintext path, delegating to the store. Existence (no
+     * modes) is verified by resolving the path itself; stores that cannot
+     * evaluate read/write/execute throw {@link UnsupportedOperationException}.
+     *
+     * @param plainPath the plaintext path
+     * @param modes     the access modes to check, or none to check existence
+     * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code plainPath} is {@code null}
+     */
+    public void checkAccess(String plainPath, AccessMode... modes) throws IOException {
+        Objects.requireNonNull(plainPath, "plainPath");
+        Resolved r = resolve(plainPath);
+        store.checkAccess(r.cipherPath, modes);
+    }
+
+    /**
+     * Returns the POSIX attributes of a plaintext path's backing cipher file,
+     * or {@code null} if the store has no POSIX support.
+     *
+     * @param plainPath the plaintext path
+     * @return the POSIX attributes, or {@code null}
+     * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code plainPath} is {@code null}
+     */
+    public @Nullable PosixFileAttributes posixAttributes(String plainPath) throws IOException {
+        Objects.requireNonNull(plainPath, "plainPath");
+        Resolved r = resolve(plainPath);
+        return store.posixAttributes(r.cipherPath);
+    }
+
+    /**
+     * Sets the POSIX permissions of a plaintext path's backing cipher file.
+     *
+     * @param plainPath   the plaintext path
+     * @param permissions the new permissions
+     * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code plainPath} or {@code permissions} is {@code null}
+     */
+    public void setPosixPermissions(String plainPath, Set<PosixFilePermission> permissions)
+            throws IOException {
+        Objects.requireNonNull(plainPath, "plainPath");
+        Objects.requireNonNull(permissions, "permissions");
+        Resolved r = resolve(plainPath);
+        store.setPosixPermissions(r.cipherPath, permissions);
+    }
+
+    /**
+     * Sets the POSIX owner of a plaintext path's backing cipher file.
+     *
+     * @param plainPath the plaintext path
+     * @param owner     the new owner
+     * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code plainPath} or {@code owner} is {@code null}
+     */
+    public void setPosixOwner(String plainPath, UserPrincipal owner) throws IOException {
+        Objects.requireNonNull(plainPath, "plainPath");
+        Objects.requireNonNull(owner, "owner");
+        Resolved r = resolve(plainPath);
+        store.setPosixOwner(r.cipherPath, owner);
+    }
+
+    /**
+     * Sets the POSIX group of a plaintext path's backing cipher file.
+     *
+     * @param plainPath the plaintext path
+     * @param group     the new group
+     * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code plainPath} or {@code group} is {@code null}
+     */
+    public void setPosixGroup(String plainPath, GroupPrincipal group) throws IOException {
+        Objects.requireNonNull(plainPath, "plainPath");
+        Objects.requireNonNull(group, "group");
+        Resolved r = resolve(plainPath);
+        store.setPosixGroup(r.cipherPath, group);
     }
 
     /**
@@ -1676,16 +1840,5 @@ public final class GocryptFs implements AutoCloseable {
         } catch (NoSuchFileException e) {
             return false;
         }
-    }
-
-    /**
-     * Returns the local filesystem {@link Path} for a ciphertext name, or
-     * {@code null} when this filesystem is not backed by the local filesystem.
-     *
-     * @param name the ciphertext name
-     * @return the path, or {@code null}
-     */
-    private @Nullable Path localPath(String name) {
-        return localRoot == null ? null : Paths.get(name);
     }
 }

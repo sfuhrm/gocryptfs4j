@@ -840,17 +840,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
     public void checkAccess(Path path, AccessMode... modes) throws IOException {
         Objects.requireNonNull(path, "path");
         GocryptFsPath p = resolve(path);
-        Path cipherPath = core(p).stat(p.toString()).cipherPath();
-        if (cipherPath == null) {
-            // Non-local backing store: only existence can be verified, which
-            // stat() above already did.
-            if (modes.length != 0) {
-                throw new UnsupportedOperationException(
-                        "access checks are not supported by the backing store");
-            }
-            return;
-        }
-        cipherPath.getFileSystem().provider().checkAccess(cipherPath, modes);
+        core(p).checkAccess(p.toString(), modes);
     }
 
     /**
@@ -1151,32 +1141,13 @@ public final class GocryptFsProvider extends FileSystemProvider {
      */
     static GocryptFsPosixFileAttributes readPosixAttributes(GocryptFsPath path) throws IOException {
         DirEntry entry = core(path).stat(path.toString());
-        Path cipherPath = entry.cipherPath();
-        if (cipherPath == null) {
+        PosixFileAttributes delegate = entry.posixAttributes();
+        if (delegate == null) {
             throw new UnsupportedOperationException(
                     "POSIX attributes are not supported by the backing store");
         }
-        PosixFileAttributes delegate = posixView(cipherPath).readAttributes();
         return new GocryptFsPosixFileAttributes(new GocryptFsFileAttributes(entry),
                 delegate.owner(), delegate.group(), delegate.permissions());
-    }
-
-    /**
-     * Returns the POSIX attribute view of a backing cipher file.
-     *
-     * @param cipherPath the cipher-side path
-     * @return the POSIX attribute view
-     * @throws UnsupportedOperationException if the backing filesystem has no POSIX support
-     * @throws IOException on filesystem errors
-     */
-    static PosixFileAttributeView posixView(Path cipherPath) throws IOException {
-        PosixFileAttributeView view = java.nio.file.Files.getFileAttributeView(cipherPath,
-                PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
-        if (view == null) {
-            throw new UnsupportedOperationException(
-                    "POSIX attributes are not supported by the backing filesystem");
-        }
-        return view;
     }
 
     /**

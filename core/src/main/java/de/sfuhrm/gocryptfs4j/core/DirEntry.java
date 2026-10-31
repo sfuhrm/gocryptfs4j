@@ -2,8 +2,8 @@ package de.sfuhrm.gocryptfs4j.core;
 
 import org.jspecify.annotations.Nullable;
 
-import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
+import java.nio.file.attribute.PosixFileAttributes;
 import java.util.Objects;
 
 /**
@@ -29,8 +29,8 @@ public final class DirEntry {
     /** The ciphertext (encrypted) name, or {@code null} for the root. */
     private final @Nullable String cipherName;
 
-    /** The ciphertext-side path, or {@code null} for a non-local store. */
-    private final @Nullable Path cipherPath;
+    /** The POSIX attributes of the backing cipher file, or {@code null} if unsupported or not requested. */
+    private final @Nullable PosixFileAttributes posixAttributes;
 
     /** The entry kind. */
     private final Kind kind;
@@ -55,7 +55,7 @@ public final class DirEntry {
      *
      * @param plainName        the plaintext (decrypted) name
      * @param cipherName       the ciphertext (encrypted) name, or {@code null} for the root
-     * @param cipherPath       the ciphertext-side path, or {@code null} for a non-local store
+     * @param posixAttributes  the POSIX attributes of the backing cipher file, or {@code null}
      * @param kind             the entry kind
      * @param size             the plaintext size in bytes
      * @param lastModifiedTime the last-modified time
@@ -64,13 +64,14 @@ public final class DirEntry {
      * @param fileKey          the file key, or {@code null} if there is none
      * @throws NullPointerException if {@code plainName} or {@code kind} is {@code null}
      */
-    public DirEntry(String plainName, @Nullable String cipherName, @Nullable Path cipherPath,
+    public DirEntry(String plainName, @Nullable String cipherName,
+                    @Nullable PosixFileAttributes posixAttributes,
                     Kind kind, long size,
                     FileTime lastModifiedTime, FileTime lastAccessTime, FileTime creationTime,
                     @Nullable Object fileKey) {
         this.plainName = Objects.requireNonNull(plainName, "plainName");
         this.cipherName = cipherName;
-        this.cipherPath = cipherPath;
+        this.posixAttributes = posixAttributes;
         this.kind = Objects.requireNonNull(kind, "kind");
         this.size = size;
         this.lastModifiedTime = lastModifiedTime;
@@ -98,13 +99,15 @@ public final class DirEntry {
     }
 
     /**
-     * Returns the ciphertext-side path, or {@code null} when this entry is
-     * backed by a store that is not a local filesystem.
+     * Returns the POSIX attributes of the backing cipher file, or {@code null}
+     * when they are unsupported or were not requested. The owner, group and
+     * permissions are the backing file's metadata, since gocryptfs does not
+     * store them separately.
      *
-     * @return the ciphertext-side path, or {@code null}
+     * @return the POSIX attributes, or {@code null}
      */
-    public @Nullable Path cipherPath() {
-        return cipherPath;
+    public @Nullable PosixFileAttributes posixAttributes() {
+        return posixAttributes;
     }
 
     /**

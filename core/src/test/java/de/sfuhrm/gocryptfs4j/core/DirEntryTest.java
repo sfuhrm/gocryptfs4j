@@ -6,7 +6,6 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.nio.file.attribute.FileTime;
 import java.util.List;
 
@@ -19,7 +18,7 @@ class DirEntryTest {
     private static final FileTime CTIME = FileTime.fromMillis(3_000_000L);
 
     private static DirEntry entry(DirEntry.Kind kind) {
-        return new DirEntry("plain", "cipher", Paths.get("/x/cipher"), kind, 42L,
+        return new DirEntry("plain", "cipher", null, kind, 42L,
                 MTIME, ATIME, CTIME, "key");
     }
 
@@ -29,7 +28,7 @@ class DirEntryTest {
 
         assertEquals("plain", e.plainName());
         assertEquals("cipher", e.cipherName());
-        assertEquals(Paths.get("/x/cipher"), e.cipherPath());
+        assertNull(e.posixAttributes());
         assertEquals(DirEntry.Kind.FILE, e.kind());
         assertEquals(42L, e.size());
         assertEquals(MTIME, e.lastModifiedTime());
@@ -81,7 +80,7 @@ class DirEntryTest {
             assertTrue(root.get(0).isDirectory());
             assertEquals(0L, root.get(0).size());
             assertNotNull(root.get(0).fileKey());
-            assertNotNull(root.get(0).cipherPath());
+            assertNotNull(root.get(0).cipherName());
 
             List<DirEntry> docs = fs.list("/docs");
             assertEquals(1, docs.size());

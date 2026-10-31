@@ -8,6 +8,7 @@ import org.jspecify.annotations.Nullable;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.channels.SeekableByteChannel;
+import java.nio.file.AccessMode;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -18,9 +19,15 @@ import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributeView;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
+import java.nio.file.attribute.GroupPrincipal;
+import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.PosixFileAttributes;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.UserPrincipal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * A {@link CipherStore} backed by a directory on a {@code java.nio.file}
@@ -190,6 +197,51 @@ public final class PathCipherStore implements CipherStore {
             return FileChannel.open(p, StandardOpenOption.READ, StandardOpenOption.WRITE);
         }
         return FileChannel.open(p, StandardOpenOption.READ);
+    }
+
+    @Override
+    public void checkAccess(String name, AccessMode... modes) throws IOException {
+        path(name).getFileSystem().provider().checkAccess(path(name), modes);
+    }
+
+    @Override
+    public @Nullable PosixFileAttributes posixAttributes(String name) throws IOException {
+        PosixFileAttributeView view = Files.getFileAttributeView(path(name),
+                PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
+        return view == null ? null : view.readAttributes();
+    }
+
+    @Override
+    public void setPosixPermissions(String name, Set<PosixFilePermission> permissions)
+            throws IOException {
+        posixView(name).setPermissions(permissions);
+    }
+
+    @Override
+    public void setPosixOwner(String name, UserPrincipal owner) throws IOException {
+        posixView(name).setOwner(owner);
+    }
+
+    @Override
+    public void setPosixGroup(String name, GroupPrincipal group) throws IOException {
+        posixView(name).setGroup(group);
+    }
+
+    /**
+     * Returns the POSIX attribute view of a ciphertext path.
+     *
+     * @param name the ciphertext path
+     * @return the POSIX attribute view
+     * @throws UnsupportedOperationException if the backing filesystem has no POSIX support
+     */
+    private PosixFileAttributeView posixView(String name) {
+        PosixFileAttributeView view = Files.getFileAttributeView(path(name),
+                PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
+        if (view == null) {
+            throw new UnsupportedOperationException(
+                    "POSIX attributes are not supported by the backing filesystem");
+        }
+        return view;
     }
 
     @Override

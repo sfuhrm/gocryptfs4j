@@ -4,8 +4,14 @@ import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
 import java.nio.channels.SeekableByteChannel;
+import java.nio.file.AccessMode;
 import java.nio.file.attribute.FileTime;
+import java.nio.file.attribute.GroupPrincipal;
+import java.nio.file.attribute.PosixFileAttributes;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.UserPrincipal;
 import java.util.List;
+import java.util.Set;
 
 /**
  * A ciphertext-side storage backend for a gocryptfs filesystem.
@@ -167,6 +173,74 @@ public interface CipherStore extends AutoCloseable {
      * @throws IOException on storage errors
      */
     SeekableByteChannel open(String name, boolean writable) throws IOException;
+
+    /**
+     * Checks access to a ciphertext entry. Existence (no modes) is assumed to
+     * have been verified by the caller; stores that cannot evaluate
+     * read/write/execute modes throw {@link UnsupportedOperationException}.
+     *
+     * @param name  the ciphertext path
+     * @param modes the access modes to check, or none to check existence
+     * @throws IOException on storage errors or if access is denied
+     */
+    default void checkAccess(String name, AccessMode... modes) throws IOException {
+        if (modes.length != 0) {
+            throw new UnsupportedOperationException(
+                    "access checks are not supported by this store");
+        }
+    }
+
+    /**
+     * Returns the POSIX attributes of a ciphertext entry, or {@code null} if
+     * the store has no POSIX support.
+     *
+     * @param name the ciphertext path
+     * @return the POSIX attributes, or {@code null}
+     * @throws IOException on storage errors
+     */
+    default @Nullable PosixFileAttributes posixAttributes(String name) throws IOException {
+        return null;
+    }
+
+    /**
+     * Sets the POSIX permissions of a ciphertext entry.
+     *
+     * @param name        the ciphertext path
+     * @param permissions the new permissions
+     * @throws UnsupportedOperationException if the store has no POSIX support
+     * @throws IOException on storage errors
+     */
+    default void setPosixPermissions(String name, Set<PosixFilePermission> permissions)
+            throws IOException {
+        throw new UnsupportedOperationException(
+                "POSIX permissions are not supported by this store");
+    }
+
+    /**
+     * Sets the POSIX owner of a ciphertext entry.
+     *
+     * @param name  the ciphertext path
+     * @param owner the new owner
+     * @throws UnsupportedOperationException if the store has no POSIX support
+     * @throws IOException on storage errors
+     */
+    default void setPosixOwner(String name, UserPrincipal owner) throws IOException {
+        throw new UnsupportedOperationException(
+                "POSIX owner is not supported by this store");
+    }
+
+    /**
+     * Sets the POSIX group of a ciphertext entry.
+     *
+     * @param name  the ciphertext path
+     * @param group the new group
+     * @throws UnsupportedOperationException if the store has no POSIX support
+     * @throws IOException on storage errors
+     */
+    default void setPosixGroup(String name, GroupPrincipal group) throws IOException {
+        throw new UnsupportedOperationException(
+                "POSIX group is not supported by this store");
+    }
 
     /**
      * Releases any resources held by this store. Implementations make this

@@ -3,8 +3,6 @@ package de.sfuhrm.gocryptfs4j.nio;
 import de.sfuhrm.gocryptfs4j.core.DirEntry;
 import org.junit.jupiter.api.Test;
 
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.nio.file.attribute.FileTime;
 import java.nio.file.attribute.GroupPrincipal;
 import java.nio.file.attribute.PosixFilePermission;
@@ -27,10 +25,8 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class GocryptFsProviderAttributesTest {
 
-    private static final Path CIPHER_PATH = Paths.get("/cipher/cipher-name");
-
     private static DirEntry entry(Object fileKey) {
-        return new DirEntry("file.txt", "cipher-name", CIPHER_PATH, DirEntry.Kind.FILE, 42L,
+        return new DirEntry("file.txt", "cipher-name", null, DirEntry.Kind.FILE, 42L,
                 FileTime.fromMillis(3000), FileTime.fromMillis(2000),
                 FileTime.fromMillis(1000), fileKey);
     }

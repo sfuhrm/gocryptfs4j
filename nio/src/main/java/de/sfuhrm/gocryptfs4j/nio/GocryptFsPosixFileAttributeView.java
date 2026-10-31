@@ -1,7 +1,6 @@
 package de.sfuhrm.gocryptfs4j.nio;
 
 import java.io.IOException;
-import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.nio.file.attribute.GroupPrincipal;
 import java.nio.file.attribute.PosixFileAttributeView;
@@ -64,32 +63,6 @@ final class GocryptFsPosixFileAttributeView implements PosixFileAttributeView {
     }
 
     /**
-     * Returns the backing cipher path of the target.
-     *
-     * @return the cipher path, or {@code null} for a non-local backing store
-     * @throws IOException on filesystem errors
-     */
-    private @Nullable Path cipherPath() throws IOException {
-        return fs.core().stat(target().toString()).cipherPath();
-    }
-
-    /**
-     * Returns the POSIX view of the backing cipher file.
-     *
-     * @return the backing POSIX view
-     * @throws IOException on filesystem errors
-     * @throws UnsupportedOperationException if the backing filesystem has no POSIX support
-     */
-    private PosixFileAttributeView delegate() throws IOException {
-        Path cipherPath = cipherPath();
-        if (cipherPath == null) {
-            throw new UnsupportedOperationException(
-                    "POSIX attributes are not supported by the backing store");
-        }
-        return GocryptFsProvider.posixView(cipherPath);
-    }
-
-    /**
      * Reads the POSIX attributes of the target.
      *
      * @return the attributes
@@ -108,7 +81,7 @@ final class GocryptFsPosixFileAttributeView implements PosixFileAttributeView {
      */
     @Override
     public void setPermissions(Set<PosixFilePermission> perms) throws IOException {
-        delegate().setPermissions(perms);
+        fs.core().setPosixPermissions(target().toString(), perms);
     }
 
     /**
@@ -119,7 +92,7 @@ final class GocryptFsPosixFileAttributeView implements PosixFileAttributeView {
      */
     @Override
     public void setGroup(GroupPrincipal group) throws IOException {
-        delegate().setGroup(group);
+        fs.core().setPosixGroup(target().toString(), group);
     }
 
     /**
@@ -130,7 +103,7 @@ final class GocryptFsPosixFileAttributeView implements PosixFileAttributeView {
      */
     @Override
     public UserPrincipal getOwner() throws IOException {
-        return delegate().getOwner();
+        return readAttributes().owner();
     }
 
     /**
@@ -141,7 +114,7 @@ final class GocryptFsPosixFileAttributeView implements PosixFileAttributeView {
      */
     @Override
     public void setOwner(UserPrincipal owner) throws IOException {
-        delegate().setOwner(owner);
+        fs.core().setPosixOwner(target().toString(), owner);
     }
 
     /**
@@ -155,6 +128,6 @@ final class GocryptFsPosixFileAttributeView implements PosixFileAttributeView {
     @Override
     public void setTimes(@Nullable FileTime lastModifiedTime, @Nullable FileTime lastAccessTime,
                          @Nullable FileTime createTime) throws IOException {
-        delegate().setTimes(lastModifiedTime, lastAccessTime, createTime);
+        fs.core().setTimes(target().toString(), lastModifiedTime, lastAccessTime, createTime);
     }
 }
