@@ -884,6 +884,10 @@ public final class GocryptFs implements AutoCloseable {
     /**
      * Lists a cipher-side directory, decrypting names and resolving long names.
      *
+     * <p>Corrupt entries &mdash; undecryptable names, unreadable long-name
+     * support files, names that are unsafe in plaintext space and unreadable
+     * symlink targets &mdash; are skipped rather than aborting the listing.</p>
+     *
      * @param cipherDir the ciphertext directory name
      * @param iv        the 16-byte directory IV
      * @return the directory entries
@@ -944,7 +948,15 @@ public final class GocryptFs implements AutoCloseable {
                 size = 0;
             } else if (node.isSymbolicLink()) {
                 kind = DirEntry.Kind.SYMLINK;
-                size = readSymlink(join(cipherDir, cName)).getBytes(StandardCharsets.UTF_8).length;
+                String target;
+                try {
+                    target = readSymlink(join(cipherDir, cName));
+                } catch (IOException | IllegalArgumentException e) {
+                    // A corrupt (undecodable or undecryptable) symlink target
+                    // is treated like a corrupt name: skip it.
+                    continue;
+                }
+                size = target.getBytes(StandardCharsets.UTF_8).length;
             } else if (node.isRegularFile()) {
                 kind = DirEntry.Kind.FILE;
                 size = contentEnc.cipherSizeToPlainSize(node.size());

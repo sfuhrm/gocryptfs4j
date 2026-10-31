@@ -724,6 +724,31 @@ class GocryptFsTest {
     }
 
     @Test
+    void corruptSymlinkTargetSkipped() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
+            fs.createFile("/ok.txt");
+            fs.createSymlink("/link", "target");
+
+            byte[] iv = fs.readDirIV(cipherDir.toAbsolutePath().normalize().toString());
+            Path root = cipherDir.toAbsolutePath().normalize();
+            String cName = fs.cipherNameFor("link", iv);
+
+            // Replace the symlink with one whose target is not valid base64url:
+            // like a corrupt name, it must be skipped, not abort the listing.
+            Files.delete(root.resolve(cName));
+            Files.createSymbolicLink(root.resolve(cName), Paths.get("!!!not-base64!!!"));
+
+            List<String> names = fs.list("/").stream()
+                    .map(DirEntry::plainName).collect(Collectors.toList());
+            assertEquals(1, names.size());
+            assertEquals("ok.txt", names.get(0));
+        }
+    }
+
+    @Test
     void sparseWritesAndTruncate() throws IOException {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
