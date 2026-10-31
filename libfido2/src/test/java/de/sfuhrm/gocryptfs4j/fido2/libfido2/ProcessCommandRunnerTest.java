@@ -12,6 +12,7 @@ import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -76,6 +77,28 @@ class ProcessCommandRunnerTest {
         assertTrue(e.getMessage().contains("definitely-not-a-real-fido2-tool-42"), e.getMessage());
     }
 
+    @Test
+    void hangingToolIsTerminatedOnTimeout() {
+        ProcessCommandRunner runner = new ProcessCommandRunner(1, TimeUnit.SECONDS);
+        List<String> command = new ArrayList<>(fakeToolCommand());
+        command.add("hang");
+
+        IOException e = assertThrows(IOException.class,
+                () -> runner.run(command, Collections.<String>emptyList()));
+        assertTrue(e.getMessage().contains("timed out"), e.getMessage());
+    }
+
+    @Test
+    void oversizedOutputIsReported() {
+        ProcessCommandRunner runner = new ProcessCommandRunner();
+        List<String> command = new ArrayList<>(fakeToolCommand());
+        command.add("flood");
+
+        IOException e = assertThrows(IOException.class,
+                () -> runner.run(command, Collections.<String>emptyList()));
+        assertTrue(e.getMessage().contains("too much standard output"), e.getMessage());
+    }
+
     private static List<String> fakeToolCommand() {
         String java = Paths.get(System.getProperty("java.home"), "bin", "java").toString();
         return Arrays.asList(java, "-cp", System.getProperty("java.class.path"),
@@ -95,11 +118,23 @@ class ProcessCommandRunnerTest {
          * @param args the FIDO2 arguments appended by the token, ignored except for {@code fail}
          * @throws IOException on I/O errors
          */
-        public static void main(String[] args) throws IOException {
+        public static void main(String[] args) throws Exception {
+            if (Arrays.asList(args).contains("hang")) {
+                Thread.sleep(Long.MAX_VALUE);
+                return;
+            }
             drain(System.in);
             if (Arrays.asList(args).contains("fail")) {
                 System.err.println("boom");
                 System.exit(3);
+            }
+            if (Arrays.asList(args).contains("flood")) {
+                byte[] chunk = new byte[8192];
+                for (int i = 0; i < 1024; i++) {
+                    System.out.write(chunk);
+                }
+                System.out.flush();
+                return;
             }
             PrintStream out = System.out;
             out.println("cdh");
