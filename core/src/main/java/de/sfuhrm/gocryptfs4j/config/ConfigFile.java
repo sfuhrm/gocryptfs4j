@@ -160,7 +160,7 @@ public final class ConfigFile {
      */
     public static ConfigFile load(Path path) throws IOException {
         Objects.requireNonNull(path, "path");
-        return load(IoUtil.readBounded(path, Constants.CONFIG_MAX_SIZE));
+        return fromBytes(IoUtil.readBounded(path, Constants.CONFIG_MAX_SIZE));
     }
 
     /**
@@ -171,7 +171,7 @@ public final class ConfigFile {
      * @throws IOException if the content is malformed or unsupported
      * @throws NullPointerException if {@code bytes} is {@code null}
      */
-    public static ConfigFile load(byte[] bytes) throws IOException {
+    public static ConfigFile fromBytes(byte[] bytes) throws IOException {
         Objects.requireNonNull(bytes, "bytes");
         String json = new String(bytes, StandardCharsets.UTF_8);
         ConfigFile cf;
