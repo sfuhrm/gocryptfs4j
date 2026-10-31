@@ -2,6 +2,8 @@ package de.sfuhrm.gocryptfs4j.config;
 
 import com.google.gson.annotations.SerializedName;
 
+import java.util.Objects;
+
 /**
  * The scrypt parameters stored in {@code gocryptfs.conf}.
  */
@@ -22,7 +24,7 @@ public final class ScryptKdf {
      * @param keyLen the output key length in bytes
      */
     public ScryptKdf(String salt, int n, int r, int p, int keyLen) {
-        this.salt = salt;
+        this.salt = Objects.requireNonNull(salt, "salt");
         this.n = n;
         this.r = r;
         this.p = p;

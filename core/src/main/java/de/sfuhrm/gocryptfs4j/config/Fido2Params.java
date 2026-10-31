@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * The FIDO2 parameters stored in the {@code FIDO2} object of
@@ -59,8 +60,8 @@ public final class Fido2Params {
      * @throws NullPointerException if {@code credentialId} or {@code hmacSalt} is {@code null}
      */
     public Fido2Params(byte[] credentialId, byte[] hmacSalt, @Nullable List<String> assertOptions) {
-        this.credentialId = credentialId.clone();
-        this.hmacSalt = hmacSalt.clone();
+        this.credentialId = Objects.requireNonNull(credentialId, "credentialId").clone();
+        this.hmacSalt = Objects.requireNonNull(hmacSalt, "hmacSalt").clone();
         this.assertOptions = assertOptions == null
                 ? null
                 : Collections.unmodifiableList(new ArrayList<>(assertOptions));

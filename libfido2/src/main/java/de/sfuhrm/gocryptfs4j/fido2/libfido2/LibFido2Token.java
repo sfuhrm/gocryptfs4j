@@ -77,7 +77,10 @@ public final class LibFido2Token implements Fido2Token {
      * @throws NullPointerException if any argument is {@code null}
      */
     public LibFido2Token(String device, String credTool, String assertTool) {
-        this(device, credTool, assertTool, new ProcessCommandRunner());
+        this(Objects.requireNonNull(device, "device"),
+                Objects.requireNonNull(credTool, "credTool"),
+                Objects.requireNonNull(assertTool, "assertTool"),
+                new ProcessCommandRunner());
     }
 
     LibFido2Token(String device, String credTool, String assertTool, Fido2CommandRunner runner) {
