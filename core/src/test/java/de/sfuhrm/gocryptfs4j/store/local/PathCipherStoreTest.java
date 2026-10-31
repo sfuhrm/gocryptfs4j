@@ -1,26 +1,40 @@
 package de.sfuhrm.gocryptfs4j.store.local;
 
+import de.sfuhrm.gocryptfs4j.store.CipherNode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mockito;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.SeekableByteChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.SecureDirectoryStream;
+import java.nio.file.attribute.BasicFileAttributeView;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * Tests the local-filesystem-specific regular-file check in
- * {@link PathCipherStore#readSmall}.
+ * {@link PathCipherStore#readSmall} and the secure-directory-stream traversal.
  */
 class PathCipherStoreTest {
 
@@ -220,5 +234,69 @@ class PathCipherStoreTest {
             assertTrue(entries.noneMatch(p -> p.getFileName().toString().startsWith(".gocryptfs-")),
                     "leftover temporary file in " + dir);
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static SecureDirectoryStream<Path> mockSecureDirectory() {
+        return (SecureDirectoryStream<Path>) mock(SecureDirectoryStream.class);
+    }
+
+    @Test
+    void secureStatTraversesIntermediateDirectoriesWithoutFollowingSymlinks() throws Exception {
+        SecureDirectoryStream<Path> root = mockSecureDirectory();
+        SecureDirectoryStream<Path> sub = mockSecureDirectory();
+        when(root.newDirectoryStream(Paths.get("d"), LinkOption.NOFOLLOW_LINKS)).thenReturn(sub);
+        BasicFileAttributeView view = mock(BasicFileAttributeView.class);
+        BasicFileAttributes attrs = mock(BasicFileAttributes.class);
+        when(attrs.isRegularFile()).thenReturn(true);
+        when(view.readAttributes()).thenReturn(attrs);
+        when(sub.getFileAttributeView(Paths.get("f"), BasicFileAttributeView.class,
+                LinkOption.NOFOLLOW_LINKS)).thenReturn(view);
+
+        PathCipherStore store = new PathCipherStore(tmp.resolve("cipher"), root);
+        CipherNode node = store.stat(tmp.resolve("cipher").resolve("d").resolve("f").toString());
+
+        assertTrue(node.isRegularFile());
+        verify(root).newDirectoryStream(Paths.get("d"), LinkOption.NOFOLLOW_LINKS);
+        verify(sub).getFileAttributeView(Paths.get("f"), BasicFileAttributeView.class,
+                LinkOption.NOFOLLOW_LINKS);
+        verify(sub).close();
+    }
+
+    @Test
+    void secureTraversalRejectsSymlinkIntermediateDirectory() throws Exception {
+        SecureDirectoryStream<Path> root = mockSecureDirectory();
+        when(root.newDirectoryStream(Paths.get("d"), LinkOption.NOFOLLOW_LINKS))
+                .thenThrow(new IOException("symlink"));
+        PathCipherStore store = new PathCipherStore(tmp.resolve("cipher"), root);
+
+        assertThrows(IOException.class,
+                () -> store.stat(tmp.resolve("cipher").resolve("d").resolve("f").toString()));
+        verify(root).newDirectoryStream(Paths.get("d"), LinkOption.NOFOLLOW_LINKS);
+    }
+
+    @Test
+    void secureReadSmallOpensFinalComponentWithNoFollow() throws Exception {
+        SecureDirectoryStream<Path> root = mockSecureDirectory();
+        SecureDirectoryStream<Path> sub = mockSecureDirectory();
+        when(root.newDirectoryStream(Paths.get("d"), LinkOption.NOFOLLOW_LINKS)).thenReturn(sub);
+        BasicFileAttributeView view = mock(BasicFileAttributeView.class);
+        BasicFileAttributes attrs = mock(BasicFileAttributes.class);
+        when(attrs.isRegularFile()).thenReturn(true);
+        when(view.readAttributes()).thenReturn(attrs);
+        when(sub.getFileAttributeView(Paths.get("f"), BasicFileAttributeView.class,
+                LinkOption.NOFOLLOW_LINKS)).thenReturn(view);
+        SeekableByteChannel channel = mock(SeekableByteChannel.class);
+        when(channel.read(any(ByteBuffer.class))).thenReturn(-1);
+        when(sub.newByteChannel(Mockito.eq(Paths.get("f")), any())).thenReturn(channel);
+
+        PathCipherStore store = new PathCipherStore(tmp.resolve("cipher"), root);
+        byte[] data = store.readSmall(
+                tmp.resolve("cipher").resolve("d").resolve("f").toString(), 100);
+
+        assertEquals(0, data.length);
+        ArgumentCaptor<Set> options = ArgumentCaptor.forClass(Set.class);
+        verify(sub).newByteChannel(Mockito.eq(Paths.get("f")), options.capture());
+        assertTrue(options.getValue().contains(LinkOption.NOFOLLOW_LINKS));
     }
 }
