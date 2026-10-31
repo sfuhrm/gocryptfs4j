@@ -2,6 +2,8 @@ package de.sfuhrm.gocryptfs4j.store;
 
 import java.io.IOException;
 import java.net.URI;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.ServiceLoader;
@@ -15,8 +17,27 @@ import java.util.ServiceLoader;
  */
 public final class CipherStores {
 
+    /** All registered providers, discovered once and reused for every lookup. */
+    private static final List<CipherStoreProvider> PROVIDERS = loadProviders();
+
     /** Prevents instantiation. */
     private CipherStores() {
+    }
+
+    /**
+     * Discovers all {@link CipherStoreProvider} implementations registered via
+     * {@link ServiceLoader}. Providers are discovered once and cached, since
+     * they are stateless factories and re-discovering them on every call would
+     * re-read the service configuration files for no benefit.
+     *
+     * @return the discovered providers
+     */
+    private static List<CipherStoreProvider> loadProviders() {
+        List<CipherStoreProvider> providers = new ArrayList<>();
+        for (CipherStoreProvider provider : ServiceLoader.load(CipherStoreProvider.class)) {
+            providers.add(provider);
+        }
+        return providers;
     }
 
     /**
@@ -37,7 +58,7 @@ public final class CipherStores {
         if (scheme == null) {
             throw new IllegalArgumentException("URI has no scheme: " + uri);
         }
-        for (CipherStoreProvider provider : ServiceLoader.load(CipherStoreProvider.class)) {
+        for (CipherStoreProvider provider : PROVIDERS) {
             if (provider.scheme().equalsIgnoreCase(scheme)) {
                 return provider.newStore(uri, env);
             }

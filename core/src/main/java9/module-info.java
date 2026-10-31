@@ -17,4 +17,10 @@ module de.sfuhrm.gocryptfs4j.core {
     exports de.sfuhrm.gocryptfs4j.store;
     exports de.sfuhrm.gocryptfs4j.store.local;
     exports de.sfuhrm.gocryptfs4j.store.memory;
+
+    uses de.sfuhrm.gocryptfs4j.store.CipherStoreProvider;
+
+    provides de.sfuhrm.gocryptfs4j.store.CipherStoreProvider
+        with de.sfuhrm.gocryptfs4j.store.local.PathCipherStoreProvider,
+             de.sfuhrm.gocryptfs4j.store.memory.MapCipherStoreProvider;
 }
