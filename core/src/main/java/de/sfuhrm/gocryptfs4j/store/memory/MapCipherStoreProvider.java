@@ -5,6 +5,7 @@ import de.sfuhrm.gocryptfs4j.store.CipherStoreProvider;
 
 import java.net.URI;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * A {@link CipherStoreProvider} that hands out {@link MapCipherStore} instances
@@ -23,6 +24,7 @@ public final class MapCipherStoreProvider implements CipherStoreProvider {
 
     @Override
     public CipherStore newStore(URI uri, Map<String, ?> env) {
+        Objects.requireNonNull(uri, "uri");
         return new MapCipherStore();
     }
 }

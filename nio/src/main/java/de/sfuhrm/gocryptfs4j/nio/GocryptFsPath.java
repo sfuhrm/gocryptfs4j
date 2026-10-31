@@ -235,6 +235,7 @@ final class GocryptFsPath implements Path {
      */
     @Override
     public boolean startsWith(Path other) {
+        Objects.requireNonNull(other, "other");
         if (!(other instanceof GocryptFsPath)) {
             return false;
         }
@@ -249,6 +250,7 @@ final class GocryptFsPath implements Path {
      */
     @Override
     public boolean startsWith(String other) {
+        Objects.requireNonNull(other, "other");
         String otherNorm = normalize(other);
         if (absolute != otherNorm.startsWith("/")) {
             return false;
@@ -269,6 +271,7 @@ final class GocryptFsPath implements Path {
      */
     @Override
     public boolean endsWith(Path other) {
+        Objects.requireNonNull(other, "other");
         if (!(other instanceof GocryptFsPath)) {
             return false;
         }
@@ -283,6 +286,7 @@ final class GocryptFsPath implements Path {
      */
     @Override
     public boolean endsWith(String other) {
+        Objects.requireNonNull(other, "other");
         String otherNorm = normalize(other);
         String thisPath = absolute ? path.substring(1) : path;
         String otherPath = otherNorm.startsWith("/") ? otherNorm.substring(1) : otherNorm;
@@ -311,6 +315,7 @@ final class GocryptFsPath implements Path {
      */
     @Override
     public Path resolve(Path other) {
+        Objects.requireNonNull(other, "other");
         if (other.isAbsolute()) {
             return other;
         }
@@ -348,6 +353,7 @@ final class GocryptFsPath implements Path {
      */
     @Override
     public Path resolveSibling(Path other) {
+        Objects.requireNonNull(other, "other");
         Path parent = getParent();
         if (parent == null) {
             return other;
@@ -363,6 +369,7 @@ final class GocryptFsPath implements Path {
      */
     @Override
     public Path resolveSibling(String other) {
+        Objects.requireNonNull(other, "other");
         Path parent = getParent();
         if (parent == null) {
             return fs.getPath(other);
@@ -380,6 +387,7 @@ final class GocryptFsPath implements Path {
      */
     @Override
     public Path relativize(Path other) {
+        Objects.requireNonNull(other, "other");
         if (!(other instanceof GocryptFsPath) || other.isAbsolute() != absolute) {
             throw new IllegalArgumentException("different types of path");
         }
@@ -572,6 +580,7 @@ final class GocryptFsPath implements Path {
      */
     @Override
     public int compareTo(Path other) {
+        Objects.requireNonNull(other, "other");
         return path.compareTo(other.toString());
     }
 
