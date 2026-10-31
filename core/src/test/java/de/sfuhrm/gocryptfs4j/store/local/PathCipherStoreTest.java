@@ -66,6 +66,61 @@ class PathCipherStoreTest {
     }
 
     @Test
+    void renameReplaceExistingReplacesFile() throws Exception {
+        Path dir = Files.createDirectory(tmp.resolve("cipher"));
+        PathCipherStore store = new PathCipherStore(dir);
+        Path src = dir.resolve("src");
+        Files.write(src, "source".getBytes(StandardCharsets.UTF_8));
+        Path dst = dir.resolve("dst");
+        Files.write(dst, "target".getBytes(StandardCharsets.UTF_8));
+
+        store.rename(src.toString(), dst.toString(), true);
+
+        assertArrayEquals("source".getBytes(StandardCharsets.UTF_8), Files.readAllBytes(dst));
+        assertTrue(Files.notExists(src), "source must be moved away");
+    }
+
+    @Test
+    void renameReplaceExistingPreservesTargetOnFailure() throws Exception {
+        Path dir = Files.createDirectory(tmp.resolve("cipher"));
+        PathCipherStore store = new PathCipherStore(dir);
+        Path src = dir.resolve("src");
+        Files.write(src, "source".getBytes(StandardCharsets.UTF_8));
+        Path dst = dir.resolve("dst");
+        Files.createDirectory(dst);
+        Path child = dst.resolve("child");
+        Files.write(child, "child".getBytes(StandardCharsets.UTF_8));
+
+        assertThrows(IOException.class, () -> store.rename(src.toString(), dst.toString(), true));
+
+        assertTrue(Files.isDirectory(dst), "target must survive a failed replace");
+        assertArrayEquals("child".getBytes(StandardCharsets.UTF_8), Files.readAllBytes(child));
+        assertTrue(Files.exists(src), "source must survive a failed replace");
+    }
+
+    @Test
+    void renameReplaceExistingAcrossFileStoresFallsBackGracefully() throws Exception {
+        Path dir = Files.createDirectory(tmp.resolve("cipher"));
+        PathCipherStore store = new PathCipherStore(dir);
+
+        Path otherFs = Paths.get("/dev/shm");
+        assumeTrue(Files.isDirectory(otherFs) && Files.isWritable(otherFs),
+                "/dev/shm is not a writable directory");
+        assumeTrue(!Files.getFileStore(dir).equals(Files.getFileStore(otherFs)),
+                "/dev/shm is not a distinct file store");
+
+        Path src = dir.resolve("src");
+        Files.write(src, "source".getBytes(StandardCharsets.UTF_8));
+        Path dst = Files.createTempFile(otherFs, "gocryptfs4j-", ".dst");
+        Files.write(dst, "target".getBytes(StandardCharsets.UTF_8));
+
+        store.rename(src.toString(), dst.toString(), true);
+
+        assertArrayEquals("source".getBytes(StandardCharsets.UTF_8), Files.readAllBytes(dst));
+        assertTrue(Files.notExists(src), "source must be moved away");
+    }
+
+    @Test
     void writeSmallCreatesNewFile() throws Exception {
         Path dir = Files.createDirectory(tmp.resolve("cipher"));
         PathCipherStore store = new PathCipherStore(dir);

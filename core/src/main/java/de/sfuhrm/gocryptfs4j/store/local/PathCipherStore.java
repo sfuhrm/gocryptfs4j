@@ -11,6 +11,7 @@ import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.AccessMode;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -247,7 +248,17 @@ public final class PathCipherStore implements CipherStore {
         Path src = path(from);
         Path dst = path(to);
         if (replaceExisting) {
-            Files.move(src, dst, StandardCopyOption.REPLACE_EXISTING);
+            // Replace atomically where the filesystem supports it. A plain
+            // REPLACE_EXISTING move falls back to unlink(dst)+rename(2) (or a
+            // copy) on some providers, so a failed move could leave the old
+            // target deleted. Only give up the atomicity when the filesystem
+            // cannot move atomically at all.
+            try {
+                Files.move(src, dst, StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException e) {
+                Files.move(src, dst, StandardCopyOption.REPLACE_EXISTING);
+            }
         } else {
             Files.move(src, dst);
         }
