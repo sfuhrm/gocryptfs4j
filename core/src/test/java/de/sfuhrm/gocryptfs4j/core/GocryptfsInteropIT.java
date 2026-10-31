@@ -2,7 +2,6 @@ package de.sfuhrm.gocryptfs4j.core;
 
 import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
 
-import de.sfuhrm.gocryptfs4j.config.ContentCipherType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;

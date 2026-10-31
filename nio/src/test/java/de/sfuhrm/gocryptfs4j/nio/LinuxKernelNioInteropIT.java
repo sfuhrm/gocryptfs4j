@@ -2,7 +2,7 @@ package de.sfuhrm.gocryptfs4j.nio;
 
 import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
 
-import de.sfuhrm.gocryptfs4j.config.ContentCipherType;
+import de.sfuhrm.gocryptfs4j.core.ContentCipherType;
 import de.sfuhrm.gocryptfs4j.core.GocryptFs;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.io.TempDir;

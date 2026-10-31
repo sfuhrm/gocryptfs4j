@@ -265,7 +265,7 @@
                     <!-- Internal implementation packages are public only for
                          cross-package access within the module; hide them from
                          the published javadoc. -->
-                    <excludePackageNames>de.sfuhrm.gocryptfs4j.crypto,de.sfuhrm.gocryptfs4j.names</excludePackageNames>
+                    <excludePackageNames>de.sfuhrm.gocryptfs4j.crypto,de.sfuhrm.gocryptfs4j.config,de.sfuhrm.gocryptfs4j.names</excludePackageNames>
                 </configuration>
                 <executions>
                     <execution>

@@ -1,6 +1,6 @@
 package de.sfuhrm.gocryptfs4j.benchmark;
 
-import de.sfuhrm.gocryptfs4j.config.ContentCipherType;
+import de.sfuhrm.gocryptfs4j.core.ContentCipherType;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
