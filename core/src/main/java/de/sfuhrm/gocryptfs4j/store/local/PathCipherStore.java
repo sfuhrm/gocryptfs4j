@@ -100,7 +100,11 @@ public final class PathCipherStore implements CipherStore {
         // Open without following symlinks so a symlink swapped in between the
         // check above and the open cannot redirect the read to another file.
         // The regular-file check still runs first because opening a FIFO for
-        // reading would otherwise block until a writer appears.
+        // reading would otherwise block until a writer appears. Note that this
+        // is only a best-effort defense: Java exposes no O_NONBLOCK on open, so
+        // an attacker with write access to the ciphertext directory can still
+        // swap a FIFO in between the check and the open below and cause this
+        // open to block (a denial-of-service, not a data leak).
         try (InputStream in = Files.newInputStream(p, LinkOption.NOFOLLOW_LINKS)) {
             return IoUtil.readBounded(in, maxBytes);
         }
@@ -294,9 +298,12 @@ public final class PathCipherStore implements CipherStore {
     public CipherChannel open(String name, boolean writable) throws IOException {
         Objects.requireNonNull(name, "name");
         Path p = path(name);
+        // Do not follow symlinks so a symlink swapped into the ciphertext
+        // directory cannot redirect the read/write to an arbitrary file.
         FileChannel ch = writable
-                ? FileChannel.open(p, StandardOpenOption.READ, StandardOpenOption.WRITE)
-                : FileChannel.open(p, StandardOpenOption.READ);
+                ? FileChannel.open(p, StandardOpenOption.READ, StandardOpenOption.WRITE,
+                        LinkOption.NOFOLLOW_LINKS)
+                : FileChannel.open(p, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS);
         return new FileChannelAdapter(ch);
     }
 

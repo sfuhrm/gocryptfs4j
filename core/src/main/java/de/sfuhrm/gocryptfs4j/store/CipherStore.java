@@ -55,6 +55,13 @@ public interface CipherStore extends AutoCloseable {
      * without a size limit, so a corrupt file cannot cause an out-of-memory
      * condition.</p>
      *
+     * <p>Local filesystem implementations should reject non-regular files such
+     * as symlinks and FIFOs. Symlinks can be rejected at open time by not
+     * following them, but a FIFO swapped in after the regular-file check can
+     * still block the open (Java exposes no non-blocking open), which for an
+     * attacker with write access to the ciphertext directory is a
+     * denial-of-service risk, not a data leak.</p>
+     *
      * @param name     the ciphertext path of the control file
      * @param maxBytes the maximum number of bytes to accept
      * @return the file contents, at most {@code maxBytes} bytes
