@@ -26,6 +26,7 @@ import java.nio.file.attribute.GroupPrincipal;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFileAttributes;
 import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.nio.file.attribute.UserPrincipal;
 import java.util.ArrayList;
 import java.util.List;
@@ -110,6 +111,52 @@ public final class PathCipherStore implements CipherStore {
                     StandardOpenOption.WRITE);
         } else {
             Files.write(p, data, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+        }
+    }
+
+    @Override
+    public void writeConfig(String name, byte[] data, boolean overwrite) throws IOException {
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(data, "data");
+        Path p = path(name).toAbsolutePath();
+        Path dir = p.getParent();
+        if (dir == null) {
+            throw new IOException("cannot determine parent directory of " + p);
+        }
+        // Write to a temporary file in the same directory, flush it to disk and
+        // move it into place, so a crash or a full disk never leaves the config
+        // file truncated or half-written. New files get mode 0400, matching gocryptfs.
+        Path temp = Files.createTempFile(dir, ".gocryptfs-", ".tmp");
+        boolean moved = false;
+        try {
+            try (FileChannel channel = FileChannel.open(temp,
+                    StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
+                ByteBuffer buffer = ByteBuffer.wrap(data);
+                while (buffer.hasRemaining()) {
+                    channel.write(buffer);
+                }
+                channel.force(true);
+            }
+            try {
+                Files.setPosixFilePermissions(temp, PosixFilePermissions.fromString("r--------"));
+            } catch (UnsupportedOperationException e) {
+                // Non-POSIX filesystem: keep the default permissions.
+            }
+            if (overwrite) {
+                Files.move(temp, p, StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING);
+            } else {
+                // No ATOMIC_MOVE here: with it, rename(2) would replace the
+                // target and skip the create-new check. Without it, Files.move
+                // throws FileAlreadyExistsException if the file appeared in the
+                // meantime, preserving the create-new contract.
+                Files.move(temp, p);
+            }
+            moved = true;
+        } finally {
+            if (!moved) {
+                Files.deleteIfExists(temp);
+            }
         }
     }
 

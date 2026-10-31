@@ -356,7 +356,7 @@ public final class GocryptFs implements AutoCloseable {
         boolean ok = false;
         try {
             ConfigFile config = ConfigFile.create(masterKey, password, plaintextNames, cipherType);
-            store.writeSmall(join(store.root(), Constants.CONF_DEFAULT_NAME), config.toBytes(), false);
+            store.writeConfig(join(store.root(), Constants.CONF_DEFAULT_NAME), config.toBytes(), false);
             GocryptFs fs = new GocryptFs(store, config, masterKey);
             try {
                 if (!plaintextNames) {
@@ -446,7 +446,7 @@ public final class GocryptFs implements AutoCloseable {
             try {
                 ConfigFile config = ConfigFile.create(masterKey, secret, plaintextNames, cipherType,
                         new Fido2Params(credentialId, hmacSalt, options));
-                store.writeSmall(join(store.root(), Constants.CONF_DEFAULT_NAME), config.toBytes(), false);
+                store.writeConfig(join(store.root(), Constants.CONF_DEFAULT_NAME), config.toBytes(), false);
                 GocryptFs fs = new GocryptFs(store, config, masterKey);
                 try {
                     if (!plaintextNames) {
@@ -528,7 +528,7 @@ public final class GocryptFs implements AutoCloseable {
     public void changePassword(char[] password) throws IOException {
         Objects.requireNonNull(password, "password");
         config.reencryptMasterKey(masterKey, password);
-        store.writeSmall(join(rootName, Constants.CONF_DEFAULT_NAME), config.toBytes(), true);
+        store.writeConfig(join(rootName, Constants.CONF_DEFAULT_NAME), config.toBytes(), true);
     }
 
     // ------------------------------------------------------------------

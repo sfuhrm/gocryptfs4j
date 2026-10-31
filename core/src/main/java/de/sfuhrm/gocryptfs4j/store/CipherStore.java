@@ -74,6 +74,28 @@ public interface CipherStore extends AutoCloseable {
     void writeSmall(String name, byte[] data, boolean overwrite) throws IOException;
 
     /**
+     * Writes the {@code gocryptfs.conf} control file, atomically replacing any
+     * existing file of the same name.
+     *
+     * <p>This file holds the only copy of the encrypted master key, so a crash,
+     * a full disk or a kill during the write must never leave it truncated or
+     * half-written. Implementations should write to a temporary file, flush it
+     * to disk and move it into place atomically, and on POSIX filesystems
+     * create it with mode {@code 0400}, matching gocryptfs. When
+     * {@code overwrite} is {@code false} the write must fail if the file
+     * already exists (create-new semantics).</p>
+     *
+     * @param name      the ciphertext path of the config file
+     * @param data      the content to write
+     * @param overwrite whether to replace an existing file
+     * @throws IOException if the file cannot be written, or it exists and
+     *                     {@code overwrite} is {@code false}
+     */
+    default void writeConfig(String name, byte[] data, boolean overwrite) throws IOException {
+        writeSmall(name, data, overwrite);
+    }
+
+    /**
      * Returns the attributes of a single ciphertext entry.
      *
      * @param name the ciphertext path of the entry
