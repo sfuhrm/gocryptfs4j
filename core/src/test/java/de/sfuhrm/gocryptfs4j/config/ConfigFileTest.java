@@ -5,6 +5,8 @@ import de.sfuhrm.gocryptfs4j.crypto.Constants;
 import de.sfuhrm.gocryptfs4j.crypto.ContentEnc;
 import de.sfuhrm.gocryptfs4j.crypto.Keys;
 import de.sfuhrm.gocryptfs4j.core.ContentCipherType;
+import de.sfuhrm.gocryptfs4j.store.CipherStore;
+import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -236,7 +238,8 @@ class ConfigFileTest {
             Path conf = dir.resolve("gocryptfs.conf");
             Files.write(conf, new byte[Constants.CONFIG_MAX_SIZE + 1]);
 
-            IOException thrown = assertThrows(IOException.class, () -> ConfigFile.load(conf));
+            IOException thrown = assertThrows(IOException.class,
+                    () -> ConfigFile.load(new PathCipherStore(dir)));
             assertTrue(thrown.getMessage().contains("too large"), thrown.getMessage());
         } finally {
             Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
@@ -250,7 +253,7 @@ class ConfigFileTest {
         try {
             Path conf = dir.resolve("gocryptfs.conf");
             Files.write(conf, "{not valid json".getBytes(StandardCharsets.UTF_8));
-            assertThrows(IOException.class, () -> ConfigFile.load(conf));
+            assertThrows(IOException.class, () -> ConfigFile.load(new PathCipherStore(dir)));
         } finally {
             Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
             Files.deleteIfExists(dir);
@@ -341,8 +344,8 @@ class ConfigFileTest {
         }
     }
 
-    private static Path writeConf(Path dir, String saltB64, int n, int r, int p, int keyLen,
-                                  String featureFlags, String fido2) throws IOException {
+    private static CipherStore writeConf(Path dir, String saltB64, int n, int r, int p, int keyLen,
+                                         String featureFlags, String fido2) throws IOException {
         StringBuilder json = new StringBuilder();
         json.append("{\"Creator\":\"test\",\"EncryptedKey\":\"").append(VALID_ENCRYPTED_KEY).append("\",");
         json.append("\"ScryptObject\":{\"Salt\":\"").append(saltB64).append("\",");
@@ -355,13 +358,14 @@ class ConfigFileTest {
         json.append('}');
         Path conf = dir.resolve("gocryptfs.conf");
         Files.write(conf, json.toString().getBytes(StandardCharsets.UTF_8));
-        return conf;
+        return new PathCipherStore(dir);
     }
 
-    private static Path writeConfWithEncryptedKey(Path dir, String encryptedKeyB64) throws IOException {
+    private static CipherStore writeConfWithEncryptedKey(Path dir, String encryptedKeyB64)
+            throws IOException {
         Path conf = dir.resolve("gocryptfs.conf");
         Files.write(conf, confJsonWithEncryptedKey(encryptedKeyB64).getBytes(StandardCharsets.UTF_8));
-        return conf;
+        return new PathCipherStore(dir);
     }
 
     /**

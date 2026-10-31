@@ -210,9 +210,7 @@ public final class GocryptFs implements AutoCloseable {
     public static GocryptFs open(CipherStore store, char[] password) throws IOException {
         Objects.requireNonNull(store, "store");
         Objects.requireNonNull(password, "password");
-        byte[] configBytes = store.readSmall(join(store.root(), Constants.CONF_DEFAULT_NAME),
-                Constants.CONFIG_MAX_SIZE);
-        ConfigFile config = ConfigFile.fromBytes(configBytes);
+        ConfigFile config = ConfigFile.load(store);
         byte[] masterKey = config.decryptMasterKey(password);
         return new GocryptFs(store, config, masterKey);
     }
@@ -264,9 +262,7 @@ public final class GocryptFs implements AutoCloseable {
             throw new IllegalArgumentException("master key must be "
                     + Constants.KEY_LEN + " bytes");
         }
-        byte[] configBytes = store.readSmall(join(store.root(), Constants.CONF_DEFAULT_NAME),
-                Constants.CONFIG_MAX_SIZE);
-        ConfigFile config = ConfigFile.fromBytes(configBytes);
+        ConfigFile config = ConfigFile.load(store);
         return new GocryptFs(store, config, masterKey.clone());
     }
 
@@ -307,9 +303,7 @@ public final class GocryptFs implements AutoCloseable {
     public static GocryptFs open(CipherStore store, Fido2Token token) throws IOException {
         Objects.requireNonNull(store, "store");
         Objects.requireNonNull(token, "token");
-        byte[] configBytes = store.readSmall(join(store.root(), Constants.CONF_DEFAULT_NAME),
-                Constants.CONFIG_MAX_SIZE);
-        ConfigFile config = ConfigFile.fromBytes(configBytes);
+        ConfigFile config = ConfigFile.load(store);
         Fido2Params params = config.fido2();
         if (!config.isFeatureFlagSet(Constants.FLAG_FIDO2) || params == null) {
             throw new IOException("filesystem is not protected by a FIDO2 token");

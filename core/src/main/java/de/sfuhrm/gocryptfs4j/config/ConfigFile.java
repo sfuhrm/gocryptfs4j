@@ -9,10 +9,10 @@ import de.sfuhrm.gocryptfs4j.crypto.ContentCipher;
 import de.sfuhrm.gocryptfs4j.crypto.ContentEnc;
 import de.sfuhrm.gocryptfs4j.crypto.Gcm;
 import de.sfuhrm.gocryptfs4j.crypto.Hkdf;
-import de.sfuhrm.gocryptfs4j.crypto.IoUtil;
 import de.sfuhrm.gocryptfs4j.crypto.Keys;
 import de.sfuhrm.gocryptfs4j.crypto.XChaCha20Poly1305;
 import de.sfuhrm.gocryptfs4j.core.ContentCipherType;
+import de.sfuhrm.gocryptfs4j.store.CipherStore;
 import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
@@ -20,7 +20,6 @@ import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.CharBuffer;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Path;
 import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.util.ArrayList;
@@ -146,16 +145,17 @@ public final class ConfigFile {
     }
 
     /**
-     * Loads and validates a {@code gocryptfs.conf} file.
+     * Loads and validates the {@code gocryptfs.conf} of a cipher store.
      *
-     * @param path the path to the config file
+     * @param store the ciphertext-side store whose root holds the config file
      * @return the parsed config file
-     * @throws IOException if the file is missing, malformed or unsupported
-     * @throws NullPointerException if {@code path} is {@code null}
+     * @throws IOException if the config is missing, malformed or unsupported
+     * @throws NullPointerException if {@code store} is {@code null}
      */
-    public static ConfigFile load(Path path) throws IOException {
-        Objects.requireNonNull(path, "path");
-        return fromBytes(IoUtil.readBounded(path, Constants.CONFIG_MAX_SIZE));
+    public static ConfigFile load(CipherStore store) throws IOException {
+        Objects.requireNonNull(store, "store");
+        return fromBytes(store.readSmall(join(store.root(), Constants.CONF_DEFAULT_NAME),
+                Constants.CONFIG_MAX_SIZE));
     }
 
     /**
@@ -180,6 +180,17 @@ public final class ConfigFile {
         }
         cf.validate();
         return cf;
+    }
+
+    /**
+     * Joins a ciphertext parent name and a child name with a slash.
+     *
+     * @param parent the parent name
+     * @param child  the child name
+     * @return the joined name
+     */
+    private static String join(String parent, String child) {
+        return parent.isEmpty() ? child : parent + "/" + child;
     }
 
     /**

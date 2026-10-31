@@ -46,7 +46,7 @@ class GocryptFsTest {
             fs.write("/hello.txt", 0, "secret".getBytes(StandardCharsets.UTF_8));
         }
 
-        byte[] masterKey = ConfigFile.load(cipherDir.resolve("gocryptfs.conf"))
+        byte[] masterKey = ConfigFile.load(new PathCipherStore(cipherDir))
                 .decryptMasterKey("pw".toCharArray());
 
         try (GocryptFs fs = GocryptFs.open(cipherDir, masterKey)) {
@@ -75,7 +75,7 @@ class GocryptFsTest {
             // just create the filesystem
         }
 
-        byte[] masterKey = ConfigFile.load(cipherDir.resolve("gocryptfs.conf"))
+        byte[] masterKey = ConfigFile.load(new PathCipherStore(cipherDir))
                 .decryptMasterKey("pw".toCharArray());
         byte[] before = masterKey.clone();
 

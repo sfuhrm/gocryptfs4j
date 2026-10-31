@@ -1,6 +1,7 @@
 package de.sfuhrm.gocryptfs4j.config;
 
 import de.sfuhrm.gocryptfs4j.crypto.Constants;
+import de.sfuhrm.gocryptfs4j.crypto.IoUtil;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Path;
@@ -29,9 +30,13 @@ class GocryptfsConfigGoldenTest {
                 .toURI());
     }
 
+    private static ConfigFile load(String name) throws Exception {
+        return ConfigFile.fromBytes(IoUtil.readBounded(resource(name), Constants.CONFIG_MAX_SIZE));
+    }
+
     @Test
     void decryptsGocryptFsV011Config() throws Exception {
-        ConfigFile cf = ConfigFile.load(resource("gocryptfs-v0.11.conf"));
+        ConfigFile cf = load("gocryptfs-v0.11.conf");
 
         assertEquals(2, cf.version());
         assertTrue(cf.isFeatureFlagSet(Constants.FLAG_GCM_IV128));
@@ -46,7 +51,7 @@ class GocryptfsConfigGoldenTest {
 
     @Test
     void decryptsGocryptFsV011PlaintextNamesConfig() throws Exception {
-        ConfigFile cf = ConfigFile.load(resource("gocryptfs-v0.11-plaintextnames.conf"));
+        ConfigFile cf = load("gocryptfs-v0.11-plaintextnames.conf");
 
         assertTrue(cf.plaintextNames());
         assertTrue(cf.isFeatureFlagSet(Constants.FLAG_GCM_IV128));
@@ -59,7 +64,7 @@ class GocryptfsConfigGoldenTest {
 
     @Test
     void rejectsWrongPassword() throws Exception {
-        ConfigFile cf = ConfigFile.load(resource("gocryptfs-v0.11.conf"));
+        ConfigFile cf = load("gocryptfs-v0.11.conf");
         try {
             cf.decryptMasterKey("wrong".toCharArray());
             org.junit.jupiter.api.Assertions.fail("expected IOException for wrong password");

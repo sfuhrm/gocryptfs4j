@@ -3,6 +3,7 @@ package de.sfuhrm.gocryptfs4j.core;
 import de.sfuhrm.gocryptfs4j.config.ConfigFile;
 import de.sfuhrm.gocryptfs4j.crypto.Constants;
 import de.sfuhrm.gocryptfs4j.fido2.Fido2Token;
+import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -62,7 +63,7 @@ class GocryptFsFido2Test {
         assertTrue(json.contains("\"HMACSalt\""), json);
         assertTrue(json.contains(Constants.FLAG_FIDO2), json);
 
-        ConfigFile config = ConfigFile.load(cipherDir.resolve(Constants.CONF_DEFAULT_NAME));
+        ConfigFile config = ConfigFile.load(new PathCipherStore(cipherDir));
         assertTrue(config.isFeatureFlagSet(Constants.FLAG_FIDO2));
         assertNotNull(config.fido2());
         assertEquals(32, config.fido2().hmacSalt().length);
@@ -114,7 +115,7 @@ class GocryptFsFido2Test {
             fs.write("/a", 0, new byte[]{1, 2, 3});
         }
 
-        ConfigFile config = ConfigFile.load(cipherDir.resolve(Constants.CONF_DEFAULT_NAME));
+        ConfigFile config = ConfigFile.load(new PathCipherStore(cipherDir));
         assertTrue(config.xchacha());
         assertEquals(Collections.singletonList("uv=1"), config.fido2().assertOptions());
 
