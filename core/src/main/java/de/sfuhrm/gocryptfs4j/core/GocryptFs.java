@@ -59,6 +59,12 @@ import java.util.concurrent.ConcurrentHashMap;
  * supplied directly to the {@code open}/{@code create} factory methods or
  * resolved from a URI scheme via {@code de.sfuhrm.gocryptfs4j.store.CipherStores}.</p>
  *
+ * <p>Store ownership follows who created the store: a store supplied directly to
+ * the factory methods is owned by the caller, who must close it when it is no
+ * longer needed. A store resolved internally from a URI is owned by the returned
+ * instance and is closed by {@link #close()}, so remote backends (the point of
+ * the SPI) do not leak connections.</p>
+ *
  * <p>Sensitive input buffers supplied by the caller &mdash; the password
  * {@code char[]} and the raw master-key {@code byte[]} &mdash; are read but
  * neither retained nor wiped by this class: the caller keeps ownership of them
@@ -85,6 +91,14 @@ public final class GocryptFs implements AutoCloseable {
 
     /** The ciphertext-side store. */
     private final CipherStore store;
+
+    /**
+     * Whether this instance created {@link #store} itself (via the URI-based
+     * factories) and must therefore close it on {@link #close()}. A store
+     * supplied directly by the caller is owned by the caller, not by this
+     * instance.
+     */
+    private final boolean ownsStore;
 
     /** The ciphertext root name, as returned by {@link CipherStore#root()}. */
     private final String rootName;
@@ -121,6 +135,19 @@ public final class GocryptFs implements AutoCloseable {
      * @param masterKey the 32-byte master key
      */
     private GocryptFs(CipherStore store, ConfigFile config, byte[] masterKey) {
+        this(store, config, masterKey, false);
+    }
+
+    /**
+     * Creates an instance, called after the master key has been unlocked.
+     *
+     * @param store     the ciphertext-side store
+     * @param config    the parsed configuration
+     * @param masterKey the 32-byte master key
+     * @param ownsStore whether this instance owns {@code store} and must close
+     *                  it on {@link #close()}
+     */
+    private GocryptFs(CipherStore store, ConfigFile config, byte[] masterKey, boolean ownsStore) {
         String root = store.root();
         boolean plainNames = config.plaintextNames();
         boolean dirIv = config.dirIv();
@@ -147,6 +174,7 @@ public final class GocryptFs implements AutoCloseable {
             this.rootName = root;
             this.config = config;
             this.masterKey = masterKey;
+            this.ownsStore = ownsStore;
             this.plaintextNames = plainNames;
             this.deterministicNames = deterministic;
             this.eme = emeHelper;
@@ -183,9 +211,19 @@ public final class GocryptFs implements AutoCloseable {
     public static GocryptFs open(CipherStore store, char[] password) throws IOException {
         Objects.requireNonNull(store, "store");
         Objects.requireNonNull(password, "password");
+        return open(store, password, false);
+    }
+
+    /**
+     * Opens an existing cipher store, unlocking the master key from
+     * {@code password}, recording whether the returned instance owns
+     * {@code store}.
+     */
+    private static GocryptFs open(CipherStore store, char[] password, boolean ownsStore)
+            throws IOException {
         ConfigFile config = ConfigFile.load(store);
         byte[] masterKey = config.decryptMasterKey(password);
-        return new GocryptFs(store, config, masterKey);
+        return new GocryptFs(store, config, masterKey, ownsStore);
     }
 
     /**
@@ -266,7 +304,17 @@ public final class GocryptFs implements AutoCloseable {
     public static GocryptFs open(URI uri, Map<String, ?> env, char[] password) throws IOException {
         Objects.requireNonNull(uri, "uri");
         Objects.requireNonNull(password, "password");
-        return open(CipherStores.newStore(uri, env), password);
+        CipherStore store = CipherStores.newStore(uri, env);
+        boolean ok = false;
+        try {
+            GocryptFs fs = open(store, password, true);
+            ok = true;
+            return fs;
+        } finally {
+            if (!ok) {
+                store.close();
+            }
+        }
     }
 
     /**
@@ -301,7 +349,17 @@ public final class GocryptFs implements AutoCloseable {
         Objects.requireNonNull(uri, "uri");
         Objects.requireNonNull(password, "password");
         Objects.requireNonNull(cipherType, "cipherType");
-        return create(CipherStores.newStore(uri, env), password, plaintextNames, cipherType);
+        CipherStore store = CipherStores.newStore(uri, env);
+        boolean ok = false;
+        try {
+            GocryptFs fs = create(store, password, plaintextNames, cipherType, true);
+            ok = true;
+            return fs;
+        } finally {
+            if (!ok) {
+                store.close();
+            }
+        }
     }
 
     /**
@@ -349,6 +407,16 @@ public final class GocryptFs implements AutoCloseable {
         Objects.requireNonNull(store, "store");
         Objects.requireNonNull(password, "password");
         Objects.requireNonNull(cipherType, "cipherType");
+        return create(store, password, plaintextNames, cipherType, false);
+    }
+
+    /**
+     * Creates a new filesystem, recording whether the returned instance owns
+     * {@code store} and must close it on {@link #close()}.
+     */
+    private static GocryptFs create(CipherStore store, char[] password, boolean plaintextNames,
+                                    ContentCipherType cipherType, boolean ownsStore)
+            throws IOException {
         if (!store.list(store.root()).isEmpty()) {
             throw new IOException("cipher dir is not empty: " + store.root());
         }
@@ -357,7 +425,7 @@ public final class GocryptFs implements AutoCloseable {
         try {
             ConfigFile config = ConfigFile.create(masterKey, password, plaintextNames, cipherType);
             store.writeConfig(join(store.root(), Constants.CONF_DEFAULT_NAME), config.toBytes(), false);
-            GocryptFs fs = new GocryptFs(store, config, masterKey);
+            GocryptFs fs = new GocryptFs(store, config, masterKey, ownsStore);
             try {
                 if (!plaintextNames) {
                     fs.writeDirIV(store.root());
@@ -365,7 +433,7 @@ public final class GocryptFs implements AutoCloseable {
                 ok = true;
                 return fs;
             } catch (IOException e) {
-                fs.close();
+                fs.wipeSecrets();
                 deleteIfExists(store, join(store.root(), Constants.CONF_DEFAULT_NAME));
                 throw e;
             }
@@ -455,7 +523,7 @@ public final class GocryptFs implements AutoCloseable {
                     ok = true;
                     return fs;
                 } catch (IOException e) {
-                    fs.close();
+                    fs.wipeSecrets();
                     deleteIfExists(store, join(store.root(), Constants.CONF_DEFAULT_NAME));
                     throw e;
                 }
@@ -1578,12 +1646,34 @@ public final class GocryptFs implements AutoCloseable {
         }
     }
 
-    @Override
-    public void close() {
+    /**
+     * Wipes the master key and every key derived from it, and clears the
+     * directory-IV cache. This is the secret-destruction part of
+     * {@link #close()}; it deliberately does not touch the store.
+     */
+    private void wipeSecrets() {
         dirIvCache.clear();
         eme.wipe();
         contentEnc.wipe();
         Keys.wipe(masterKey);
+    }
+
+    /**
+     * Closes this filesystem, wiping the master key and every key derived from
+     * it and, when this instance created the store itself (via the URI-based
+     * factories), closing the store.
+     *
+     * <p>Closing is idempotent. A store supplied directly to
+     * {@code open}/{@code create} is owned by the caller and is left open.</p>
+     *
+     * @throws IOException if the store cannot be closed
+     */
+    @Override
+    public void close() throws IOException {
+        wipeSecrets();
+        if (ownsStore) {
+            store.close();
+        }
     }
 
     // ------------------------------------------------------------------
