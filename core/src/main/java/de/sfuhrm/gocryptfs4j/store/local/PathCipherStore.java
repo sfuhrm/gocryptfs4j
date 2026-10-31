@@ -166,7 +166,7 @@ public final class PathCipherStore implements CipherStore {
         Path p = path(name);
         BasicFileAttributes attrs = Files.readAttributes(p, BasicFileAttributes.class,
                 LinkOption.NOFOLLOW_LINKS);
-        return node(p.getFileName().toString(), attrs);
+        return node(basename(p), attrs);
     }
 
     @Override
@@ -178,10 +178,22 @@ public final class PathCipherStore implements CipherStore {
             for (Path p : ds) {
                 BasicFileAttributes attrs = Files.readAttributes(p, BasicFileAttributes.class,
                         LinkOption.NOFOLLOW_LINKS);
-                out.add(node(p.getFileName().toString(), attrs));
+                out.add(node(basename(p), attrs));
             }
         }
         return out;
+    }
+
+    /**
+     * Returns the basename of a ciphertext path, or the whole path string when
+     * the path has no basename (for example the filesystem root {@code "/"}).
+     *
+     * @param p the ciphertext path
+     * @return the basename, or the path string for the root
+     */
+    private static String basename(Path p) {
+        Path fileName = p.getFileName();
+        return fileName == null ? p.toString() : fileName.toString();
     }
 
     /**

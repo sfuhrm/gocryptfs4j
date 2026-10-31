@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFilePermissions;
 
@@ -138,6 +139,14 @@ class PathCipherStoreTest {
         assertEquals(PosixFilePermissions.fromString("r--------"),
                 Files.getPosixFilePermissions(conf));
         assertNoTempFiles(dir);
+    }
+
+    @Test
+    void statOnFilesystemRootDoesNotThrow() throws Exception {
+        Path root = Paths.get("/");
+        assumeTrue(Files.isDirectory(root), "filesystem root '/' is not a directory");
+        PathCipherStore store = new PathCipherStore(root);
+        assertTrue(store.stat(root.toString()).isDirectory());
     }
 
     private static void assertNoTempFiles(Path dir) throws IOException {
