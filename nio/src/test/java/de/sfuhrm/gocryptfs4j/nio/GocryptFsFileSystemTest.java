@@ -1,5 +1,7 @@
 package de.sfuhrm.gocryptfs4j.nio;
 
+import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
+
 import de.sfuhrm.gocryptfs4j.core.GocryptFs;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -67,7 +69,7 @@ class GocryptFsFileSystemTest {
     private Path createCipherDir(String name) throws IOException {
         Path cipherDir = tmp.resolve(name);
         Files.createDirectory(cipherDir);
-        try (GocryptFs ignored = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs ignored = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             // empty filesystem
         }
         return cipherDir;

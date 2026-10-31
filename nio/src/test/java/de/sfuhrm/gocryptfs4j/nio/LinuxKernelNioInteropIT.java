@@ -1,5 +1,7 @@
 package de.sfuhrm.gocryptfs4j.nio;
 
+import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
+
 import de.sfuhrm.gocryptfs4j.config.ContentCipherType;
 import de.sfuhrm.gocryptfs4j.core.GocryptFs;
 import org.junit.jupiter.api.BeforeAll;
@@ -184,7 +186,7 @@ class LinuxKernelNioInteropIT {
 
         Path cipherDir = Files.createDirectory(tmp.resolve("cipher-java"));
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, PASSWORD.toCharArray(), plaintextNames, cipherType)) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), PASSWORD.toCharArray(), plaintextNames, cipherType)) {
             // Only the configuration is created here; the tree is written below
             // through the java.nio.file view.
         }

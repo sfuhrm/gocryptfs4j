@@ -6,7 +6,6 @@ import java.io.IOException;
 import java.nio.file.FileStore;
 import java.nio.file.attribute.FileAttributeView;
 import java.nio.file.attribute.FileStoreAttributeView;
-import java.util.Objects;
 
 /**
  * A {@link FileStore} representing the gocryptfs cipher directory.
@@ -67,7 +66,7 @@ final class GocryptFsFileStore extends FileStore {
      */
     @Override
     public long getTotalSpace() throws IOException {
-        return java.nio.file.Files.getFileStore(Objects.requireNonNull(fs.core().cipherRoot()))
+        return java.nio.file.Files.getFileStore(java.nio.file.Paths.get(fs.key()))
                 .getTotalSpace();
     }
 
@@ -79,7 +78,7 @@ final class GocryptFsFileStore extends FileStore {
      */
     @Override
     public long getUsableSpace() throws IOException {
-        return java.nio.file.Files.getFileStore(Objects.requireNonNull(fs.core().cipherRoot()))
+        return java.nio.file.Files.getFileStore(java.nio.file.Paths.get(fs.key()))
                 .getUsableSpace();
     }
 
@@ -91,7 +90,7 @@ final class GocryptFsFileStore extends FileStore {
      */
     @Override
     public long getUnallocatedSpace() throws IOException {
-        return java.nio.file.Files.getFileStore(Objects.requireNonNull(fs.core().cipherRoot()))
+        return java.nio.file.Files.getFileStore(java.nio.file.Paths.get(fs.key()))
                 .getUnallocatedSpace();
     }
 

@@ -4,6 +4,7 @@ import de.sfuhrm.gocryptfs4j.core.DirEntry;
 import de.sfuhrm.gocryptfs4j.core.GocryptFs;
 import de.sfuhrm.gocryptfs4j.core.CipherFile;
 import de.sfuhrm.gocryptfs4j.fido2.Fido2Token;
+import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
 import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
@@ -102,7 +103,8 @@ public final class GocryptFsProvider extends FileSystemProvider {
             throws IOException {
         Objects.requireNonNull(cipherDir, "cipherDir");
         Objects.requireNonNull(password, "password");
-        return register(cipherDir, GocryptFs.open(cipherDir, password), windowsSeparators);
+        return register(cipherDir, GocryptFs.open(new PathCipherStore(cipherDir), password),
+                windowsSeparators);
     }
 
     /**
@@ -132,7 +134,8 @@ public final class GocryptFsProvider extends FileSystemProvider {
             throws IOException {
         Objects.requireNonNull(cipherDir, "cipherDir");
         Objects.requireNonNull(token, "token");
-        return register(cipherDir, GocryptFs.open(cipherDir, token), windowsSeparators);
+        return register(cipherDir, GocryptFs.open(new PathCipherStore(cipherDir), token),
+                windowsSeparators);
     }
 
     /**

@@ -1,5 +1,7 @@
 package de.sfuhrm.gocryptfs4j.nio;
 
+import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
+
 import de.sfuhrm.gocryptfs4j.core.GocryptFs;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -29,7 +31,7 @@ class GocryptFsPathMatcherTest {
     @BeforeAll
     static void setUp() throws IOException {
         cipherDir = Files.createTempDirectory("gocryptfs-glob-");
-        try (GocryptFs ignored = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs ignored = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             // empty filesystem
         }
         nio = new GocryptFsProvider().newFileSystem(cipherDir, "pw".toCharArray());

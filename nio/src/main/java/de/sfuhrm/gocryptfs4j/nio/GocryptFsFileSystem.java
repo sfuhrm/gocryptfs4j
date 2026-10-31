@@ -11,6 +11,7 @@ import java.nio.file.FileSystem;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.PathMatcher;
+import java.nio.file.Paths;
 import java.nio.file.WatchService;
 import java.nio.file.attribute.UserPrincipalLookupService;
 import java.util.Collections;
@@ -76,24 +77,20 @@ public final class GocryptFsFileSystem extends FileSystem {
         this.uri = URI.create("gocryptfs://" + urlEncode(key) + "/");
         this.root = GocryptFsPath.absolute(this, "/");
         this.userPrincipalLookupService = new GocryptFsUserPrincipalLookupService(this);
-        FileStore store = fileStore(core);
+        FileStore store = fileStore(key);
         this.supportsPosix = store != null && store.supportsFileAttributeView("posix");
         this.readOnly = store != null && store.isReadOnly();
     }
 
     /**
-     * Returns the backing file store.
+     * Returns the backing file store of the cipher directory.
      *
-     * @param core the core gocryptfs instance
+     * @param key the absolute, normalized cipher directory key
      * @return the backing file store, or {@code null} if it cannot be determined
      */
-    private static @Nullable FileStore fileStore(GocryptFs core) {
-        Path root = core.cipherRoot();
-        if (root == null) {
-            return null;
-        }
+    private static @Nullable FileStore fileStore(String key) {
         try {
-            return Files.getFileStore(root);
+            return Files.getFileStore(Paths.get(key));
         } catch (IOException e) {
             return null;
         }

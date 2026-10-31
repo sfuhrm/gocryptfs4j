@@ -14,7 +14,6 @@ import de.sfuhrm.gocryptfs4j.names.NameTransform;
 import de.sfuhrm.gocryptfs4j.store.CipherNode;
 import de.sfuhrm.gocryptfs4j.store.CipherStore;
 import de.sfuhrm.gocryptfs4j.store.CipherStores;
-import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
 import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
@@ -29,10 +28,8 @@ import java.nio.file.AccessMode;
 import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileSystemException;
-import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.NotDirectoryException;
-import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.nio.file.attribute.GroupPrincipal;
 import java.nio.file.attribute.PosixFileAttributes;
@@ -56,10 +53,11 @@ import java.util.concurrent.ConcurrentHashMap;
  * an encrypted directory using the gocryptfs forward-mode on-disk format.</p>
  *
  * <p>This class operates on a {@link CipherStore}, which supplies the
- * ciphertext-side storage. The {@code open}/{@code create} factory methods that
- * take a {@link Path} use a local-filesystem store; the overloads that take a
- * {@link CipherStore} allow the same encrypted data to be stored on a remote
- * filesystem, object store, or any other backend.</p>
+ * ciphertext-side storage, so the same encrypted data can be stored on the local
+ * filesystem (see {@code de.sfuhrm.gocryptfs4j.store.local.PathCipherStore}), a
+ * remote filesystem, an object store, or any other backend. A store is either
+ * supplied directly to the {@code open}/{@code create} factory methods or
+ * resolved from a URI scheme via {@code de.sfuhrm.gocryptfs4j.store.CipherStores}.</p>
  *
  * <p>Sensitive input buffers supplied by the caller &mdash; the password
  * {@code char[]} and the raw master-key {@code byte[]} &mdash; are read but
@@ -74,7 +72,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * this class.</p>
  *
  * <pre>{@code
- * try (GocryptFs fs = GocryptFs.open(Paths.get("/data/cipher"), "password".toCharArray())) {
+ * CipherStore store = new PathCipherStore(Paths.get("/data/cipher"));
+ * try (GocryptFs fs = GocryptFs.open(store, "password".toCharArray())) {
  *     for (DirEntry e : fs.list("/")) {
  *         System.out.println(e.plainName());
  *     }
@@ -89,9 +88,6 @@ public final class GocryptFs implements AutoCloseable {
 
     /** The ciphertext root name, as returned by {@link CipherStore#root()}. */
     private final String rootName;
-
-    /** The local-filesystem root, or {@code null} for a non-local store. */
-    private final @Nullable Path localRoot;
 
     /** The parsed configuration file. */
     private final ConfigFile config;
@@ -152,8 +148,6 @@ public final class GocryptFs implements AutoCloseable {
 
             this.store = store;
             this.rootName = root;
-            this.localRoot = store instanceof PathCipherStore
-                    ? ((PathCipherStore) store).rootPath() : null;
             this.config = config;
             this.masterKey = masterKey;
             this.plaintextNames = plainNames;
@@ -180,24 +174,6 @@ public final class GocryptFs implements AutoCloseable {
     }
 
     /**
-     * Opens an existing cipher directory, unlocking the master key from
-     * {@code password}.
-     *
-     * @param cipherDir the ciphertext directory
-     * @param password  the password to unlock the master key with, encoded as
-     *                  UTF-8; read but neither retained nor wiped by this class,
-     *                  so the caller should clear it when it is no longer needed
-     * @return the opened filesystem
-     * @throws IOException if the config is missing, the password is wrong or the filesystem is corrupt
-     * @throws NullPointerException if {@code cipherDir} or {@code password} is {@code null}
-     */
-    public static GocryptFs open(Path cipherDir, char[] password) throws IOException {
-        Objects.requireNonNull(cipherDir, "cipherDir");
-        Objects.requireNonNull(password, "password");
-        return open(new PathCipherStore(cipherDir), password);
-    }
-
-    /**
      * Opens an existing cipher store, unlocking the master key from
      * {@code password}.
      *
@@ -214,35 +190,6 @@ public final class GocryptFs implements AutoCloseable {
         ConfigFile config = ConfigFile.load(store);
         byte[] masterKey = config.decryptMasterKey(password);
         return new GocryptFs(store, config, masterKey);
-    }
-
-    /**
-     * Opens an existing cipher directory using the raw 32-byte master key,
-     * bypassing the password-based key derivation.
-     *
-     * <p>This is equivalent to gocryptfs's {@code -masterkey} option and is
-     * useful when the password is unknown but the master key is available.</p>
-     *
-     * <p>The key is cloned before it is kept, so the caller's array is neither
-     * retained nor wiped by this class; the caller should clear it when it is
-     * no longer needed.</p>
-     *
-     * @param cipherDir the ciphertext directory
-     * @param masterKey the 32-byte master key; cloned, so the caller's array is
-     *                  neither retained nor wiped by this class
-     * @return the opened filesystem
-     * @throws IOException if the config is missing or the filesystem is corrupt
-     * @throws NullPointerException if {@code cipherDir} or {@code masterKey} is {@code null}
-     * @throws IllegalArgumentException if {@code masterKey} is not 32 bytes long
-     */
-    public static GocryptFs open(Path cipherDir, byte[] masterKey) throws IOException {
-        Objects.requireNonNull(cipherDir, "cipherDir");
-        Objects.requireNonNull(masterKey, "masterKey");
-        if (masterKey.length != Constants.KEY_LEN) {
-            throw new IllegalArgumentException("master key must be "
-                    + Constants.KEY_LEN + " bytes");
-        }
-        return open(new PathCipherStore(cipherDir), masterKey);
     }
 
     /**
@@ -265,31 +212,6 @@ public final class GocryptFs implements AutoCloseable {
         }
         ConfigFile config = ConfigFile.load(store);
         return new GocryptFs(store, config, masterKey.clone());
-    }
-
-    /**
-     * Opens an existing FIDO2-protected cipher directory.
-     *
-     * <p>Reads the credential ID, HMAC salt and assertion options from the
-     * {@code FIDO2} object in {@code gocryptfs.conf}, asks the supplied
-     * {@link Fido2Token} for the {@code hmac-secret} and uses it to unlock the
-     * master key. The token implementation is provided by the application; see
-     * {@link Fido2Token} for the required semantics.</p>
-     *
-     * <p>The {@code hmac-secret} returned by the token is owned by this class
-     * and wiped after it has been used.</p>
-     *
-     * @param cipherDir the ciphertext directory
-     * @param token     the FIDO2 token implementation to unlock the master key
-     *                  with; the secret it returns is wiped by this class
-     * @return the opened filesystem
-     * @throws IOException if the config is missing, not FIDO2-protected, or the token fails
-     * @throws NullPointerException if {@code cipherDir} or {@code token} is {@code null}
-     */
-    public static GocryptFs open(Path cipherDir, Fido2Token token) throws IOException {
-        Objects.requireNonNull(cipherDir, "cipherDir");
-        Objects.requireNonNull(token, "token");
-        return open(new PathCipherStore(cipherDir), token);
     }
 
     /**
@@ -387,64 +309,6 @@ public final class GocryptFs implements AutoCloseable {
     }
 
     /**
-     * Creates a new gocryptfs filesystem in {@code cipherDir} (which must exist
-     * and be empty) and opens it.
-     *
-     * @param cipherDir the ciphertext directory (must exist and be empty)
-     * @param password  the password to protect the master key with, encoded as
-     *                  UTF-8; read but neither retained nor wiped by this class,
-     *                  so the caller should clear it when it is no longer needed
-     * @return the opened filesystem
-     * @throws IOException on filesystem errors
-     */
-    public static GocryptFs create(Path cipherDir, char[] password) throws IOException {
-        return create(cipherDir, password, false);
-    }
-
-    /**
-     * Creates a new filesystem, optionally with plaintext (unencrypted) names.
-     *
-     * @param cipherDir      the ciphertext directory (must exist and be empty)
-     * @param password       the password to protect the master key with, encoded
-     *                       as UTF-8; read but neither retained nor wiped by this
-     *                       class, so the caller should clear it when it is no
-     *                       longer needed
-     * @param plaintextNames whether to store file names unencrypted
-     * @return the opened filesystem
-     * @throws IOException on filesystem errors
-     */
-    public static GocryptFs create(Path cipherDir, char[] password, boolean plaintextNames) throws IOException {
-        return create(cipherDir, password, plaintextNames, ContentCipherType.AES_GCM);
-    }
-
-    /**
-     * Creates a new filesystem, optionally with plaintext (unencrypted) names
-     * and a custom content cipher.
-     *
-     * @param cipherDir      the ciphertext directory (must exist and be empty)
-     * @param password       the password to protect the master key with, encoded
-     *                       as UTF-8; read but neither retained nor wiped by this
-     *                       class, so the caller should clear it when it is no
-     *                       longer needed
-     * @param plaintextNames whether to store file names unencrypted
-     * @param cipherType     the content-encryption cipher
-     * @return the opened filesystem
-     * @throws IOException on filesystem errors
-     * @throws NullPointerException if {@code cipherDir}, {@code password} or {@code cipherType} is {@code null}
-     */
-    public static GocryptFs create(Path cipherDir, char[] password, boolean plaintextNames,
-                                   ContentCipherType cipherType) throws IOException {
-        Objects.requireNonNull(cipherDir, "cipherDir");
-        Objects.requireNonNull(password, "password");
-        Objects.requireNonNull(cipherType, "cipherType");
-        Path dir = cipherDir.toAbsolutePath().normalize();
-        if (!Files.isDirectory(dir)) {
-            throw new IOException("cipher dir does not exist: " + dir);
-        }
-        return create(new PathCipherStore(dir), password, plaintextNames, cipherType);
-    }
-
-    /**
      * Creates a new filesystem in the given cipher store (whose root must be
      * empty).
      *
@@ -517,78 +381,36 @@ public final class GocryptFs implements AutoCloseable {
     }
 
     /**
-     * Creates a new FIDO2-protected filesystem in {@code cipherDir} (which must
-     * exist and be empty) and opens it.
+     * Creates a new FIDO2-protected filesystem in the given cipher store, whose
+     * root must be empty. Uses AES-256-GCM and encrypted names.
      *
-     * <p>Registers a new credential on the supplied {@link Fido2Token}, generates
-     * a random HMAC-secret salt, derives the secret and uses it to protect the
-     * master key. The credential ID, salt and (empty) assertion options are stored
-     * in {@code gocryptfs.conf}. The user name used for registration is the base
-     * name of {@code cipherDir}. Uses AES-256-GCM and encrypted names; use the
-     * more specific overload to change that.</p>
-     *
-     * @param cipherDir the ciphertext directory (must exist and be empty)
-     * @param token     the FIDO2 token implementation to protect the master key
-     *                  with; the secret it returns is wiped by this class
+     * @param store the ciphertext-side store, whose root must be empty
+     * @param token the FIDO2 token implementation to protect the master key with
      * @return the opened filesystem
-     * @throws IOException on filesystem errors or if the token interaction fails
-     * @throws NullPointerException if {@code cipherDir} or {@code token} is {@code null}
+     * @throws IOException on storage errors or if the token interaction fails
+     * @throws NullPointerException if {@code store} or {@code token} is {@code null}
      */
-    public static GocryptFs create(Path cipherDir, Fido2Token token) throws IOException {
-        return create(cipherDir, token, null, false, ContentCipherType.AES_GCM,
+    public static GocryptFs create(CipherStore store, Fido2Token token) throws IOException {
+        return create(store, token, null, false, ContentCipherType.AES_GCM,
                 Collections.<String>emptyList());
     }
 
     /**
-     * Creates a new FIDO2-protected filesystem, optionally with plaintext names
-     * and a custom content cipher.
+     * Creates a new FIDO2-protected filesystem in the given cipher store,
+     * optionally with plaintext names and a custom content cipher.
      *
-     * @param cipherDir      the ciphertext directory (must exist and be empty)
-     * @param token          the FIDO2 token implementation to protect the master
-     *                       key with; the secret it returns is wiped by this class
+     * @param store          the ciphertext-side store, whose root must be empty
+     * @param token          the FIDO2 token implementation to protect the master key with
      * @param plaintextNames whether to store file names unencrypted
      * @param cipherType     the content-encryption cipher
      * @return the opened filesystem
-     * @throws IOException on filesystem errors or if the token interaction fails
-     * @throws NullPointerException if {@code cipherDir}, {@code token} or {@code cipherType} is {@code null}
+     * @throws IOException on storage errors or if the token interaction fails
+     * @throws NullPointerException if {@code store}, {@code token} or {@code cipherType} is {@code null}
      */
-    public static GocryptFs create(Path cipherDir, Fido2Token token, boolean plaintextNames,
+    public static GocryptFs create(CipherStore store, Fido2Token token, boolean plaintextNames,
                                    ContentCipherType cipherType) throws IOException {
-        return create(cipherDir, token, null, plaintextNames, cipherType,
+        return create(store, token, null, plaintextNames, cipherType,
                 Collections.<String>emptyList());
-    }
-
-    /**
-     * Creates a new FIDO2-protected filesystem.
-     *
-     * <p>The {@code assertOptions} are stored verbatim in the config and handed
-     * back to the token on every open. Pass {@code null} or an empty list for
-     * none.</p>
-     *
-     * @param cipherDir      the ciphertext directory (must exist and be empty)
-     * @param token          the FIDO2 token implementation to protect the master
-     *                       key with; the secret it returns is wiped by this class
-     * @param userName       the user name to register the credential with, or
-     *                       {@code null} to use the base name of {@code cipherDir}
-     * @param plaintextNames whether to store file names unencrypted
-     * @param cipherType     the content-encryption cipher
-     * @param assertOptions  options to pass to the token assertion, or {@code null}
-     * @return the opened filesystem
-     * @throws IOException on filesystem errors or if the token interaction fails
-     * @throws NullPointerException if {@code cipherDir}, {@code token} or {@code cipherType} is {@code null}
-     */
-    public static GocryptFs create(Path cipherDir, Fido2Token token, @Nullable String userName,
-                                   boolean plaintextNames, ContentCipherType cipherType,
-                                   @Nullable List<String> assertOptions) throws IOException {
-        Objects.requireNonNull(cipherDir, "cipherDir");
-        Objects.requireNonNull(token, "token");
-        Objects.requireNonNull(cipherType, "cipherType");
-        Path dir = cipherDir.toAbsolutePath().normalize();
-        if (!Files.isDirectory(dir)) {
-            throw new IOException("cipher dir does not exist: " + dir);
-        }
-        return create(new PathCipherStore(dir), token, userName, plaintextNames, cipherType,
-                assertOptions);
     }
 
     /**
@@ -649,16 +471,6 @@ public final class GocryptFs implements AutoCloseable {
         } finally {
             Keys.wipe(secret);
         }
-    }
-
-    /**
-     * Returns the ciphertext root directory, or {@code null} when this
-     * filesystem is backed by a non-local store.
-     *
-     * @return the ciphertext root directory, or {@code null}
-     */
-    public @Nullable Path cipherRoot() {
-        return localRoot;
     }
 
     /**

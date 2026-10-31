@@ -1,5 +1,7 @@
 package de.sfuhrm.gocryptfs4j.nio;
 
+import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
+
 import de.sfuhrm.gocryptfs4j.core.GocryptFs;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -35,7 +37,7 @@ class GocryptFsPathTest {
     @BeforeAll
     static void setUp() throws IOException {
         cipherDir = Files.createTempDirectory("gocryptfs-path-");
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             fs.mkdir("/target");
             fs.createFile("/file.txt");
             fs.createSymlink("/link", "/target");
@@ -102,7 +104,7 @@ class GocryptFsPathTest {
     void windowsSeparatorsConfigured() throws IOException {
         Path dir = Files.createTempDirectory("gocryptfs-wsep-");
         try {
-            try (GocryptFs ignored = GocryptFs.create(dir, "pw".toCharArray())) {
+            try (GocryptFs ignored = GocryptFs.create(new PathCipherStore(dir), "pw".toCharArray())) {
                 // empty filesystem
             }
             try (FileSystem ws = new GocryptFsProvider()

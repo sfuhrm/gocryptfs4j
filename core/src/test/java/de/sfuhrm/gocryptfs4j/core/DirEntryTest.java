@@ -1,5 +1,7 @@
 package de.sfuhrm.gocryptfs4j.core;
 
+import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -66,13 +68,13 @@ class DirEntryTest {
 
         byte[] content = "hello filesystem".getBytes(StandardCharsets.UTF_8);
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             fs.mkdir("/docs");
             fs.createFile("/docs/note.txt");
             fs.write("/docs/note.txt", 0, content);
         }
 
-        try (GocryptFs fs = GocryptFs.open(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.open(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             List<DirEntry> root = fs.list("/");
             assertEquals(1, root.size());
             assertEquals("docs", root.get(0).plainName());
@@ -102,13 +104,13 @@ class DirEntryTest {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             fs.createFile("/target.txt");
             fs.write("/target.txt", 0, "data".getBytes(StandardCharsets.UTF_8));
             fs.createSymlink("/link.txt", "target.txt");
         }
 
-        try (GocryptFs fs = GocryptFs.open(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.open(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             List<DirEntry> root = fs.list("/");
             DirEntry link = root.stream()
                     .filter(e -> e.plainName().equals("link.txt"))
@@ -128,11 +130,11 @@ class DirEntryTest {
         int utf8Bytes = target.getBytes(StandardCharsets.UTF_8).length;
         assertNotEquals(target.length(), utf8Bytes);
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             fs.createSymlink("/link", target);
         }
 
-        try (GocryptFs fs = GocryptFs.open(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.open(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             DirEntry listed = fs.list("/").stream()
                     .filter(e -> e.plainName().equals("link"))
                     .findFirst().orElseThrow(() -> new AssertionError("link not found"));

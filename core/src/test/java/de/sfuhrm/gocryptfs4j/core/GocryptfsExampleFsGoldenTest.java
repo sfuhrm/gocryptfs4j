@@ -1,5 +1,7 @@
 package de.sfuhrm.gocryptfs4j.core;
 
+import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -47,7 +49,7 @@ class GocryptfsExampleFsGoldenTest {
         Path cipherDir = copyResource("/example-fs-v1.3", tmp.resolve("cipher"));
         restoreSymlinks(cipherDir);
 
-        try (GocryptFs fs = GocryptFs.open(cipherDir, "test".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.open(new PathCipherStore(cipherDir), "test".toCharArray())) {
             List<DirEntry> entries = fs.list("/");
             Set<String> names = entries.stream()
                     .map(DirEntry::plainName)

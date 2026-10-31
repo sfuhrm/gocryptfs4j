@@ -12,6 +12,8 @@
  * <pre>{@code
  * import de.sfuhrm.gocryptfs4j.core.DirEntry;
  * import de.sfuhrm.gocryptfs4j.core.GocryptFs;
+ * import de.sfuhrm.gocryptfs4j.store.CipherStore;
+ * import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
  *
  * import java.nio.charset.StandardCharsets;
  * import java.nio.file.Files;
@@ -20,16 +22,17 @@
  *
  * Path cipherDir = Paths.get("/data/cipher");
  * Files.createDirectories(cipherDir);   // must exist and be empty
+ * CipherStore store = new PathCipherStore(cipherDir);
  *
  * // Create a new filesystem and write a file.
- * try (GocryptFs fs = GocryptFs.create(cipherDir, "my-password".toCharArray())) {
+ * try (GocryptFs fs = GocryptFs.create(store, "my-password".toCharArray())) {
  *     fs.mkdir("/docs");
  *     fs.createFile("/docs/hello.txt");
  *     fs.write("/docs/hello.txt", 0, "hello gocryptfs".getBytes(StandardCharsets.UTF_8));
  * }
  *
  * // Later, open it again and read back.
- * try (GocryptFs fs = GocryptFs.open(cipherDir, "my-password".toCharArray())) {
+ * try (GocryptFs fs = GocryptFs.open(store, "my-password".toCharArray())) {
  *     for (DirEntry e : fs.list("/docs")) {
  *         System.out.println(e.plainName() + " (" + e.kind() + ", " + e.size() + " bytes)");
  *     }

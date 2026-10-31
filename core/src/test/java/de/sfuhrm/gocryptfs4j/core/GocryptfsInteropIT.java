@@ -1,5 +1,7 @@
 package de.sfuhrm.gocryptfs4j.core;
 
+import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
+
 import de.sfuhrm.gocryptfs4j.config.ContentCipherType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -124,7 +126,7 @@ class GocryptfsInteropIT {
             }
         }
 
-        try (GocryptFs fs = GocryptFs.open(cipherDir, PASSWORD.toCharArray())) {
+        try (GocryptFs fs = GocryptFs.open(new PathCipherStore(cipherDir), PASSWORD.toCharArray())) {
             Set<String> root = fs.list("/").stream()
                     .map(DirEntry::plainName).collect(Collectors.toSet());
             assertEquals(new HashSet<>(Arrays.asList("sub", "hello.txt", longName())), root);
@@ -146,7 +148,7 @@ class GocryptfsInteropIT {
         Path cipherDir = Files.createDirectory(tmp.resolve("cipher-java"));
         Path passfile = writePassfile();
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, PASSWORD.toCharArray(), plaintextNames, cipherType)) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), PASSWORD.toCharArray(), plaintextNames, cipherType)) {
             fs.mkdir("/sub");
             fs.createFile("/hello.txt");
             fs.write("/hello.txt", 0, "hello world".getBytes(StandardCharsets.UTF_8));
@@ -198,7 +200,7 @@ class GocryptfsInteropIT {
 
         run("gocryptfs", "-init", "-passfile", passfile.toString(), cipherDir.toString());
 
-        try (GocryptFs fs = GocryptFs.open(cipherDir, UMLAUT_PASSWORD.toCharArray())) {
+        try (GocryptFs fs = GocryptFs.open(new PathCipherStore(cipherDir), UMLAUT_PASSWORD.toCharArray())) {
             assertTrue(fs.list("/").isEmpty(), "an -init filesystem has an empty root");
         }
     }
@@ -214,7 +216,7 @@ class GocryptfsInteropIT {
         Path cipherDir = Files.createDirectory(tmp.resolve("cipher-utf8-gocryptfs"));
         Path passfile = writeUmlautPassfile();
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, UMLAUT_PASSWORD.toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), UMLAUT_PASSWORD.toCharArray())) {
             fs.createFile("/hello.txt");
             fs.write("/hello.txt", 0, "hello umlaut".getBytes(StandardCharsets.UTF_8));
         }

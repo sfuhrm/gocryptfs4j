@@ -1,5 +1,7 @@
 package de.sfuhrm.gocryptfs4j.nio;
 
+import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
+
 import de.sfuhrm.gocryptfs4j.core.GocryptFs;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -52,7 +54,7 @@ class GocryptFsProviderOperationsTest {
     @BeforeAll
     static void setUp() throws IOException {
         cipherDir = Files.createTempDirectory("gocryptfs-ops-");
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             fs.mkdir("/dir");
             fs.createFile("/file.txt");
             fs.write("/file.txt", 0, "abc".getBytes(StandardCharsets.UTF_8));

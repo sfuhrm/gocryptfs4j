@@ -13,9 +13,9 @@ import java.util.List;
  * on top of a library of its choice (for example the libfido2 command-line
  * tools {@code fido2-cred}/{@code fido2-assert}, or the YubiKey SDK) and passes
  * the implementation to
- * {@link de.sfuhrm.gocryptfs4j.core.GocryptFs#create(java.nio.file.Path, Fido2Token)}
+ * {@link de.sfuhrm.gocryptfs4j.core.GocryptFs#create(de.sfuhrm.gocryptfs4j.store.CipherStore, Fido2Token)}
  * or
- * {@link de.sfuhrm.gocryptfs4j.core.GocryptFs#open(java.nio.file.Path, Fido2Token)}.</p>
+ * {@link de.sfuhrm.gocryptfs4j.core.GocryptFs#open(de.sfuhrm.gocryptfs4j.store.CipherStore, Fido2Token)}.</p>
  *
  * <p>To stay byte-compatible with filesystems created by gocryptfs, the
  * implementation must register credentials with the relying-party ID

@@ -41,7 +41,7 @@ class GocryptFsTest {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             fs.createFile("/hello.txt");
             fs.write("/hello.txt", 0, "secret".getBytes(StandardCharsets.UTF_8));
         }
@@ -49,7 +49,7 @@ class GocryptFsTest {
         byte[] masterKey = ConfigFile.load(new PathCipherStore(cipherDir))
                 .decryptMasterKey("pw".toCharArray());
 
-        try (GocryptFs fs = GocryptFs.open(cipherDir, masterKey)) {
+        try (GocryptFs fs = GocryptFs.open(new PathCipherStore(cipherDir), masterKey)) {
             assertEquals("secret", new String(fs.readAll("/hello.txt"), StandardCharsets.UTF_8));
         }
     }
@@ -59,19 +59,19 @@ class GocryptFsTest {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             // just create the filesystem
         }
 
         assertThrows(IllegalArgumentException.class,
-                () -> GocryptFs.open(cipherDir, new byte[16]));
+                () -> GocryptFs.open(new PathCipherStore(cipherDir), new byte[16]));
     }
 
     @Test
     void openDoesNotModifyCallerMasterKeyArray() throws IOException {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             // just create the filesystem
         }
 
@@ -79,7 +79,7 @@ class GocryptFsTest {
                 .decryptMasterKey("pw".toCharArray());
         byte[] before = masterKey.clone();
 
-        try (GocryptFs fs = GocryptFs.open(cipherDir, masterKey)) {
+        try (GocryptFs fs = GocryptFs.open(new PathCipherStore(cipherDir), masterKey)) {
             fs.list("/");
         }
 
@@ -94,7 +94,7 @@ class GocryptFsTest {
 
         char[] createPassword = "pw".toCharArray();
         char[] createBefore = createPassword.clone();
-        try (GocryptFs fs = GocryptFs.create(cipherDir, createPassword)) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), createPassword)) {
             fs.list("/");
         }
         assertArrayEquals(createBefore, createPassword,
@@ -102,7 +102,7 @@ class GocryptFsTest {
 
         char[] openPassword = "pw".toCharArray();
         char[] openBefore = openPassword.clone();
-        try (GocryptFs fs = GocryptFs.open(cipherDir, openPassword)) {
+        try (GocryptFs fs = GocryptFs.open(new PathCipherStore(cipherDir), openPassword)) {
             fs.list("/");
         }
         assertArrayEquals(openBefore, openPassword,
@@ -114,7 +114,7 @@ class GocryptFsTest {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
 
-        GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray());
+        GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray());
         fs.createFile("/f.txt");
         fs.write("/f.txt", 0, "data".getBytes(StandardCharsets.UTF_8));
         fs.close();
@@ -156,7 +156,7 @@ class GocryptFsTest {
             big[i] = (byte) (i * 31);
         }
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "secretpw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "secretpw".toCharArray())) {
             fs.mkdir("/docs");
             fs.createFile("/docs/hello.txt");
             fs.write("/docs/hello.txt", 0, secret);
@@ -182,14 +182,14 @@ class GocryptFsTest {
         }
 
         // Reopen and verify everything persists.
-        try (GocryptFs fs = GocryptFs.open(cipherDir, "secretpw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.open(new PathCipherStore(cipherDir), "secretpw".toCharArray())) {
             assertArrayEquals(secret, fs.readAll("/docs/hello.txt"));
             assertArrayEquals(big, fs.readAll("/big.bin"));
             assertTrue(fs.list("/").stream().anyMatch(e -> e.plainName().equals("docs")));
         }
 
         // Wrong password must fail.
-        assertThrows(IOException.class, () -> GocryptFs.open(cipherDir, "wrong".toCharArray()));
+        assertThrows(IOException.class, () -> GocryptFs.open(new PathCipherStore(cipherDir), "wrong".toCharArray()));
     }
 
     @Test
@@ -201,7 +201,7 @@ class GocryptFsTest {
         char[] oldPassword = "old-password".toCharArray();
         char[] newPassword = "new-password".toCharArray();
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, oldPassword)) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), oldPassword)) {
             fs.createFile("/hello.txt");
             fs.write("/hello.txt", 0, secret);
 
@@ -212,10 +212,10 @@ class GocryptFsTest {
             assertArrayEquals(secret, fs.readAll("/hello.txt"));
         }
 
-        try (GocryptFs fs = GocryptFs.open(cipherDir, newPassword)) {
+        try (GocryptFs fs = GocryptFs.open(new PathCipherStore(cipherDir), newPassword)) {
             assertArrayEquals(secret, fs.readAll("/hello.txt"));
         }
-        assertThrows(IOException.class, () -> GocryptFs.open(cipherDir, oldPassword));
+        assertThrows(IOException.class, () -> GocryptFs.open(new PathCipherStore(cipherDir), oldPassword));
     }
 
     @Test
@@ -228,7 +228,7 @@ class GocryptFsTest {
             data[i] = (byte) (i * 17);
         }
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             fs.createFile("/stream.bin");
             try (OutputStream out = fs.openWrite("/stream.bin")) {
                 for (int off = 0; off < data.length; off += 4096) {
@@ -240,7 +240,7 @@ class GocryptFsTest {
         }
 
         // Reopen and verify the streamed content persisted.
-        try (GocryptFs fs = GocryptFs.open(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.open(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             assertArrayEquals(data, fs.readAll("/stream.bin"));
         }
     }
@@ -255,7 +255,7 @@ class GocryptFsTest {
             data[i] = (byte) (i * 29);
         }
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             fs.createFile("/large.bin");
             fs.write("/large.bin", 0, data);
             assertArrayEquals(data, fs.readAll("/large.bin"));
@@ -267,7 +267,7 @@ class GocryptFsTest {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             fs.createFile("/f.txt");
             fs.write("/f.txt", 0, "old content longer".getBytes(StandardCharsets.UTF_8));
 
@@ -291,7 +291,7 @@ class GocryptFsTest {
             data[i] = (byte) (i * 23);
         }
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             fs.createFile("/stream.bin");
             fs.write("/stream.bin", 0, data);
 
@@ -314,7 +314,7 @@ class GocryptFsTest {
 
         byte[] data = "the quick brown fox".getBytes(StandardCharsets.UTF_8);
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             fs.createFile("/text.txt");
             fs.write("/text.txt", 0, data);
 
@@ -337,7 +337,7 @@ class GocryptFsTest {
             data[i] = (byte) (i * 5);
         }
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             fs.createFile("/chunk.bin");
             fs.write("/chunk.bin", 0, data);
 
@@ -358,7 +358,7 @@ class GocryptFsTest {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             assertThrows(java.nio.file.NoSuchFileException.class,
                     () -> fs.openRead("/does-not-exist"));
         }
@@ -370,7 +370,7 @@ class GocryptFsTest {
         Files.createDirectory(cipherDir);
         Path conf = cipherDir.resolve("gocryptfs.conf");
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray(), true)) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray(), true)) {
             byte[] before = Files.readAllBytes(conf);
 
             // The root listing hides the control file ...
@@ -404,7 +404,7 @@ class GocryptFsTest {
         Files.createDirectory(cipherDir);
         Path target = Files.createTempDirectory("gocryptfs-symlink-target");
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray(), true)) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray(), true)) {
             fs.createSymlink("/l", target.toString());
 
             // Traversing the symlink as an intermediate component must be
@@ -429,7 +429,7 @@ class GocryptFsTest {
         }
         String name = longName.toString();
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             fs.createFile("/" + name);
             fs.write("/" + name, 0, "longname content".getBytes(StandardCharsets.UTF_8));
 
@@ -441,7 +441,7 @@ class GocryptFsTest {
                     new String(fs.readAll("/" + name), StandardCharsets.UTF_8));
         }
 
-        try (GocryptFs fs = GocryptFs.open(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.open(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             assertEquals("longname content",
                     new String(fs.readAll("/" + name), StandardCharsets.UTF_8));
         }
@@ -451,7 +451,7 @@ class GocryptFsTest {
     void renameFileKeepsContentAndDirectoryMoveKeepsSubtree() throws IOException {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             fs.createFile("/a.txt");
             fs.write("/a.txt", 0, "data".getBytes(StandardCharsets.UTF_8));
             fs.mkdir("/d1");
@@ -483,7 +483,7 @@ class GocryptFsTest {
         }
         String longA = sb + "A";
         String longB = sb + "B";
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             fs.createFile("/" + longA);
             fs.mkdir("/dir");
             Path oldCipher = Paths.get(fs.resolve("/" + longA).cipherPath);
@@ -506,7 +506,7 @@ class GocryptFsTest {
     void renameExistingTargetAndErrors() throws IOException {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             fs.createFile("/a");
             fs.write("/a", 0, "A".getBytes(StandardCharsets.UTF_8));
             fs.createFile("/b");
@@ -534,7 +534,7 @@ class GocryptFsTest {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             fs.mkdir("/dir");
             fs.createFile("/dir/keep.txt");
 
@@ -567,7 +567,7 @@ class GocryptFsTest {
         }
         String name = longName.toString();
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             fs.mkdir("/" + name);
 
             GocryptFs.Resolved r = fs.resolve("/" + name);
@@ -587,7 +587,7 @@ class GocryptFsTest {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             fs.createFile("/f.txt");
             fs.write("/f.txt", 0, "secret plaintext".getBytes(StandardCharsets.UTF_8));
 
@@ -620,7 +620,7 @@ class GocryptFsTest {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             // A gocryptfs.diriv is exactly 16 bytes; a larger one must be
             // rejected without being buffered in full.
             Files.write(cipherDir.resolve("gocryptfs.diriv"), new byte[4096]);
@@ -639,7 +639,7 @@ class GocryptFsTest {
         }
         String tooLong = sb.toString();
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             FileSystemException e = assertThrows(FileSystemException.class,
                     () -> fs.createFile("/" + tooLong));
             assertTrue(e.getMessage().contains("File name too long"), e.getMessage());
@@ -653,11 +653,11 @@ class GocryptFsTest {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             fs.createFile("/ok.txt");
 
-            byte[] iv = fs.readDirIV(fs.cipherRoot().toString());
-            Path root = fs.cipherRoot();
+            byte[] iv = fs.readDirIV(cipherDir.toAbsolutePath().normalize().toString());
+            Path root = cipherDir.toAbsolutePath().normalize();
             String[] unsafe = {"..", ".", "a/b", "a\\b", "a\u0000b"};
             for (String name : unsafe) {
                 String cName = fs.cipherNameFor(name, iv);
@@ -682,7 +682,7 @@ class GocryptFsTest {
         }
         String name = longName.toString();
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             fs.createFile("/" + name);
             String cipherName = fs.list("/").get(0).cipherName();
             assertNotNull(cipherName);
@@ -707,7 +707,7 @@ class GocryptFsTest {
         }
         String name = longName.toString();
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             fs.createFile("/" + name);
             String cipherName = fs.list("/").get(0).cipherName();
             assertNotNull(cipherName);
@@ -725,7 +725,7 @@ class GocryptFsTest {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             fs.createFile("/hole.bin");
 
             // Write beyond EOF, creating a hole.

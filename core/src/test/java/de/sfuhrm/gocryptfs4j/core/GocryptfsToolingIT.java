@@ -1,5 +1,7 @@
 package de.sfuhrm.gocryptfs4j.core;
 
+import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -38,7 +40,7 @@ class GocryptfsToolingIT {
         assumeGocryptfsBinary();
 
         Path cipherDir = Files.createDirectory(tmp.resolve("cipher"));
-        try (GocryptFs fs = GocryptFs.create(cipherDir, PASSWORD.toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), PASSWORD.toCharArray())) {
             fs.createFile("/hello.txt");
             fs.write("/hello.txt", 0, "hello".getBytes(StandardCharsets.UTF_8));
         }
@@ -56,7 +58,7 @@ class GocryptfsToolingIT {
         assumeTrue(GocryptfsCli.supports("-fsck"), "gocryptfs does not support -fsck");
 
         Path cipherDir = Files.createDirectory(tmp.resolve("cipher"));
-        try (GocryptFs fs = GocryptFs.create(cipherDir, PASSWORD.toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), PASSWORD.toCharArray())) {
             fs.mkdir("/sub");
             fs.createFile("/sub/data.bin");
             fs.write("/sub/data.bin", 0, bigData());
@@ -73,7 +75,7 @@ class GocryptfsToolingIT {
         assumeGocryptfsBinary();
 
         Path cipherDir = Files.createDirectory(tmp.resolve("cipher"));
-        try (GocryptFs fs = GocryptFs.create(cipherDir, PASSWORD.toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), PASSWORD.toCharArray())) {
             fs.createFile("/hello.txt");
             fs.write("/hello.txt", 0, "hello world".getBytes(StandardCharsets.UTF_8));
         }
@@ -90,12 +92,12 @@ class GocryptfsToolingIT {
         assertEquals(0, r.exitCode, "gocryptfs -passwd failed:\n" + r.output);
 
         // New password opens and reads; old password is rejected.
-        try (GocryptFs fs = GocryptFs.open(cipherDir, newPassword.toCharArray())) {
+        try (GocryptFs fs = GocryptFs.open(new PathCipherStore(cipherDir), newPassword.toCharArray())) {
             assertEquals("hello world",
                     new String(fs.readAll("/hello.txt"), StandardCharsets.UTF_8));
         }
         assertThrows(IOException.class,
-                () -> GocryptFs.open(cipherDir, PASSWORD.toCharArray()),
+                () -> GocryptFs.open(new PathCipherStore(cipherDir), PASSWORD.toCharArray()),
                 "old password should no longer work");
     }
 

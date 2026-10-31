@@ -40,6 +40,7 @@
  * import de.sfuhrm.gocryptfs4j.core.GocryptFs;
  * import de.sfuhrm.gocryptfs4j.fido2.Fido2Token;
  * import de.sfuhrm.gocryptfs4j.fido2.libfido2.LibFido2Token;
+ * import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
  *
  * import java.nio.charset.StandardCharsets;
  * import java.nio.file.Files;
@@ -48,9 +49,10 @@
  *
  * Path cipherDir = Paths.get("/data/cipher");
  * Files.createDirectories(cipherDir);   // must exist and be empty
+ * PathCipherStore store = new PathCipherStore(cipherDir);
  *
  * Fido2Token token = new LibFido2Token("/dev/hidraw5");
- * try (GocryptFs fs = GocryptFs.create(cipherDir, token)) {
+ * try (GocryptFs fs = GocryptFs.create(store, token)) {
  *     fs.createFile("/hello.txt");
  *     fs.write("/hello.txt", 0, "hello fido2".getBytes(StandardCharsets.UTF_8));
  * }
@@ -64,7 +66,7 @@
  *
  * <pre>{@code
  * Fido2Token token = new LibFido2Token("/dev/hidraw5");
- * try (GocryptFs fs = GocryptFs.open(cipherDir, token)) {
+ * try (GocryptFs fs = GocryptFs.open(store, token)) {
  *     byte[] content = fs.readAll("/hello.txt");
  * }
  * }</pre>
@@ -75,7 +77,7 @@
  * assertion option {@code pin=true} when creating the filesystem:</p>
  *
  * <pre>{@code
- * try (GocryptFs fs = GocryptFs.create(cipherDir, token, null, false,
+ * try (GocryptFs fs = GocryptFs.create(store, token, null, false,
  *         ContentCipherType.AES_GCM, Collections.singletonList("pin=true"))) {
  *     // ...
  * }

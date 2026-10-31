@@ -157,6 +157,8 @@ format regressions across the version history.
 ```java
 import de.sfuhrm.gocryptfs4j.core.DirEntry;
 import de.sfuhrm.gocryptfs4j.core.GocryptFs;
+import de.sfuhrm.gocryptfs4j.store.CipherStore;
+import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -164,14 +166,15 @@ import java.nio.file.Paths;
 
 // Create a new encrypted filesystem. The directory must exist and be empty.
 Path cipherDir = Paths.get("/data/cipher");
-try (GocryptFs fs = GocryptFs.create(cipherDir, "my-password".toCharArray())) {
+CipherStore store = new PathCipherStore(cipherDir);
+try (GocryptFs fs = GocryptFs.create(store, "my-password".toCharArray())) {
     fs.mkdir("/docs");
     fs.createFile("/docs/hello.txt");
     fs.write("/docs/hello.txt", 0, "hello gocryptfs".getBytes(StandardCharsets.UTF_8));
 }
 
 // Later, open it again and read back.
-try (GocryptFs fs = GocryptFs.open(cipherDir, "my-password".toCharArray())) {
+try (GocryptFs fs = GocryptFs.open(store, "my-password".toCharArray())) {
     for (DirEntry e : fs.list("/")) {
         System.out.println(e.plainName() + " (" + e.kind() + ", " + e.size() + " bytes)");
     }
@@ -285,19 +288,22 @@ from Java and vice versa. Create and open take the token instead of a password:
 import de.sfuhrm.gocryptfs4j.core.GocryptFs;
 import de.sfuhrm.gocryptfs4j.fido2.Fido2Token;
 import de.sfuhrm.gocryptfs4j.fido2.libfido2.LibFido2Token;
+import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Paths;
 
 Fido2Token token = new LibFido2Token("/dev/hidraw5");  // list with: fido2-token -L
+PathCipherStore store = new PathCipherStore(Paths.get("/data/cipher"));
 
 // Create a new filesystem: registers a credential on the key and touches it.
-try (GocryptFs fs = GocryptFs.create(cipherDir, token)) {
+try (GocryptFs fs = GocryptFs.create(store, token)) {
     fs.createFile("/hello.txt");
     fs.write("/hello.txt", 0, "hello fido2".getBytes(StandardCharsets.UTF_8));
 }
 
 // Open an existing one: the credential ID and salt come from gocryptfs.conf.
-try (GocryptFs fs = GocryptFs.open(cipherDir, token)) {
+try (GocryptFs fs = GocryptFs.open(store, token)) {
     String content = new String(fs.readAll("/hello.txt"), StandardCharsets.UTF_8);
 }
 ```
@@ -309,7 +315,7 @@ is PIN-protected:
 import de.sfuhrm.gocryptfs4j.config.ContentCipherType;
 import java.util.Collections;
 
-try (GocryptFs fs = GocryptFs.create(cipherDir, token, null, false,
+try (GocryptFs fs = GocryptFs.create(store, token, null, false,
         ContentCipherType.AES_GCM, Collections.singletonList("pin=true"))) {
     // ...
 }

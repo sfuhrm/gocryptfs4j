@@ -1,5 +1,7 @@
 package de.sfuhrm.gocryptfs4j.nio;
 
+import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -29,7 +31,7 @@ class GocryptFsFeaturesTest {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
         try (de.sfuhrm.gocryptfs4j.core.GocryptFs fs =
-                     de.sfuhrm.gocryptfs4j.core.GocryptFs.create(cipherDir, "pw".toCharArray())) {
+                     de.sfuhrm.gocryptfs4j.core.GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             // just create the filesystem layout
         }
         return new GocryptFsProvider().newFileSystem(cipherDir, "pw".toCharArray());
@@ -106,7 +108,7 @@ class GocryptFsFeaturesTest {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
         try (de.sfuhrm.gocryptfs4j.core.GocryptFs fs =
-                     de.sfuhrm.gocryptfs4j.core.GocryptFs.create(cipherDir, "pw".toCharArray())) {
+                     de.sfuhrm.gocryptfs4j.core.GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             // just create the filesystem layout
         }
         GocryptFsProvider provider = new GocryptFsProvider();
@@ -150,7 +152,7 @@ class GocryptFsFeaturesTest {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
         try (de.sfuhrm.gocryptfs4j.core.GocryptFs fs =
-                     de.sfuhrm.gocryptfs4j.core.GocryptFs.create(cipherDir, "pw".toCharArray())) {
+                     de.sfuhrm.gocryptfs4j.core.GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             // just create the filesystem layout
         }
         GocryptFsProvider provider = new GocryptFsProvider();
@@ -194,7 +196,7 @@ class GocryptFsFeaturesTest {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
         try (de.sfuhrm.gocryptfs4j.core.GocryptFs fs =
-                     de.sfuhrm.gocryptfs4j.core.GocryptFs.create(cipherDir, "pw".toCharArray())) {
+                     de.sfuhrm.gocryptfs4j.core.GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             // just create the filesystem layout
         }
         GocryptFsProvider provider = new GocryptFsProvider();
@@ -211,7 +213,7 @@ class GocryptFsFeaturesTest {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
         try (de.sfuhrm.gocryptfs4j.core.GocryptFs fs =
-                     de.sfuhrm.gocryptfs4j.core.GocryptFs.create(cipherDir, "pw".toCharArray())) {
+                     de.sfuhrm.gocryptfs4j.core.GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             // just create the filesystem layout
         }
         GocryptFsProvider provider = new GocryptFsProvider();

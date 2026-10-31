@@ -3,6 +3,7 @@ package de.sfuhrm.gocryptfs4j.fido2.libfido2;
 import de.sfuhrm.gocryptfs4j.core.DirEntry;
 import de.sfuhrm.gocryptfs4j.core.GocryptFs;
 import de.sfuhrm.gocryptfs4j.fido2.Fido2Token;
+import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
@@ -66,7 +67,7 @@ class LibFido2GocryptFsIT {
                 CIPHER_DIR_PROPERTY + " is not a directory: " + cipherDir);
 
         Fido2Token token = new LibFido2Token(device);
-        try (GocryptFs fs = GocryptFs.open(cipherDir, token)) {
+        try (GocryptFs fs = GocryptFs.open(new PathCipherStore(cipherDir), token)) {
             List<DirEntry> root = fs.list("/");
             assertNotNull(root);
 

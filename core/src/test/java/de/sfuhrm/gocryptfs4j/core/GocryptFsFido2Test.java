@@ -36,13 +36,13 @@ class GocryptFsFido2Test {
         Fido2Token token = new FakeToken("seed-a".getBytes(StandardCharsets.UTF_8));
 
         byte[] content = "fido2 secret".getBytes(StandardCharsets.UTF_8);
-        try (GocryptFs fs = GocryptFs.create(cipherDir, token)) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), token)) {
             fs.createFile("/hello.txt");
             fs.write("/hello.txt", 0, content);
             assertArrayEquals(content, fs.readAll("/hello.txt"));
         }
 
-        try (GocryptFs fs = GocryptFs.open(cipherDir, token)) {
+        try (GocryptFs fs = GocryptFs.open(new PathCipherStore(cipherDir), token)) {
             assertArrayEquals(content, fs.readAll("/hello.txt"));
         }
     }
@@ -53,7 +53,7 @@ class GocryptFsFido2Test {
         Files.createDirectory(cipherDir);
         FakeToken token = new FakeToken("seed-b".getBytes(StandardCharsets.UTF_8));
 
-        try (GocryptFs ignored = GocryptFs.create(cipherDir, token)) {
+        try (GocryptFs ignored = GocryptFs.create(new PathCipherStore(cipherDir), token)) {
             // just create
         }
 
@@ -82,12 +82,12 @@ class GocryptFsFido2Test {
         Files.createDirectory(cipherDir);
         Fido2Token token = new FakeToken("seed-c".getBytes(StandardCharsets.UTF_8));
 
-        try (GocryptFs ignored = GocryptFs.create(cipherDir, token)) {
+        try (GocryptFs ignored = GocryptFs.create(new PathCipherStore(cipherDir), token)) {
             // just create
         }
 
         Fido2Token other = new FakeToken("seed-d".getBytes(StandardCharsets.UTF_8));
-        IOException e = assertThrows(IOException.class, () -> GocryptFs.open(cipherDir, other));
+        IOException e = assertThrows(IOException.class, () -> GocryptFs.open(new PathCipherStore(cipherDir), other));
         assertTrue(e.getMessage().contains("FIDO2"), e.getMessage());
     }
 
@@ -96,12 +96,12 @@ class GocryptFsFido2Test {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
 
-        try (GocryptFs ignored = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs ignored = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             // just create
         }
 
         Fido2Token token = new FakeToken("seed-e".getBytes(StandardCharsets.UTF_8));
-        assertThrows(IOException.class, () -> GocryptFs.open(cipherDir, token));
+        assertThrows(IOException.class, () -> GocryptFs.open(new PathCipherStore(cipherDir), token));
     }
 
     @Test
@@ -110,7 +110,7 @@ class GocryptFsFido2Test {
         Files.createDirectory(cipherDir);
         Fido2Token token = new FakeToken("seed-f".getBytes(StandardCharsets.UTF_8));
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, token, "my-user", false,
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), token, "my-user", false,
                 ContentCipherType.XCHACHA20_POLY1305, Collections.singletonList("uv=1"))) {
             fs.createFile("/a");
             fs.write("/a", 0, new byte[]{1, 2, 3});
@@ -120,7 +120,7 @@ class GocryptFsFido2Test {
         assertTrue(config.xchacha());
         assertEquals(Collections.singletonList("uv=1"), config.fido2().assertOptions());
 
-        try (GocryptFs fs = GocryptFs.open(cipherDir, token)) {
+        try (GocryptFs fs = GocryptFs.open(new PathCipherStore(cipherDir), token)) {
             assertArrayEquals(new byte[]{1, 2, 3}, fs.readAll("/a"));
         }
     }

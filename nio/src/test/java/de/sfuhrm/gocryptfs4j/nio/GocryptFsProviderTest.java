@@ -1,5 +1,7 @@
 package de.sfuhrm.gocryptfs4j.nio;
 
+import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
+
 import de.sfuhrm.gocryptfs4j.core.GocryptFs;
 import de.sfuhrm.gocryptfs4j.fido2.Fido2Token;
 import org.junit.jupiter.api.Test;
@@ -36,7 +38,7 @@ class GocryptFsProviderTest {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             fs.mkdir("/a");
             fs.createFile("/a/one.txt");
             fs.write("/a/one.txt", 0, "one".getBytes(StandardCharsets.UTF_8));
@@ -66,7 +68,7 @@ class GocryptFsProviderTest {
     void directoryStreamIteratorIsSingleUse() throws IOException {
         Path cipherDir = tmp.resolve("cipher-ds");
         Files.createDirectory(cipherDir);
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             fs.createFile("/a.txt");
         }
 
@@ -85,7 +87,7 @@ class GocryptFsProviderTest {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             fs.mkdir("/data");
         }
 
@@ -116,7 +118,7 @@ class GocryptFsProviderTest {
         Files.createDirectory(cipherDir);
         Fido2Token token = new FakeToken("nio-seed".getBytes(StandardCharsets.UTF_8));
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, token)) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), token)) {
             fs.createFile("/secret.txt");
             fs.write("/secret.txt", 0, "secret".getBytes(StandardCharsets.UTF_8));
         }
@@ -134,7 +136,7 @@ class GocryptFsProviderTest {
         Files.createDirectory(cipherDir);
         Fido2Token token = new FakeToken("nio-seed-2".getBytes(StandardCharsets.UTF_8));
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, token)) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), token)) {
             fs.createFile("/a.txt");
             fs.write("/a.txt", 0, "a".getBytes(StandardCharsets.UTF_8));
         }
@@ -170,7 +172,7 @@ class GocryptFsProviderTest {
     void nioRejectsAlreadyOpenFilesystem() throws IOException {
         Path cipherDir = tmp.resolve("cipher-open");
         Files.createDirectory(cipherDir);
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             // just create
         }
 
@@ -190,7 +192,7 @@ class GocryptFsProviderTest {
     void uriLookupRoundTrip() throws IOException {
         Path cipherDir = tmp.resolve("cipher-uri");
         Files.createDirectory(cipherDir);
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             // just create
         }
 
@@ -213,7 +215,7 @@ class GocryptFsProviderTest {
     void windowsSeparatorsViaUriEnvironment() throws IOException {
         Path cipherDir = tmp.resolve("cipher-wsep");
         Files.createDirectory(cipherDir);
-        try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             // just create
         }
 

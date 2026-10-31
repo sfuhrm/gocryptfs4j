@@ -1,5 +1,7 @@
 package de.sfuhrm.gocryptfs4j.core;
 
+import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
+
 import de.sfuhrm.gocryptfs4j.config.ContentCipherType;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.io.TempDir;
@@ -152,7 +154,7 @@ class LinuxKernelInteropIT {
             }
         }
 
-        try (GocryptFs fs = GocryptFs.open(cipherDir, PASSWORD.toCharArray())) {
+        try (GocryptFs fs = GocryptFs.open(new PathCipherStore(cipherDir), PASSWORD.toCharArray())) {
             assertManifestEquals(reference, manifest(fs, "/linux"));
         }
     }
@@ -166,7 +168,7 @@ class LinuxKernelInteropIT {
 
         Path cipherDir = Files.createDirectory(tmp.resolve("cipher-java"));
 
-        try (GocryptFs fs = GocryptFs.create(cipherDir, PASSWORD.toCharArray(), plaintextNames, cipherType)) {
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), PASSWORD.toCharArray(), plaintextNames, cipherType)) {
             fs.mkdir("/linux");
             copyInto(fs, "/linux", linuxSource);
         }
