@@ -62,6 +62,7 @@ public final class MapCipherStore implements CipherStore {
 
     @Override
     public byte[] readSmall(String name, int maxBytes) throws IOException {
+        Objects.requireNonNull(name, "name");
         byte[] data = files.get(name);
         if (data == null) {
             throw new NoSuchFileException(name);
@@ -84,6 +85,7 @@ public final class MapCipherStore implements CipherStore {
 
     @Override
     public CipherNode stat(String name) throws IOException {
+        Objects.requireNonNull(name, "name");
         if (dirs.contains(name)) {
             return node(name, CipherNode.Kind.DIRECTORY, 0);
         }
@@ -100,6 +102,7 @@ public final class MapCipherStore implements CipherStore {
 
     @Override
     public List<CipherNode> list(String dir) throws IOException {
+        Objects.requireNonNull(dir, "dir");
         if (!dirs.contains(dir)) {
             throw new NoSuchFileException(dir);
         }
@@ -112,6 +115,7 @@ public final class MapCipherStore implements CipherStore {
 
     @Override
     public void createFile(String name) throws IOException {
+        Objects.requireNonNull(name, "name");
         if (exists(name)) {
             throw new FileAlreadyExistsException(name);
         }
@@ -120,6 +124,7 @@ public final class MapCipherStore implements CipherStore {
 
     @Override
     public void mkdir(String name) throws IOException {
+        Objects.requireNonNull(name, "name");
         if (exists(name)) {
             throw new FileAlreadyExistsException(name);
         }
@@ -128,6 +133,7 @@ public final class MapCipherStore implements CipherStore {
 
     @Override
     public void delete(String name) throws IOException {
+        Objects.requireNonNull(name, "name");
         if (dirs.contains(name)) {
             if (!children(name).isEmpty()) {
                 throw new DirectoryNotEmptyException(name);
@@ -146,6 +152,8 @@ public final class MapCipherStore implements CipherStore {
 
     @Override
     public void rename(String from, String to, boolean replaceExisting) throws IOException {
+        Objects.requireNonNull(from, "from");
+        Objects.requireNonNull(to, "to");
         if (!exists(from)) {
             throw new NoSuchFileException(from);
         }
@@ -172,6 +180,8 @@ public final class MapCipherStore implements CipherStore {
 
     @Override
     public void createSymlink(String name, String target) throws IOException {
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(target, "target");
         if (exists(name)) {
             throw new FileAlreadyExistsException(name);
         }
@@ -180,6 +190,7 @@ public final class MapCipherStore implements CipherStore {
 
     @Override
     public String readSymlink(String name) throws IOException {
+        Objects.requireNonNull(name, "name");
         String target = symlinks.get(name);
         if (target == null) {
             throw new NoSuchFileException(name);
@@ -191,6 +202,7 @@ public final class MapCipherStore implements CipherStore {
     public void setTimes(String name, @Nullable FileTime lastModifiedTime,
                          @Nullable FileTime lastAccessTime, @Nullable FileTime creationTime)
             throws IOException {
+        Objects.requireNonNull(name, "name");
         if (!exists(name)) {
             throw new NoSuchFileException(name);
         }
@@ -199,6 +211,7 @@ public final class MapCipherStore implements CipherStore {
 
     @Override
     public CipherChannel open(String name, boolean writable) throws IOException {
+        Objects.requireNonNull(name, "name");
         if (!files.containsKey(name)) {
             throw new NoSuchFileException(name);
         }
@@ -207,21 +220,28 @@ public final class MapCipherStore implements CipherStore {
 
     @Override
     public @Nullable PosixFileAttributes posixAttributes(String name) {
+        Objects.requireNonNull(name, "name");
         return null;
     }
 
     @Override
     public void setPosixPermissions(String name, Set<PosixFilePermission> permissions) {
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(permissions, "permissions");
         throw new UnsupportedOperationException("POSIX permissions are not supported by this store");
     }
 
     @Override
     public void setPosixOwner(String name, UserPrincipal owner) {
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(owner, "owner");
         throw new UnsupportedOperationException("POSIX owner is not supported by this store");
     }
 
     @Override
     public void setPosixGroup(String name, GroupPrincipal group) {
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(group, "group");
         throw new UnsupportedOperationException("POSIX group is not supported by this store");
     }
 

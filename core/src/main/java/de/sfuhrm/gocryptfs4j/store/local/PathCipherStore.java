@@ -87,6 +87,7 @@ public final class PathCipherStore implements CipherStore {
 
     @Override
     public byte[] readSmall(String name, int maxBytes) throws IOException {
+        Objects.requireNonNull(name, "name");
         Path p = path(name);
         if (!Files.exists(p, LinkOption.NOFOLLOW_LINKS)) {
             throw new NoSuchFileException(p.toString());
@@ -101,6 +102,8 @@ public final class PathCipherStore implements CipherStore {
 
     @Override
     public void writeSmall(String name, byte[] data, boolean overwrite) throws IOException {
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(data, "data");
         Path p = path(name);
         if (overwrite) {
             Files.write(p, data, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
@@ -112,6 +115,7 @@ public final class PathCipherStore implements CipherStore {
 
     @Override
     public CipherNode stat(String name) throws IOException {
+        Objects.requireNonNull(name, "name");
         Path p = path(name);
         BasicFileAttributes attrs = Files.readAttributes(p, BasicFileAttributes.class,
                 LinkOption.NOFOLLOW_LINKS);
@@ -120,6 +124,7 @@ public final class PathCipherStore implements CipherStore {
 
     @Override
     public List<CipherNode> list(String dir) throws IOException {
+        Objects.requireNonNull(dir, "dir");
         Path d = path(dir);
         List<CipherNode> out = new ArrayList<>();
         try (DirectoryStream<Path> ds = Files.newDirectoryStream(d)) {
@@ -156,21 +161,26 @@ public final class PathCipherStore implements CipherStore {
 
     @Override
     public void createFile(String name) throws IOException {
+        Objects.requireNonNull(name, "name");
         Files.createFile(path(name));
     }
 
     @Override
     public void mkdir(String name) throws IOException {
+        Objects.requireNonNull(name, "name");
         Files.createDirectory(path(name));
     }
 
     @Override
     public void delete(String name) throws IOException {
+        Objects.requireNonNull(name, "name");
         Files.delete(path(name));
     }
 
     @Override
     public void rename(String from, String to, boolean replaceExisting) throws IOException {
+        Objects.requireNonNull(from, "from");
+        Objects.requireNonNull(to, "to");
         Path src = path(from);
         Path dst = path(to);
         if (replaceExisting) {
@@ -182,11 +192,14 @@ public final class PathCipherStore implements CipherStore {
 
     @Override
     public void createSymlink(String name, String target) throws IOException {
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(target, "target");
         Files.createSymbolicLink(path(name), Paths.get(target));
     }
 
     @Override
     public String readSymlink(String name) throws IOException {
+        Objects.requireNonNull(name, "name");
         return Files.readSymbolicLink(path(name)).toString();
     }
 
@@ -194,6 +207,7 @@ public final class PathCipherStore implements CipherStore {
     public void setTimes(String name, @Nullable FileTime lastModifiedTime,
                          @Nullable FileTime lastAccessTime, @Nullable FileTime creationTime)
             throws IOException {
+        Objects.requireNonNull(name, "name");
         BasicFileAttributeView view = Files.getFileAttributeView(path(name),
                 BasicFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
         if (view == null) {
@@ -204,6 +218,7 @@ public final class PathCipherStore implements CipherStore {
 
     @Override
     public CipherChannel open(String name, boolean writable) throws IOException {
+        Objects.requireNonNull(name, "name");
         Path p = path(name);
         FileChannel ch = writable
                 ? FileChannel.open(p, StandardOpenOption.READ, StandardOpenOption.WRITE)
@@ -213,11 +228,13 @@ public final class PathCipherStore implements CipherStore {
 
     @Override
     public void checkAccess(String name, AccessMode... modes) throws IOException {
+        Objects.requireNonNull(name, "name");
         path(name).getFileSystem().provider().checkAccess(path(name), modes);
     }
 
     @Override
     public @Nullable PosixFileAttributes posixAttributes(String name) throws IOException {
+        Objects.requireNonNull(name, "name");
         PosixFileAttributeView view = Files.getFileAttributeView(path(name),
                 PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
         return view == null ? null : view.readAttributes();
@@ -226,16 +243,22 @@ public final class PathCipherStore implements CipherStore {
     @Override
     public void setPosixPermissions(String name, Set<PosixFilePermission> permissions)
             throws IOException {
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(permissions, "permissions");
         posixView(name).setPermissions(permissions);
     }
 
     @Override
     public void setPosixOwner(String name, UserPrincipal owner) throws IOException {
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(owner, "owner");
         posixView(name).setOwner(owner);
     }
 
     @Override
     public void setPosixGroup(String name, GroupPrincipal group) throws IOException {
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(group, "group");
         posixView(name).setGroup(group);
     }
 
