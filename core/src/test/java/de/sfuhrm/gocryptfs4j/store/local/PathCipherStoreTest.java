@@ -312,14 +312,17 @@ class PathCipherStoreTest {
     }
 
     @Test
-    void secureListOnRootDoesNotOpenSubdirectory() throws Exception {
+    void secureListOnRootOpensFreshRootHandle() throws Exception {
         SecureDirectoryStream<Path> root = mockSecureDirectory();
-        when(root.iterator()).thenReturn(Collections.<Path>emptyIterator());
-        when(root.newDirectoryStream(any(Path.class), any(LinkOption[].class)))
-                .thenThrow(new AssertionError("list(root) must not open a sub-directory"));
+        SecureDirectoryStream<Path> fresh = mockSecureDirectory();
+        when(root.newDirectoryStream(Paths.get("."), LinkOption.NOFOLLOW_LINKS)).thenReturn(fresh);
+        when(fresh.iterator()).thenReturn(Collections.<Path>emptyIterator());
         PathCipherStore store = new PathCipherStore(tmp.resolve("cipher"), root);
 
         assertTrue(store.list(store.root()).isEmpty());
-        verify(root, never()).newDirectoryStream(any(Path.class), any(LinkOption[].class));
+
+        verify(root).newDirectoryStream(Paths.get("."), LinkOption.NOFOLLOW_LINKS);
+        verify(root, never()).iterator();
+        verify(fresh).close();
     }
 }

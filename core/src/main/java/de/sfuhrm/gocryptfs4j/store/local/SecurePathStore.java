@@ -159,10 +159,31 @@ final class SecurePathStore implements CipherStore {
     @Override
     public List<CipherNode> list(String dir) throws IOException {
         Objects.requireNonNull(dir, "dir");
+        if (components(dir).isEmpty()) {
+            return listRoot();
+        }
         List<CipherNode> out = new ArrayList<>();
         try (SecurePath directory = resolveDirectory(dir)) {
             for (Path p : directory.dir()) {
                 BasicFileAttributes attrs = basicAttributes(directory.dir(), p);
+                out.add(PlainPathStore.node(PlainPathStore.basename(p), attrs));
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Lists the root directory. The cached {@link #secureRoot} cannot be
+     * iterated because a {@link SecureDirectoryStream}'s
+     * {@link SecureDirectoryStream#iterator() iterator} may only be obtained
+     * once, so a fresh handle to the same directory is opened for each listing.
+     */
+    private List<CipherNode> listRoot() throws IOException {
+        List<CipherNode> out = new ArrayList<>();
+        try (SecureDirectoryStream<Path> root = secureRoot.newDirectoryStream(
+                Paths.get("."), LinkOption.NOFOLLOW_LINKS)) {
+            for (Path p : root) {
+                BasicFileAttributes attrs = basicAttributes(root, p);
                 out.add(PlainPathStore.node(PlainPathStore.basename(p), attrs));
             }
         }
