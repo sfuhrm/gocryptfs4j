@@ -20,6 +20,7 @@ import java.nio.file.attribute.BasicFileAttributeView;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.util.Collections;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -29,6 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -298,5 +300,17 @@ class PathCipherStoreTest {
         ArgumentCaptor<Set> options = ArgumentCaptor.forClass(Set.class);
         verify(sub).newByteChannel(Mockito.eq(Paths.get("f")), options.capture());
         assertTrue(options.getValue().contains(LinkOption.NOFOLLOW_LINKS));
+    }
+
+    @Test
+    void secureListOnRootDoesNotOpenSubdirectory() throws Exception {
+        SecureDirectoryStream<Path> root = mockSecureDirectory();
+        when(root.iterator()).thenReturn(Collections.<Path>emptyIterator());
+        when(root.newDirectoryStream(any(Path.class), any(LinkOption[].class)))
+                .thenThrow(new AssertionError("list(root) must not open a sub-directory"));
+        PathCipherStore store = new PathCipherStore(tmp.resolve("cipher"), root);
+
+        assertTrue(store.list(store.root()).isEmpty());
+        verify(root, never()).newDirectoryStream(any(Path.class), any(LinkOption[].class));
     }
 }

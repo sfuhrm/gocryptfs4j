@@ -376,7 +376,14 @@ final class SecurePathStore implements CipherStore {
         }
         List<Path> out = new ArrayList<>();
         for (Path c : rel) {
-            if (c.toString().equals("..")) {
+            String component = c.toString();
+            // The empty relative path (the root itself) iterates to a single
+            // empty component on some providers, so it must be skipped rather
+            // than treated as a directory name.
+            if (component.isEmpty()) {
+                continue;
+            }
+            if (component.equals("..")) {
                 throw new IOException("path outside root: " + name);
             }
             out.add(c);
