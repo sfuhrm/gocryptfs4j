@@ -112,7 +112,7 @@ final class GocryptFsWatchKey implements WatchKey {
      */
     private boolean wants(WatchEvent.Kind<?> kind) {
         for (WatchEvent.Kind<?> k : events) {
-            if (k == kind) {
+            if (k.equals(kind)) {
                 return true;
             }
         }

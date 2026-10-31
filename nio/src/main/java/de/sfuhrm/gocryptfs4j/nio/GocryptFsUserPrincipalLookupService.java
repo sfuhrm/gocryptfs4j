@@ -14,16 +14,10 @@ import java.util.Objects;
  */
 final class GocryptFsUserPrincipalLookupService extends UserPrincipalLookupService {
 
-    /** The filesystem this service belongs to. */
-    private final GocryptFsFileSystem fs;
-
     /**
      * Creates the service.
-     *
-     * @param fs the filesystem this service belongs to
      */
-    GocryptFsUserPrincipalLookupService(GocryptFsFileSystem fs) {
-        this.fs = fs;
+    GocryptFsUserPrincipalLookupService() {
     }
 
     /**

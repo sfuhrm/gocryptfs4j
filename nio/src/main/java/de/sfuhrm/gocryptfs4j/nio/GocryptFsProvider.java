@@ -787,7 +787,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
         Objects.requireNonNull(path2, "path2");
         GocryptFsPath a = resolve(path);
         GocryptFsPath b = resolve(path2);
-        if (a.getFileSystem() != b.getFileSystem()) {
+        if (!a.getFileSystem().equals(b.getFileSystem())) {
             return false;
         }
         if (a.equals(b)) {
@@ -997,7 +997,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
                                                        String specification) {
         String names = stripView(specification, "basic");
         Map<String, Object> result = new HashMap<>();
-        for (String token : names.split(",")) {
+        for (String token : names.split(",", -1)) {
             if (token.equals("*")) {
                 for (String attribute : BASIC_ATTRIBUTES) {
                     result.put(attribute, basicAttribute(attrs, attribute));
@@ -1022,7 +1022,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
                                                 String specification) {
         String names = stripView(specification, "posix");
         Map<String, Object> result = new HashMap<>();
-        for (String token : names.split(",")) {
+        for (String token : names.split(",", -1)) {
             if (token.equals("*")) {
                 for (String attribute : POSIX_ATTRIBUTES) {
                     result.put(attribute, posixAttribute(attrs, attribute));
@@ -1046,7 +1046,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
     static Map<String, Object> ownerAttributes(UserPrincipal owner, String specification) {
         String names = stripView(specification, "owner");
         Map<String, Object> result = new HashMap<>();
-        for (String token : names.split(",")) {
+        for (String token : names.split(",", -1)) {
             if (token.equals("*") || token.equals("owner")) {
                 result.put("owner", owner);
             } else {

@@ -79,7 +79,7 @@ final class GocryptFsPath implements Path {
         if (stripped.isEmpty()) {
             return new String[0];
         }
-        return stripped.split("/");
+        return stripped.split("/", -1);
     }
 
     /**
@@ -100,7 +100,7 @@ final class GocryptFsPath implements Path {
         String cleaned = fs.windowsSeparators() ? path.replace('\\', '/') : path;
         boolean isAbs = cleaned.startsWith("/");
         Deque<String> stack = new ArrayDeque<>();
-        for (String seg : cleaned.split("/")) {
+        for (String seg : cleaned.split("/", -1)) {
             if (seg.isEmpty() || seg.equals(".")) {
                 continue;
             }

@@ -477,7 +477,7 @@ public final class ConfigFile {
      * extpass program; on a UTF-8 system those are the UTF-8 bytes of the typed
      * password. Encoding the characters as UTF-8 is therefore what makes
      * non-ASCII passwords (for example German umlauts) interoperate. An
-     * earlier implementation kept only the low byte of each {@code char},
+     * earlier implementation kept only the low byte of each character,
      * which silently truncated and collided passwords above U+00FF.</p>
      *
      * <p>The encoding is written straight into a mutable byte array; no
@@ -492,7 +492,9 @@ public final class ConfigFile {
         byte[] out = new byte[encoded.remaining()];
         encoded.get(out);
         if (encoded.hasArray()) {
-            Keys.wipe(encoded.array());
+            byte[] backing = encoded.array();
+            Arrays.fill(backing, encoded.arrayOffset(),
+                    encoded.arrayOffset() + encoded.limit(), (byte) 0);
         }
         return out;
     }

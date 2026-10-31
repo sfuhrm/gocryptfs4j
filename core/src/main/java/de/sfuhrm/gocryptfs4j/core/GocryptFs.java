@@ -107,9 +107,6 @@ public final class GocryptFs implements AutoCloseable {
     /** Whether file names are stored unencrypted. */
     private final boolean plaintextNames;
 
-    /** Whether per-directory IVs are used for name encryption. */
-    private final boolean dirIvFlag;
-
     /** Whether deterministic (no per-directory IV) name encryption is used. */
     private final boolean deterministicNames;
 
@@ -151,7 +148,6 @@ public final class GocryptFs implements AutoCloseable {
             this.config = config;
             this.masterKey = masterKey;
             this.plaintextNames = plainNames;
-            this.dirIvFlag = dirIv;
             this.deterministicNames = deterministic;
             this.eme = emeHelper;
             this.contentEnc = contentEncHelper;
@@ -784,7 +780,7 @@ public final class GocryptFs implements AutoCloseable {
         if (path == null || path.isEmpty() || path.equals("/")) {
             return out;
         }
-        for (String seg : path.split("/")) {
+        for (String seg : path.split("/", -1)) {
             if (seg.isEmpty() || seg.equals(".")) {
                 continue;
             }

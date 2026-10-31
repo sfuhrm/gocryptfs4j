@@ -76,7 +76,7 @@ public final class GocryptFsFileSystem extends FileSystem {
         this.windowsSeparators = windowsSeparators;
         this.uri = URI.create("gocryptfs://" + urlEncode(key) + "/");
         this.root = GocryptFsPath.absolute(this, "/");
-        this.userPrincipalLookupService = new GocryptFsUserPrincipalLookupService(this);
+        this.userPrincipalLookupService = new GocryptFsUserPrincipalLookupService();
         FileStore store = fileStore(key);
         this.supportsPosix = store != null && store.supportsFileAttributeView("posix");
         this.readOnly = store != null && store.isReadOnly();
@@ -122,6 +122,7 @@ public final class GocryptFsFileSystem extends FileSystem {
      * @param s the encoded string
      * @return the decoded string, or the input if decoding fails
      */
+    @SuppressWarnings("JdkObsolete") // Charset overload is unavailable on the Java 8 target
     static String urlDecode(String s) {
         try {
             return java.net.URLDecoder.decode(s, "UTF-8");

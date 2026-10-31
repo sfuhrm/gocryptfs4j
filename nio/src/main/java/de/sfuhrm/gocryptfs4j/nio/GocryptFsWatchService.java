@@ -13,6 +13,7 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -34,9 +35,6 @@ final class GocryptFsWatchService implements WatchService {
     /** The filesystem whose directories are watched. */
     private final GocryptFsFileSystem fs;
 
-    /** The interval, in milliseconds, between directory scans. */
-    private final long pollIntervalMillis;
-
     /** The registered keys, keyed by their directory. */
     private final Map<GocryptFsPath, GocryptFsWatchKey> keys = new HashMap<>();
 
@@ -45,6 +43,9 @@ final class GocryptFsWatchService implements WatchService {
 
     /** The scheduler that performs the periodic scans. */
     private final ScheduledExecutorService scheduler;
+
+    /** The scheduled scan task, cancelled on close. */
+    private final ScheduledFuture<?> scanTask;
 
     /** Whether the service has been closed. */
     private volatile boolean closed;
@@ -66,14 +67,13 @@ final class GocryptFsWatchService implements WatchService {
      */
     GocryptFsWatchService(GocryptFsFileSystem fs, long pollIntervalMillis) {
         this.fs = fs;
-        this.pollIntervalMillis = pollIntervalMillis;
         this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "gocryptfs-watch-service");
             t.setDaemon(true);
             return t;
         });
-        scheduler.scheduleWithFixedDelay(this::scan, pollIntervalMillis, pollIntervalMillis,
-                TimeUnit.MILLISECONDS);
+        this.scanTask = scheduler.scheduleWithFixedDelay(this::scan, pollIntervalMillis,
+                pollIntervalMillis, TimeUnit.MILLISECONDS);
     }
 
     /**
@@ -232,6 +232,7 @@ final class GocryptFsWatchService implements WatchService {
         for (GocryptFsWatchKey key : snapshot) {
             key.invalidate();
         }
+        scanTask.cancel(true);
         scheduler.shutdownNow();
     }
 }

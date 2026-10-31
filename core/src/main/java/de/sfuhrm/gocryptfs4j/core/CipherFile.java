@@ -92,6 +92,7 @@ public final class CipherFile implements AutoCloseable {
      * @param channel the underlying file channel
      * @param enc     the content-encryption helper
      */
+    @SuppressWarnings("UnusedMethod") // accessed reflectively by tests
     private CipherFile(CipherChannel channel, ContentEnc enc) {
         this(channel, enc, true);
     }

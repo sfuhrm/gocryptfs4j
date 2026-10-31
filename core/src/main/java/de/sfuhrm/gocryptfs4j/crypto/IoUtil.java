@@ -23,7 +23,7 @@ public final class IoUtil {
     /**
      * Reads a stream, refusing to buffer more than {@code maxBytes} bytes.
      *
-     * <p>Unlike {@link java.io.InputStream#readAllBytes()}, this never loads an
+     * <p>Unlike {@code InputStream.readAllBytes()}, this never loads an
      * attacker-sized stream fully into memory: it aborts as soon as the limit is
      * exceeded, so a rogue or corrupt input cannot cause an out-of-memory
      * condition.</p>
