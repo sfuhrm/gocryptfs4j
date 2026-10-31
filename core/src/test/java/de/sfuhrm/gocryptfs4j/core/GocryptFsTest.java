@@ -573,7 +573,7 @@ class GocryptFsTest {
         try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             fs.mkdir("/" + name);
 
-            GocryptFs.Resolved r = fs.resolve("/" + name);
+            PathResolver.Resolved r = fs.resolve("/" + name);
             Path cipherPath = Paths.get(r.cipherPath);
             Path nameFile = cipherPath.resolveSibling(r.cipherName + ".name");
             assertTrue(Files.exists(nameFile), "long directories use a .name support file");
@@ -814,7 +814,7 @@ class GocryptFsTest {
             store.failCreateFile = true;
             assertThrows(IOException.class, () -> fs.createFile("/" + name));
 
-            GocryptFs.Resolved r = fs.resolve("/" + name);
+            PathResolver.Resolved r = fs.resolve("/" + name);
             Path cipherPath = Paths.get(r.cipherPath);
             Path nameFile = cipherPath.resolveSibling(r.cipherName + ".name");
             assertFalse(Files.exists(nameFile, LinkOption.NOFOLLOW_LINKS),
