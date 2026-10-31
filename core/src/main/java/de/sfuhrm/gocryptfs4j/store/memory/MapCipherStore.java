@@ -41,6 +41,12 @@ import java.util.concurrent.ConcurrentHashMap;
  * ({@code 1970-01-01T00:00:00Z}) for its last-modified, last-access and
  * creation time, and {@link #setTimes(String, FileTime, FileTime, FileTime)}
  * is a no-op.</p>
+ *
+ * <p>{@link #open(String, boolean)} returns a channel that operates on a
+ * snapshot copy of the file's content taken at open time. Two concurrently
+ * open channels on the same file do not observe each other's writes, and when
+ * both are writable the one closed last wins. This last-write-wins snapshot
+ * semantics is acceptable for a test store, not for a production backend.</p>
  */
 public final class MapCipherStore implements CipherStore {
 
@@ -169,6 +175,7 @@ public final class MapCipherStore implements CipherStore {
         if (!exists(from)) {
             throw new NoSuchFileException(from);
         }
+        ensureParent(to);
         if (exists(to)) {
             if (!replaceExisting) {
                 throw new FileAlreadyExistsException(to);
