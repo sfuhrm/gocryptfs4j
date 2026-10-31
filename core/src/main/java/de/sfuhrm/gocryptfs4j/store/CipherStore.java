@@ -10,6 +10,7 @@ import java.nio.file.attribute.PosixFileAttributes;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.UserPrincipal;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -183,6 +184,7 @@ public interface CipherStore extends AutoCloseable {
      * @throws IOException on storage errors or if access is denied
      */
     default void checkAccess(String name, AccessMode... modes) throws IOException {
+        Objects.requireNonNull(name, "name");
         if (modes.length != 0) {
             throw new UnsupportedOperationException(
                     "access checks are not supported by this store");
@@ -198,6 +200,7 @@ public interface CipherStore extends AutoCloseable {
      * @throws IOException on storage errors
      */
     default @Nullable PosixFileAttributes posixAttributes(String name) throws IOException {
+        Objects.requireNonNull(name, "name");
         return null;
     }
 
@@ -211,6 +214,8 @@ public interface CipherStore extends AutoCloseable {
      */
     default void setPosixPermissions(String name, Set<PosixFilePermission> permissions)
             throws IOException {
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(permissions, "permissions");
         throw new UnsupportedOperationException(
                 "POSIX permissions are not supported by this store");
     }
@@ -224,6 +229,8 @@ public interface CipherStore extends AutoCloseable {
      * @throws IOException on storage errors
      */
     default void setPosixOwner(String name, UserPrincipal owner) throws IOException {
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(owner, "owner");
         throw new UnsupportedOperationException(
                 "POSIX owner is not supported by this store");
     }
@@ -237,6 +244,8 @@ public interface CipherStore extends AutoCloseable {
      * @throws IOException on storage errors
      */
     default void setPosixGroup(String name, GroupPrincipal group) throws IOException {
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(group, "group");
         throw new UnsupportedOperationException(
                 "POSIX group is not supported by this store");
     }

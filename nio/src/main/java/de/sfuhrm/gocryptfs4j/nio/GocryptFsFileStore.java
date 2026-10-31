@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.nio.file.FileStore;
 import java.nio.file.attribute.FileAttributeView;
 import java.nio.file.attribute.FileStoreAttributeView;
+import java.util.Objects;
 
 /**
  * A {@link FileStore} representing the gocryptfs cipher directory.
@@ -102,6 +103,7 @@ final class GocryptFsFileStore extends FileStore {
      */
     @Override
     public boolean supportsFileAttributeView(Class<? extends FileAttributeView> type) {
+        Objects.requireNonNull(type, "type");
         if (type == java.nio.file.attribute.BasicFileAttributeView.class) {
             return true;
         }
@@ -120,6 +122,7 @@ final class GocryptFsFileStore extends FileStore {
      */
     @Override
     public boolean supportsFileAttributeView(String name) {
+        Objects.requireNonNull(name, "name");
         if ("basic".equals(name)) {
             return true;
         }
@@ -139,6 +142,7 @@ final class GocryptFsFileStore extends FileStore {
      */
     @Override
     public <V extends FileStoreAttributeView> @Nullable V getFileStoreAttributeView(Class<V> type) {
+        Objects.requireNonNull(type, "type");
         return null;
     }
 
@@ -151,6 +155,7 @@ final class GocryptFsFileStore extends FileStore {
      */
     @Override
     public @Nullable Object getAttribute(String attribute) throws IOException {
+        Objects.requireNonNull(attribute, "attribute");
         if ("totalSpace".equals(attribute)) {
             return getTotalSpace();
         }
