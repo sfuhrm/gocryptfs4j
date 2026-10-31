@@ -42,6 +42,12 @@
  * {@link GocryptFsProvider#newFileSystem(Path, de.sfuhrm.gocryptfs4j.fido2.Fido2Token)},
  * or by putting a {@code Fido2Token} under the {@code fido2Token} key of the
  * environment map instead of {@code password}.</p>
+ *
+ * <p>The provider only backs the cipher directory with a local
+ * {@code de.sfuhrm.gocryptfs4j.store.local.PathCipherStore}. Other
+ * {@code CipherStore} implementations, such as the in-memory {@code memory}
+ * store of the {@code core} module, are not available through the NIO view; use
+ * the {@code GocryptFs} API of the {@code core} module for those.</p>
  */
 @NullMarked
 package de.sfuhrm.gocryptfs4j.nio;

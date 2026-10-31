@@ -26,6 +26,12 @@ import java.util.Set;
  * at {@code "/"}. The filesystem is backed by a {@link GocryptFs} instance and
  * is registered with its {@link GocryptFsProvider} under the cipher directory
  * key until it is closed.</p>
+ *
+ * <p>The backing {@code CipherStore} is always a local
+ * {@code de.sfuhrm.gocryptfs4j.store.local.PathCipherStore}: the file store
+ * (space, read-only flag, POSIX support) is resolved from the local cipher
+ * directory path. Non-local stores such as the {@code memory} store are not
+ * supported through the NIO view.</p>
  */
 public final class GocryptFsFileSystem extends FileSystem {
 

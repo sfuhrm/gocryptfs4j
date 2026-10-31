@@ -250,6 +250,13 @@ separator, as on Windows.
 > group). gocryptfs does not store ownership or permissions itself, so these are
 > read from and written to the backing cipher file.
 
+> Note: the NIO view is **local-only**. `GocryptFsProvider` always backs the
+> cipher directory with a `PathCipherStore` and resolves space/POSIX information
+> from the local cipher directory path, so it cannot open the in-memory
+> (`memory:` scheme) or a custom remote `CipherStore`. Use the plain
+> [`GocryptFs`](core/src/main/java/de/sfuhrm/gocryptfs4j/core/GocryptFs.java)
+> API for those.
+
 ### 3. Options: content cipher and plaintext names
 
 The content cipher and name-encryption mode are chosen at creation time via the
@@ -330,7 +337,8 @@ The options are stored in the config and reused on every open.
 of a [`CipherStore`](core/src/main/java/de/sfuhrm/gocryptfs4j/store/CipherStore.java)
 (`de.sfuhrm.gocryptfs4j.store`), which supplies the ciphertext side. The same
 encrypted data can therefore live on the local filesystem, a remote filesystem,
-or an object store.
+or an object store. The storage-agnostic dispatch applies to the plain `GocryptFs`
+API only: the NIO view always uses a local `PathCipherStore` (see [section 2](#2-nio-filesystemprovider-nio-module)).
 
 * **Local filesystem** — [`PathCipherStore`](core/src/main/java/de/sfuhrm/gocryptfs4j/store/local/PathCipherStore.java)
   (`de.sfuhrm.gocryptfs4j.store.local`) backs a store with an ordinary directory

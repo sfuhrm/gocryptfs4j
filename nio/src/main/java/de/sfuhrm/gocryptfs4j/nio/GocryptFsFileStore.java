@@ -12,8 +12,14 @@ import java.util.Objects;
  * A {@link FileStore} representing the gocryptfs cipher directory.
  *
  * <p>Space information and the read-only flag are delegated to the backing file
- * store of the cipher directory. Attribute views are limited to the basic view
- * and, when the backing filesystem supports it, the POSIX and owner views.</p>
+ * store of the cipher directory, which is resolved via
+ * {@link java.nio.file.Paths#get(String)} from the local cipher directory path.
+ * Attribute views are limited to the basic view and, when the backing filesystem
+ * supports it, the POSIX and owner views.</p>
+ *
+ * <p>Because the store is resolved from a local path, this implementation is
+ * only meaningful for a local {@code CipherStore}; the NIO view does not support
+ * non-local stores such as the {@code memory} store.</p>
  */
 final class GocryptFsFileStore extends FileStore {
 

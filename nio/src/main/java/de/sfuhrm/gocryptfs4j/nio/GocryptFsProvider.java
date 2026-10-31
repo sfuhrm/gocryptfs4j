@@ -63,6 +63,13 @@ import java.util.concurrent.ConcurrentHashMap;
  * {@link Fido2Token}) for FIDO2-protected ones. The optional
  * {@code windowsSeparators} entry (a {@code Boolean}) controls whether
  * backslashes are treated as path separators.</p>
+ *
+ * <p>This provider only backs the cipher directory with a local
+ * {@link PathCipherStore}, so {@code cipherDir} must refer to a directory on a
+ * {@code java.nio.file} filesystem. Other {@code CipherStore} implementations
+ * &mdash; in particular the in-memory {@code memory} store of the {@code core}
+ * module &mdash; are not available through the NIO view. Use the
+ * {@code GocryptFs} API of the {@code core} module to open such stores.</p>
  */
 public final class GocryptFsProvider extends FileSystemProvider {
 
