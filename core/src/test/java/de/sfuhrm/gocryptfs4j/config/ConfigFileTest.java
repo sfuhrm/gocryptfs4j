@@ -13,7 +13,6 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Base64;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -130,20 +129,12 @@ class ConfigFileTest {
         assertArrayEquals(masterKey, cf.decryptMasterKey("new-password".toCharArray()));
 
         // A freshly parsed config accepts the new and rejects the old password.
-        Path dir = Files.createTempDirectory("gocryptfs4j-");
-        try {
-            Path conf = dir.resolve("gocryptfs.conf");
-            cf.writeTo(conf);
-            ConfigFile reloaded = ConfigFile.load(conf);
-            assertArrayEquals(masterKey, reloaded.decryptMasterKey("new-password".toCharArray()));
+        ConfigFile reloaded = ConfigFile.fromBytes(cf.toBytes());
+        assertArrayEquals(masterKey, reloaded.decryptMasterKey("new-password".toCharArray()));
 
-            // The master key is not cached: the same instance still rejects
-            // the old password.
-            assertThrows(IOException.class, () -> reloaded.decryptMasterKey(PASSWORD));
-        } finally {
-            Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
-            Files.deleteIfExists(dir);
-        }
+        // The master key is not cached: the same instance still rejects
+        // the old password.
+        assertThrows(IOException.class, () -> reloaded.decryptMasterKey(PASSWORD));
     }
 
     @Test
@@ -394,74 +385,5 @@ class ConfigFileTest {
         json.append("\"N\":").append(1 << 16).append(",\"R\":8,\"P\":1,\"KeyLen\":32},");
         json.append("\"Version\":2,\"FeatureFlags\":[\"HKDF\",\"GCMIV128\"]}");
         return json.toString();
-    }
-
-    @Test
-    void writeToOverwritesExistingFile() throws Exception {
-        byte[] masterKey = Keys.randomBytes(Constants.KEY_LEN);
-        ConfigFile cf = ConfigFile.create(masterKey, PASSWORD, false, ContentCipherType.AES_GCM);
-
-        Path dir = Files.createTempDirectory("gocryptfs4j-");
-        try {
-            Path conf = dir.resolve("gocryptfs.conf");
-            cf.writeTo(conf);
-
-            // Change the password and overwrite the config in place.
-            cf.reencryptMasterKey(masterKey, "new-password".toCharArray());
-            cf.writeTo(conf, true);
-
-            ConfigFile reloaded = ConfigFile.load(conf);
-            assertArrayEquals(masterKey, reloaded.decryptMasterKey("new-password".toCharArray()));
-        } finally {
-            Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
-            Files.deleteIfExists(dir);
-        }
-    }
-
-    @Test
-    void writeToFailsOnExistingFile() throws Exception {
-        ConfigFile cf = ConfigFile.create(Keys.randomBytes(Constants.KEY_LEN), PASSWORD, false,
-                ContentCipherType.AES_GCM);
-
-        Path dir = Files.createTempDirectory("gocryptfs4j-");
-        try {
-            Path conf = dir.resolve("gocryptfs.conf");
-            cf.writeTo(conf);
-            assertThrows(java.nio.file.FileAlreadyExistsException.class, () -> cf.writeTo(conf));
-        } finally {
-            Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
-            Files.deleteIfExists(dir);
-        }
-    }
-
-    @Test
-    void writeToIsAtomicAndOwnerOnly() throws Exception {
-        byte[] masterKey = Keys.randomBytes(Constants.KEY_LEN);
-        ConfigFile cf = ConfigFile.create(masterKey, PASSWORD, false, ContentCipherType.AES_GCM);
-
-        Path dir = Files.createTempDirectory("gocryptfs4j-");
-        try {
-            Path conf = dir.resolve("gocryptfs.conf");
-            cf.writeTo(conf);
-            cf.reencryptMasterKey(masterKey, "new-password".toCharArray());
-            cf.writeTo(conf, true);
-
-            // The overwrite leaves a single, correctly writable config file and
-            // no temporary files behind.
-            try (java.util.stream.Stream<Path> files = Files.list(dir)) {
-                assertEquals(1, files.count());
-            }
-            ConfigFile reloaded = ConfigFile.load(conf);
-            assertArrayEquals(masterKey, reloaded.decryptMasterKey("new-password".toCharArray()));
-
-            // On POSIX the config must be owner-read-only (0400), like gocryptfs.
-            if (Files.getFileStore(dir).supportsFileAttributeView("posix")) {
-                assertEquals(PosixFilePermissions.fromString("r--------"),
-                        Files.getPosixFilePermissions(conf));
-            }
-        } finally {
-            Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
-            Files.deleteIfExists(dir);
-        }
     }
 }

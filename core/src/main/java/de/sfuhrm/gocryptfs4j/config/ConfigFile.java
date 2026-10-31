@@ -19,13 +19,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.CharBuffer;
-import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
-import java.nio.file.StandardOpenOption;
-import java.nio.file.attribute.PosixFilePermissions;
 import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.util.ArrayList;
@@ -500,9 +495,8 @@ public final class ConfigFile {
      * the master key directly, it also supports changing the password without
      * knowing the previous one (gocryptfs's {@code -passwd -masterkey}). The
      * scrypt cost parameters ({@code N}, {@code R}, {@code P}, {@code KeyLen}) and
-     * all feature flags are preserved; only the salt is regenerated. Use
-     * {@link #writeTo(Path, boolean)} with {@code overwrite = true} afterwards to
-     * persist the change.</p>
+     * all feature flags are preserved; only the salt is regenerated. Serialize the
+     * updated config with {@link #toBytes()} afterwards to persist the change.</p>
      *
      * @param masterKey the 32-byte master key
      * @param password  the new password, encoded as UTF-8
@@ -867,71 +861,5 @@ public final class ConfigFile {
     public byte[] toBytes() {
         String json = GSON.toJson(this) + "\n";
         return json.getBytes(StandardCharsets.UTF_8);
-    }
-
-    /**
-     * Writes the config as JSON (with a trailing newline) to {@code path},
-     * failing if the file already exists.
-     *
-     * @param path the path to write to
-     * @throws IOException on filesystem errors, or if the file already exists
-     * @throws NullPointerException if {@code path} is {@code null}
-     */
-    public void writeTo(Path path) throws IOException {
-        writeTo(path, false);
-    }
-
-    /**
-     * Writes the config as JSON (with a trailing newline) to {@code path},
-     * optionally overwriting an existing file.
-     *
-     * <p>The config is written to a temporary file in the same directory,
-     * flushed to disk and then atomically moved into place, so a crash or a
-     * full disk never leaves {@code path} truncated or half-written. On POSIX
-     * filesystems the file is given mode {@code 0400}, matching gocryptfs.</p>
-     *
-     * @param path      the path to write to
-     * @param overwrite whether to replace an existing file
-     * @throws IOException on filesystem errors, or if the file exists and
-     *                     {@code overwrite} is {@code false}
-     * @throws NullPointerException if {@code path} is {@code null}
-     */
-    public void writeTo(Path path, boolean overwrite) throws IOException {
-        Objects.requireNonNull(path, "path");
-        byte[] bytes = toBytes();
-
-        Path absolute = path.toAbsolutePath();
-        Path dir = absolute.getParent();
-        if (dir == null) {
-            throw new IOException("cannot determine parent directory of " + path);
-        }
-        Path temp = Files.createTempFile(dir, ".gocryptfs-", ".tmp");
-        boolean moved = false;
-        try {
-            try (FileChannel channel = FileChannel.open(temp,
-                    StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
-                ByteBuffer buffer = ByteBuffer.wrap(bytes);
-                while (buffer.hasRemaining()) {
-                    channel.write(buffer);
-                }
-                channel.force(true);
-            }
-            try {
-                Files.setPosixFilePermissions(temp, PosixFilePermissions.fromString("r--------"));
-            } catch (UnsupportedOperationException e) {
-                // Non-POSIX filesystem: leave the default permissions.
-            }
-            if (overwrite) {
-                Files.move(temp, absolute, StandardCopyOption.ATOMIC_MOVE,
-                        StandardCopyOption.REPLACE_EXISTING);
-            } else {
-                Files.move(temp, absolute);
-            }
-            moved = true;
-        } finally {
-            if (!moved) {
-                Files.deleteIfExists(temp);
-            }
-        }
     }
 }
