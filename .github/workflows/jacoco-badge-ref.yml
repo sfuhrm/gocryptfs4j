@@ -10,6 +10,12 @@ on:
 permissions:
   contents: write
 
+# The badge is always force-pushed to the same `gh-pages` branch, so concurrent
+# runs race and fail with "cannot lock ref". Serialize all runs of this workflow.
+concurrency:
+  group: jacoco-badge
+  cancel-in-progress: false
+
 jobs:
   call-workflow-passing-data:
     uses: sfuhrm/github_workflows/.github/workflows/jacoco-badge.yml@main

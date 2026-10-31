@@ -6,6 +6,7 @@ import de.sfuhrm.gocryptfs4j.store.CipherStoreProvider;
 import java.net.URI;
 import java.nio.file.Paths;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * A {@link CipherStoreProvider} that hands out {@link PathCipherStore} instances
@@ -24,6 +25,6 @@ public final class PathCipherStoreProvider implements CipherStoreProvider {
 
     @Override
     public CipherStore newStore(URI uri, Map<String, ?> env) {
-        return new PathCipherStore(Paths.get(uri));
+        return new PathCipherStore(Paths.get(Objects.requireNonNull(uri, "uri")));
     }
 }

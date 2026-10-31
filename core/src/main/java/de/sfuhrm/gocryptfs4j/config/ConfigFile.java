@@ -765,7 +765,9 @@ public final class ConfigFile {
      */
     public static ConfigFile create(byte[] masterKey, char[] password, boolean plaintextNames,
                                     ContentCipherType cipherType) {
+        Objects.requireNonNull(masterKey, "masterKey");
         Objects.requireNonNull(password, "password");
+        Objects.requireNonNull(cipherType, "cipherType");
         byte[] secret = charsToBytes(password);
         try {
             return create(masterKey, secret, plaintextNames, cipherType, null);
