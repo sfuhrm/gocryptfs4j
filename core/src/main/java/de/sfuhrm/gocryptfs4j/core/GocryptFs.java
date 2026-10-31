@@ -1471,8 +1471,15 @@ public final class GocryptFs implements AutoCloseable {
     public void createFile(String plainFile) throws IOException {
         Objects.requireNonNull(plainFile, "plainFile");
         Resolved r = resolveParent(plainFile);
-        prepareLongName(r);
-        store.createFile(r.cipherPath);
+        boolean wroteName = prepareLongName(r);
+        try {
+            store.createFile(r.cipherPath);
+        } catch (IOException | RuntimeException e) {
+            if (wroteName) {
+                removeLongName(r);
+            }
+            throw e;
+        }
     }
 
     /**
@@ -1485,8 +1492,15 @@ public final class GocryptFs implements AutoCloseable {
     public void mkdir(String plainDir) throws IOException {
         Objects.requireNonNull(plainDir, "plainDir");
         Resolved r = resolveParent(plainDir);
-        prepareLongName(r);
-        store.mkdir(r.cipherPath);
+        boolean wroteName = prepareLongName(r);
+        try {
+            store.mkdir(r.cipherPath);
+        } catch (IOException | RuntimeException e) {
+            if (wroteName) {
+                removeLongName(r);
+            }
+            throw e;
+        }
         try {
             writeDirIV(r.cipherPath);
         } catch (IOException | RuntimeException e) {
@@ -1555,7 +1569,9 @@ public final class GocryptFs implements AutoCloseable {
      * own {@code gocryptfs.diriv}, and symlink targets are not path-bound, so
      * only the entry's encrypted name (and its long-name support file, if any)
      * changes. Directories are therefore moved together with their whole
-     * subtree.</p>
+     * subtree. An existing file or symlink target is replaced atomically;
+     * only a directory target is removed first, after verifying it is empty
+     * apart from its {@code gocryptfs.diriv}.</p>
      *
      * @param plainFrom       the plaintext source path
      * @param plainTo         the plaintext target path
@@ -1592,11 +1608,35 @@ public final class GocryptFs implements AutoCloseable {
             if (!replaceExisting) {
                 throw new FileAlreadyExistsException(plainTo);
             }
-            // Fails with DirectoryNotEmptyException for a non-empty directory.
-            delete(plainTo);
+            if (store.stat(to.cipherPath).isDirectory()) {
+                // A directory can only be replaced when it is empty apart from
+                // its gocryptfs.diriv. Verify that before removing anything so a
+                // rejected replace leaves the target intact. The empty directory
+                // (and its diriv) is then removed explicitly, because an atomic
+                // rename cannot replace a directory that still contains its diriv.
+                for (CipherNode entry : store.list(to.cipherPath)) {
+                    if (!entry.name().equals(Constants.DIR_IV_FILENAME)) {
+                        throw new DirectoryNotEmptyException(to.cipherPath);
+                    }
+                }
+                deleteIfExists(store, join(to.cipherPath, Constants.DIR_IV_FILENAME));
+                store.delete(to.cipherPath);
+                removeLongName(to);
+            }
+            // A non-directory target is replaced atomically by the rename below.
         }
-        prepareLongName(to);
-        store.rename(from.cipherPath, to.cipherPath, false);
+        boolean wroteName = prepareLongName(to);
+        try {
+            store.rename(from.cipherPath, to.cipherPath, replaceExisting);
+        } catch (IOException | RuntimeException e) {
+            // prepareLongName may have created a long-name support file that no
+            // longer has a matching entry; drop it so a failed rename leaves no
+            // orphan behind.
+            if (wroteName) {
+                removeLongName(to);
+            }
+            throw e;
+        }
         removeLongName(from);
         invalidateDirIvCache(from.cipherPath);
         invalidateDirIvCache(to.cipherPath);
@@ -1614,35 +1654,46 @@ public final class GocryptFs implements AutoCloseable {
         Objects.requireNonNull(plainPath, "plainPath");
         Objects.requireNonNull(target, "target");
         Resolved r = resolveParent(plainPath);
-        prepareLongName(r);
-        String cTarget = target;
-        if (!plaintextNames && !target.isEmpty()) {
-            byte[] enc = contentEnc.encryptBlock(target.getBytes(StandardCharsets.UTF_8), 0, null);
-            cTarget = nameTransform.b64Encode(enc);
+        boolean wroteName = prepareLongName(r);
+        try {
+            String cTarget = target;
+            if (!plaintextNames && !target.isEmpty()) {
+                byte[] enc = contentEnc.encryptBlock(target.getBytes(StandardCharsets.UTF_8), 0, null);
+                cTarget = nameTransform.b64Encode(enc);
+            }
+            store.createSymlink(r.cipherPath, cTarget);
+        } catch (IOException | RuntimeException e) {
+            if (wroteName) {
+                removeLongName(r);
+            }
+            throw e;
         }
-        store.createSymlink(r.cipherPath, cTarget);
     }
 
     /**
      * Writes the long-name support file if the cipher name is a long name.
      *
      * @param r the resolved path whose long-name support file may be needed
+     * @return {@code true} if a new long-name support file was created and the
+     *         caller must remove it should the operation that follows fail
      * @throws IOException on filesystem errors
      */
-    private void prepareLongName(Resolved r) throws IOException {
+    private boolean prepareLongName(Resolved r) throws IOException {
         String cipherName = r.cipherName;
         String cipherParent = r.cipherParent;
         if (plaintextNames || cipherName == null || cipherParent == null
                 || !nameTransform.isLongContent(cipherName)) {
-            return;
+            return false;
         }
         String nameFile = join(cipherParent, cipherName + Constants.LONG_NAME_SUFFIX);
         byte[] fullCipher = nameTransform.encryptName(r.plainName, r.parentDirIV)
                 .getBytes(StandardCharsets.UTF_8);
         try {
             store.writeSmall(nameFile, fullCipher, false);
+            return true;
         } catch (FileAlreadyExistsException ignored) {
-            // Allowed on rename/overwrite.
+            // Allowed on rename/overwrite; the existing file is not ours to remove.
+            return false;
         }
     }
 

@@ -1,6 +1,8 @@
 package de.sfuhrm.gocryptfs4j.core;
 
 import de.sfuhrm.gocryptfs4j.config.ConfigFile;
+import de.sfuhrm.gocryptfs4j.store.CipherChannel;
+import de.sfuhrm.gocryptfs4j.store.CipherNode;
 import de.sfuhrm.gocryptfs4j.store.CipherStore;
 import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
 import org.junit.jupiter.api.Test;
@@ -23,6 +25,7 @@ import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.attribute.FileTime;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
@@ -748,6 +751,140 @@ class GocryptFsTest {
             assertEquals(20000, fs.size("/hole.bin"));
             byte[] grown = fs.readAll("/hole.bin");
             assertEquals(20000, grown.length);
+        }
+    }
+
+    @Test
+    void renameReplaceExistingKeepsTargetOnFailure() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        FailingStore store = new FailingStore(new PathCipherStore(cipherDir));
+        try (GocryptFs fs = GocryptFs.create(store, "pw".toCharArray())) {
+            fs.createFile("/a");
+            fs.write("/a", 0, "A".getBytes(StandardCharsets.UTF_8));
+            fs.createFile("/b");
+            fs.write("/b", 0, "B".getBytes(StandardCharsets.UTF_8));
+
+            store.failRename = true;
+            assertThrows(IOException.class, () -> fs.rename("/a", "/b", true));
+
+            // A failed replace must not have deleted the existing target.
+            assertEquals("B", new String(fs.readAll("/b"), StandardCharsets.UTF_8));
+            assertEquals("A", new String(fs.readAll("/a"), StandardCharsets.UTF_8));
+        }
+    }
+
+    @Test
+    void createFileFailureLeavesNoOrphanLongName() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        FailingStore store = new FailingStore(new PathCipherStore(cipherDir));
+        try (GocryptFs fs = GocryptFs.create(store, "pw".toCharArray())) {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < 220; i++) {
+                sb.append('x');
+            }
+            String name = sb.toString();
+
+            store.failCreateFile = true;
+            assertThrows(IOException.class, () -> fs.createFile("/" + name));
+
+            GocryptFs.Resolved r = fs.resolve("/" + name);
+            Path cipherPath = Paths.get(r.cipherPath);
+            Path nameFile = cipherPath.resolveSibling(r.cipherName + ".name");
+            assertFalse(Files.exists(nameFile, LinkOption.NOFOLLOW_LINKS),
+                    "a failed createFile must not leave an orphan .name file");
+        }
+    }
+
+    /**
+     * A {@link CipherStore} wrapper that can be configured to fail specific
+     * operations, to exercise the cleanup paths of {@link GocryptFs}.
+     */
+    private static final class FailingStore implements CipherStore {
+        private final CipherStore delegate;
+        boolean failRename;
+        boolean failCreateFile;
+
+        FailingStore(CipherStore delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public String root() {
+            return delegate.root();
+        }
+
+        @Override
+        public byte[] readSmall(String name, int maxBytes) throws IOException {
+            return delegate.readSmall(name, maxBytes);
+        }
+
+        @Override
+        public void writeSmall(String name, byte[] data, boolean overwrite) throws IOException {
+            delegate.writeSmall(name, data, overwrite);
+        }
+
+        @Override
+        public CipherNode stat(String name) throws IOException {
+            return delegate.stat(name);
+        }
+
+        @Override
+        public List<CipherNode> list(String dir) throws IOException {
+            return delegate.list(dir);
+        }
+
+        @Override
+        public void createFile(String name) throws IOException {
+            if (failCreateFile) {
+                throw new IOException("createFile failed");
+            }
+            delegate.createFile(name);
+        }
+
+        @Override
+        public void mkdir(String name) throws IOException {
+            delegate.mkdir(name);
+        }
+
+        @Override
+        public void delete(String name) throws IOException {
+            delegate.delete(name);
+        }
+
+        @Override
+        public void rename(String from, String to, boolean replaceExisting) throws IOException {
+            if (failRename) {
+                throw new IOException("rename failed");
+            }
+            delegate.rename(from, to, replaceExisting);
+        }
+
+        @Override
+        public void createSymlink(String name, String target) throws IOException {
+            delegate.createSymlink(name, target);
+        }
+
+        @Override
+        public String readSymlink(String name) throws IOException {
+            return delegate.readSymlink(name);
+        }
+
+        @Override
+        public void setTimes(String name, FileTime lastModifiedTime,
+                             FileTime lastAccessTime, FileTime creationTime) throws IOException {
+            delegate.setTimes(name, lastModifiedTime, lastAccessTime, creationTime);
+        }
+
+        @Override
+        public CipherChannel open(String name, boolean writable) throws IOException {
+            return delegate.open(name, writable);
+        }
+
+        @Override
+        public void close() throws IOException {
+            delegate.close();
         }
     }
 
