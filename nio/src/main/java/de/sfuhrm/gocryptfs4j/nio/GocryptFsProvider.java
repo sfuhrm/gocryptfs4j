@@ -157,24 +157,37 @@ public final class GocryptFsProvider extends FileSystemProvider {
      */
     private FileSystem register(Path cipherDir, GocryptFs core, boolean windowsSeparators)
             throws IOException {
-        String key = cipherDir.toRealPath().toString();
-        GocryptFsFileSystem fs;
+        boolean takenOver = false;
         try {
-            fs = new GocryptFsFileSystem(this, core, key, windowsSeparators);
-        } catch (RuntimeException e) {
-            // Do not leak the freshly opened key material if the filesystem
-            // cannot be constructed.
-            core.close();
-            throw e;
+            String key = cipherDir.toRealPath().toString();
+            GocryptFsFileSystem fs = new GocryptFsFileSystem(this, core, key, windowsSeparators);
+            GocryptFsFileSystem existing = filesystems.putIfAbsent(key, fs);
+            if (existing != null) {
+                throw new FileSystemAlreadyExistsException(key);
+            }
+            takenOver = true;
+            return fs;
+        } finally {
+            if (!takenOver) {
+                closeAfterFailedRegistration(core);
+            }
         }
-        GocryptFsFileSystem existing = filesystems.putIfAbsent(key, fs);
-        if (existing != null) {
-            // Do not leak the freshly opened key material for a filesystem that
-            // is already open under this provider.
+    }
+
+    /**
+     * Releases a freshly opened core instance whose registration failed, so that
+     * key material and storage resources are not leaked when, for example, the
+     * real path of the cipher directory cannot be resolved.
+     *
+     * @param core the core instance to close
+     */
+    private static void closeAfterFailedRegistration(GocryptFs core) {
+        try {
             core.close();
-            throw new FileSystemAlreadyExistsException(key);
+        } catch (IOException e) {
+            // A cleanup failure must not mask the exception that caused the
+            // failed registration.
         }
-        return fs;
     }
 
     /**
