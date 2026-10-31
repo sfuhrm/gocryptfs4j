@@ -6,9 +6,9 @@
 [![Coverage](https://raw.githubusercontent.com/sfuhrm/gocryptfs4j/gh-pages/jacoco.svg)]() 
 [![ReleaseDate](https://img.shields.io/github/release-date/sfuhrm/gocryptfs4j)](https://github.com/sfuhrm/gocryptfs4j/releases)
 [![Maven Central](https://img.shields.io/maven-central/v/de.sfuhrm/gocryptfs4j)](https://central.sonatype.com/artifact/de.sfuhrm/gocryptfs4j)
-[![javadoc core](https://javadoc.io/badge2/de.sfuhrm/gocryptfs4j-core/0.6.0/javadoc%20core.svg)](https://javadoc.io/doc/de.sfuhrm/gocryptfs4j-core)
-[![javadoc nio](https://javadoc.io/badge2/de.sfuhrm/gocryptfs4j-nio/0.6.0/javadoc%20nio.svg)](https://javadoc.io/doc/de.sfuhrm/gocryptfs4j-nio)
-[![javadoc libfido2](https://javadoc.io/badge2/de.sfuhrm/gocryptfs4j-libfido2/0.6.0/javadoc%20libfido2.svg)](https://javadoc.io/doc/de.sfuhrm/gocryptfs4j-libfido2)
+[![javadoc core](https://javadoc.io/badge2/de.sfuhrm/gocryptfs4j-core/0.8.0/javadoc%20core.svg)](https://javadoc.io/doc/de.sfuhrm/gocryptfs4j-core)
+[![javadoc nio](https://javadoc.io/badge2/de.sfuhrm/gocryptfs4j-nio/0.8.0/javadoc%20nio.svg)](https://javadoc.io/doc/de.sfuhrm/gocryptfs4j-nio)
+[![javadoc libfido2](https://javadoc.io/badge2/de.sfuhrm/gocryptfs4j-libfido2/0.8.0/javadoc%20libfido2.svg)](https://javadoc.io/doc/de.sfuhrm/gocryptfs4j-libfido2)
 
 A pure Java implementation of the [gocryptfs](https://github.com/rfjakob/gocryptfs)
 forward-mode on-disk format. It lets Java applications create, read and write
@@ -352,14 +352,31 @@ API only: the NIO view always uses a local `PathCipherStore` (see [section 2](#2
   register it via `ServiceLoader`, and `GocryptFs.open(URI, env, …)` will
   dispatch on the URI scheme.
 
+The URI dispatch itself is done by
+[`CipherStores`](core/src/main/java/de/sfuhrm/gocryptfs4j/store/CipherStores.java)
+(`de.sfuhrm.gocryptfs4j.store.CipherStores`), which resolves a URI to a
+`CipherStore` by matching its scheme against the registered providers:
+`CipherStores.newStore(uri, env)`. An optional
+`newStore(uri, env, ClassLoader)` overload discovers providers through a
+specific class loader, which is useful in plugin environments. The `GocryptFs`
+`URI` overloads (`open` / `create`) delegate to `CipherStores`.
+
 The bundled `file` and `memory` schemes let a store be opened by URI as well:
 
 ```java
 import java.net.URI;
 import java.util.Collections;
 
+// file:/// backs the store with a local directory.
 try (GocryptFs fs = GocryptFs.open(
         URI.create("file:///data/cipher"), Collections.emptyMap(),
+        "my-password".toCharArray())) {
+    // ...
+}
+
+// memory:/// hands out a fresh, ephemeral in-memory store.
+try (GocryptFs fs = GocryptFs.create(
+        URI.create("memory:///"), Collections.emptyMap(),
         "my-password".toCharArray())) {
     // ...
 }
@@ -377,7 +394,7 @@ The `core` module (the plain Java API):
 <dependency>
     <groupId>de.sfuhrm</groupId>
     <artifactId>gocryptfs4j-core</artifactId>
-    <version>0.6.0</version>
+    <version>0.8.0</version>
 </dependency>
 ```
 
@@ -388,7 +405,7 @@ on, and re-exports, the `core` module:
 <dependency>
     <groupId>de.sfuhrm</groupId>
     <artifactId>gocryptfs4j-nio</artifactId>
-    <version>0.6.0</version>
+    <version>0.8.0</version>
 </dependency>
 ```
 
@@ -398,7 +415,7 @@ For FIDO2 support, add the `libfido2` module as well (it depends on `core`):
 <dependency>
     <groupId>de.sfuhrm</groupId>
     <artifactId>gocryptfs4j-libfido2</artifactId>
-    <version>0.6.0</version>
+    <version>0.8.0</version>
 </dependency>
 ```
 
