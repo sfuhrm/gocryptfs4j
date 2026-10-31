@@ -259,9 +259,10 @@ The content cipher and name-encryption mode are chosen at creation time via the
 import de.sfuhrm.gocryptfs4j.config.ContentCipherType;
 import de.sfuhrm.gocryptfs4j.core.GocryptFs;
 
-// AES-256-GCM (default), XChaCha20-Poly1305 or AES-SIV:
+// AES-256-GCM (default), XChaCha20-Poly1305 or AES-SIV.
+// `store` is the CipherStore from the example above.
 try (GocryptFs fs = GocryptFs.create(
-        cipherDir, "pw".toCharArray(), false, ContentCipherType.AES_SIV)) {
+        store, "pw".toCharArray(), false, ContentCipherType.AES_SIV)) {
     // ...
 }
 ```
@@ -322,6 +323,43 @@ try (GocryptFs fs = GocryptFs.create(store, token, null, false,
 ```
 
 The options are stored in the config and reused on every open.
+
+### 5. Storage backends: local and remote
+
+`GocryptFs` is storage-agnostic: all name and content encryption happens on top
+of a [`CipherStore`](core/src/main/java/de/sfuhrm/gocryptfs4j/store/CipherStore.java)
+(`de.sfuhrm.gocryptfs4j.store`), which supplies the ciphertext side. The same
+encrypted data can therefore live on the local filesystem, a remote filesystem,
+or an object store.
+
+* **Local filesystem** — [`PathCipherStore`](core/src/main/java/de/sfuhrm/gocryptfs4j/store/local/PathCipherStore.java)
+  (`de.sfuhrm.gocryptfs4j.store.local`) backs a store with an ordinary directory
+  and is what the examples above use.
+* **In-memory** — `MapCipherStore`
+  (`de.sfuhrm.gocryptfs4j.store.memory`) is a dependency-free reference
+  implementation, useful for tests.
+* **Remote / object stores** — implement the `CipherStore` SPI (see
+  [`CipherStore`](core/src/main/java/de/sfuhrm/gocryptfs4j/store/CipherStore.java)
+  and [`CipherStoreProvider`](core/src/main/java/de/sfuhrm/gocryptfs4j/store/CipherStoreProvider.java)),
+  register it via `ServiceLoader`, and `GocryptFs.open(URI, env, …)` will
+  dispatch on the URI scheme.
+
+The bundled `file` and `memory` schemes let a store be opened by URI as well:
+
+```java
+import java.net.URI;
+import java.util.Collections;
+
+try (GocryptFs fs = GocryptFs.open(
+        URI.create("file:///data/cipher"), Collections.emptyMap(),
+        "my-password".toCharArray())) {
+    // ...
+}
+```
+
+For a step-by-step walkthrough of the full lifecycle — init, directory listing,
+access and deinit — for each approach, see
+[`docs/tutorial.md`](docs/tutorial.md).
 
 ## Maven coordinates
 
