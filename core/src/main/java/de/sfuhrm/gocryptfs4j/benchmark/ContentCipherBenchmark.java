@@ -1,6 +1,6 @@
 package de.sfuhrm.gocryptfs4j.benchmark;
 
-import de.sfuhrm.gocryptfs4j.core.ContentCipherType;
+import de.sfuhrm.gocryptfs4j.config.ContentCipherType;
 import de.sfuhrm.gocryptfs4j.crypto.AesSiv;
 import de.sfuhrm.gocryptfs4j.crypto.Constants;
 import de.sfuhrm.gocryptfs4j.crypto.ContentEnc;

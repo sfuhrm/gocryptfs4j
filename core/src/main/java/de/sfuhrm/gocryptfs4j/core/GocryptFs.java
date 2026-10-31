@@ -1,6 +1,7 @@
 package de.sfuhrm.gocryptfs4j.core;
 
 import de.sfuhrm.gocryptfs4j.config.ConfigFile;
+import de.sfuhrm.gocryptfs4j.config.ContentCipherType;
 import de.sfuhrm.gocryptfs4j.config.Fido2Params;
 import de.sfuhrm.gocryptfs4j.crypto.AesBlockCipher;
 import de.sfuhrm.gocryptfs4j.crypto.Constants;

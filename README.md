@@ -250,10 +250,10 @@ separator, as on Windows.
 ### 3. Options: content cipher and plaintext names
 
 The content cipher and name-encryption mode are chosen at creation time via the
-`ContentCipherType` enum (`de.sfuhrm.gocryptfs4j.core.ContentCipherType`):
+`ContentCipherType` enum (`de.sfuhrm.gocryptfs4j.config.ContentCipherType`):
 
 ```java
-import de.sfuhrm.gocryptfs4j.core.ContentCipherType;
+import de.sfuhrm.gocryptfs4j.config.ContentCipherType;
 import de.sfuhrm.gocryptfs4j.core.GocryptFs;
 
 // AES-256-GCM (default), XChaCha20-Poly1305 or AES-SIV:
@@ -306,7 +306,7 @@ Pass `pin=true` in the assertion options when creating the filesystem if the key
 is PIN-protected:
 
 ```java
-import de.sfuhrm.gocryptfs4j.core.ContentCipherType;
+import de.sfuhrm.gocryptfs4j.config.ContentCipherType;
 import java.util.Collections;
 
 try (GocryptFs fs = GocryptFs.create(cipherDir, token, null, false,
