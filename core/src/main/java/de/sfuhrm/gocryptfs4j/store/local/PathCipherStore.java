@@ -33,8 +33,8 @@ import java.util.Set;
  * construction time: when the filesystem provides {@link SecureDirectoryStream}
  * support, every operation is delegated to a {@link SecurePathStore} that
  * resolves paths component-by-component without following symlinks; otherwise a
- * plain {@link PlainPathStore} is used, which only rejects symlinks at the
- * final component.</p>
+ * plain {@link PlainPathStore} is used, which still confines every path to the
+ * root directory and rejects symlinks at the final component.</p>
  */
 public final class PathCipherStore implements CipherStore {
 
@@ -67,7 +67,7 @@ public final class PathCipherStore implements CipherStore {
     PathCipherStore(Path root, SecureDirectoryStream<Path> secureRoot) {
         this.root = Objects.requireNonNull(root, "root").toAbsolutePath().normalize();
         this.delegate = new SecurePathStore(
-                new PlainPathStore(this.root.toString()), this.root, secureRoot);
+                new PlainPathStore(this.root), this.root, secureRoot);
     }
 
     /**
@@ -75,7 +75,7 @@ public final class PathCipherStore implements CipherStore {
      * filesystem supports it, otherwise the plain path-based store.
      */
     private static CipherStore createDelegate(Path root) {
-        PlainPathStore plain = new PlainPathStore(root.toString());
+        PlainPathStore plain = new PlainPathStore(root);
         SecureDirectoryStream<Path> secureRoot = openSecureRoot(root);
         return secureRoot == null ? plain : new SecurePathStore(plain, root, secureRoot);
     }

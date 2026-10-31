@@ -36,45 +36,54 @@ import java.util.Set;
 
 /**
  * A {@link CipherStore} over the local filesystem that resolves every name as
- * an ordinary path, without any extra protection against symlinks in
- * intermediate directories. This is the fallback backing of
- * {@link PathCipherStore} for filesystems that do not support
- * {@link java.nio.file.SecureDirectoryStream}; on such filesystems
- * {@link SecurePathStore} decorates this class to add that protection.
+ * an ordinary path relative to the store root, rejecting any name that resolves
+ * outside the root. This is the fallback backing of {@link PathCipherStore} for
+ * filesystems that do not support {@link java.nio.file.SecureDirectoryStream};
+ * on such filesystems {@link SecurePathStore} decorates this class to add
+ * symlink protection for intermediate directories.
  */
 final class PlainPathStore implements CipherStore {
 
-    /** The root name, the absolute root directory path as a string. */
-    private final String rootName;
+    /** The absolute, normalized ciphertext root directory. */
+    private final Path root;
 
     /**
      * Creates a store over the given ciphertext root.
      *
-     * @param rootName the absolute root directory path
+     * @param root the ciphertext root directory
      */
-    PlainPathStore(String rootName) {
-        this.rootName = rootName;
+    PlainPathStore(Path root) {
+        this.root = Objects.requireNonNull(root, "root").toAbsolutePath().normalize();
     }
 
     @Override
     public String root() {
-        return rootName;
+        return root.toString();
     }
 
     /**
-     * Converts a ciphertext name into a {@link Path}.
+     * Resolves a ciphertext name to a path within the root directory.
      *
-     * @param name the ciphertext name (an absolute path string)
-     * @return the corresponding path
+     * @param name the ciphertext name (an absolute path, or one relative to the root)
+     * @return the resolved, normalized absolute path
+     * @throws IOException if the name resolves outside the root directory
      */
-    private static Path path(String name) {
-        return Paths.get(name);
+    private Path resolve(String name) throws IOException {
+        Path p = Paths.get(name);
+        if (!p.isAbsolute()) {
+            p = root.resolve(p);
+        }
+        p = p.normalize();
+        if (!p.startsWith(root)) {
+            throw new IOException("path outside root: " + name);
+        }
+        return p;
     }
 
     @Override
     public byte[] readSmall(String name, int maxBytes) throws IOException {
         Objects.requireNonNull(name, "name");
-        Path p = path(name);
+        Path p = resolve(name);
         if (!Files.exists(p, LinkOption.NOFOLLOW_LINKS)) {
             throw new NoSuchFileException(p.toString());
         }
@@ -98,7 +107,7 @@ final class PlainPathStore implements CipherStore {
     public void writeSmall(String name, byte[] data, boolean overwrite) throws IOException {
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(data, "data");
-        Path p = path(name);
+        Path p = resolve(name);
         if (overwrite) {
             Files.write(p, data, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
                     StandardOpenOption.WRITE);
@@ -111,7 +120,7 @@ final class PlainPathStore implements CipherStore {
     public void writeConfig(String name, byte[] data, boolean overwrite) throws IOException {
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(data, "data");
-        Path p = path(name).toAbsolutePath();
+        Path p = resolve(name);
         Path dir = p.getParent();
         if (dir == null) {
             throw new IOException("cannot determine parent directory of " + p);
@@ -156,7 +165,7 @@ final class PlainPathStore implements CipherStore {
     @Override
     public CipherNode stat(String name) throws IOException {
         Objects.requireNonNull(name, "name");
-        Path p = path(name);
+        Path p = resolve(name);
         BasicFileAttributes attrs = Files.readAttributes(p, BasicFileAttributes.class,
                 LinkOption.NOFOLLOW_LINKS);
         return node(basename(p), attrs);
@@ -165,7 +174,7 @@ final class PlainPathStore implements CipherStore {
     @Override
     public List<CipherNode> list(String dir) throws IOException {
         Objects.requireNonNull(dir, "dir");
-        Path d = path(dir);
+        Path d = resolve(dir);
         List<CipherNode> out = new ArrayList<>();
         try (DirectoryStream<Path> ds = Files.newDirectoryStream(d)) {
             for (Path p : ds) {
@@ -214,27 +223,27 @@ final class PlainPathStore implements CipherStore {
     @Override
     public void createFile(String name) throws IOException {
         Objects.requireNonNull(name, "name");
-        Files.createFile(path(name));
+        Files.createFile(resolve(name));
     }
 
     @Override
     public void mkdir(String name) throws IOException {
         Objects.requireNonNull(name, "name");
-        Files.createDirectory(path(name));
+        Files.createDirectory(resolve(name));
     }
 
     @Override
     public void delete(String name) throws IOException {
         Objects.requireNonNull(name, "name");
-        Files.delete(path(name));
+        Files.delete(resolve(name));
     }
 
     @Override
     public void rename(String from, String to, boolean replaceExisting) throws IOException {
         Objects.requireNonNull(from, "from");
         Objects.requireNonNull(to, "to");
-        Path src = path(from);
-        Path dst = path(to);
+        Path src = resolve(from);
+        Path dst = resolve(to);
         if (replaceExisting) {
             // Replace atomically where the filesystem supports it. A plain
             // REPLACE_EXISTING move falls back to unlink(dst)+rename(2) (or a
@@ -256,13 +265,13 @@ final class PlainPathStore implements CipherStore {
     public void createSymlink(String name, String target) throws IOException {
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(target, "target");
-        Files.createSymbolicLink(path(name), Paths.get(target));
+        Files.createSymbolicLink(resolve(name), Paths.get(target));
     }
 
     @Override
     public String readSymlink(String name) throws IOException {
         Objects.requireNonNull(name, "name");
-        return Files.readSymbolicLink(path(name)).toString();
+        return Files.readSymbolicLink(resolve(name)).toString();
     }
 
     @Override
@@ -270,7 +279,7 @@ final class PlainPathStore implements CipherStore {
                          @Nullable FileTime lastAccessTime, @Nullable FileTime creationTime)
             throws IOException {
         Objects.requireNonNull(name, "name");
-        BasicFileAttributeView view = Files.getFileAttributeView(path(name),
+        BasicFileAttributeView view = Files.getFileAttributeView(resolve(name),
                 BasicFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
         if (view == null) {
             throw new IOException("basic attribute view not supported");
@@ -281,7 +290,7 @@ final class PlainPathStore implements CipherStore {
     @Override
     public CipherChannel open(String name, boolean writable) throws IOException {
         Objects.requireNonNull(name, "name");
-        Path p = path(name);
+        Path p = resolve(name);
         // Do not follow symlinks so a symlink swapped into the ciphertext
         // directory cannot redirect the read/write to an arbitrary file.
         FileChannel ch = writable
@@ -294,13 +303,14 @@ final class PlainPathStore implements CipherStore {
     @Override
     public void checkAccess(String name, AccessMode... modes) throws IOException {
         Objects.requireNonNull(name, "name");
-        path(name).getFileSystem().provider().checkAccess(path(name), modes);
+        Path p = resolve(name);
+        p.getFileSystem().provider().checkAccess(p, modes);
     }
 
     @Override
     public @Nullable PosixFileAttributes posixAttributes(String name) throws IOException {
         Objects.requireNonNull(name, "name");
-        PosixFileAttributeView view = Files.getFileAttributeView(path(name),
+        PosixFileAttributeView view = Files.getFileAttributeView(resolve(name),
                 PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
         return view == null ? null : view.readAttributes();
     }
@@ -334,8 +344,8 @@ final class PlainPathStore implements CipherStore {
      * @return the POSIX attribute view
      * @throws UnsupportedOperationException if the backing filesystem has no POSIX support
      */
-    private PosixFileAttributeView posixView(String name) {
-        PosixFileAttributeView view = Files.getFileAttributeView(path(name),
+    private PosixFileAttributeView posixView(String name) throws IOException {
+        PosixFileAttributeView view = Files.getFileAttributeView(resolve(name),
                 PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
         if (view == null) {
             throw new UnsupportedOperationException(

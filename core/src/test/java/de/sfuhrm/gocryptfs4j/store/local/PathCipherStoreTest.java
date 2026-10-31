@@ -115,25 +115,34 @@ class PathCipherStoreTest {
     }
 
     @Test
-    void renameReplaceExistingAcrossFileStoresFallsBackGracefully() throws Exception {
+    void renameRejectsTargetOutsideRoot() throws Exception {
         Path dir = Files.createDirectory(tmp.resolve("cipher"));
         PathCipherStore store = new PathCipherStore(dir);
-
-        Path otherFs = Paths.get("/dev/shm");
-        assumeTrue(Files.isDirectory(otherFs) && Files.isWritable(otherFs),
-                "/dev/shm is not a writable directory");
-        assumeTrue(!Files.getFileStore(dir).equals(Files.getFileStore(otherFs)),
-                "/dev/shm is not a distinct file store");
-
         Path src = dir.resolve("src");
         Files.write(src, "source".getBytes(StandardCharsets.UTF_8));
-        Path dst = Files.createTempFile(otherFs, "gocryptfs4j-", ".dst");
-        Files.write(dst, "target".getBytes(StandardCharsets.UTF_8));
+        Path outside = tmp.resolve("outside");
+        Files.write(outside, "target".getBytes(StandardCharsets.UTF_8));
 
-        store.rename(src.toString(), dst.toString(), true);
+        assertThrows(IOException.class,
+                () -> store.rename(src.toString(), outside.toString(), true));
 
-        assertArrayEquals("source".getBytes(StandardCharsets.UTF_8), Files.readAllBytes(dst));
-        assertTrue(Files.notExists(src), "source must be moved away");
+        assertArrayEquals("source".getBytes(StandardCharsets.UTF_8), Files.readAllBytes(src));
+        assertArrayEquals("target".getBytes(StandardCharsets.UTF_8), Files.readAllBytes(outside));
+    }
+
+    @Test
+    void rejectsPathOutsideRoot() throws Exception {
+        Path dir = Files.createDirectory(tmp.resolve("cipher"));
+        Path sibling = Files.createDirectory(tmp.resolve("sibling"));
+        Files.write(sibling.resolve("secret"), "secret".getBytes(StandardCharsets.UTF_8));
+        PathCipherStore store = new PathCipherStore(dir);
+
+        assertThrows(IOException.class,
+                () -> store.readSmall(sibling.resolve("secret").toString(), 100));
+        assertThrows(IOException.class,
+                () -> store.stat(dir.resolve("..").resolve("sibling").resolve("secret").toString()));
+        assertThrows(IOException.class,
+                () -> store.createFile(dir.resolve("..").resolve("evil").toString()));
     }
 
     @Test

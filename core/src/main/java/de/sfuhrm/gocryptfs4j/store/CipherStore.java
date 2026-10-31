@@ -31,6 +31,14 @@ import java.util.Set;
  * internally (for example a bucket and prefix). A store is not required to be
  * hierarchical; a flat object store may encode the path in each object's key.</p>
  *
+ * <p>For a hierarchical (filesystem-backed) store the root directory is a
+ * security boundary. Such implementations must reject any name that resolves
+ * outside the root &mdash; whether lexically, through a {@code ..} component or
+ * an absolute path elsewhere, or through symbolic links &mdash; by throwing
+ * {@link IOException}. {@code GocryptFs} only ever passes names derived from
+ * {@link #root()}, so this is a defense-in-depth guarantee, not something a
+ * correct caller relies on.</p>
+ *
  * <p>Implementations should be safe for concurrent use by a single
  * {@code GocryptFs} instance. A {@link CipherStore} is {@link AutoCloseable};
  * whether {@link #close()} releases external resources (for example network
