@@ -13,4 +13,6 @@ module de.sfuhrm.gocryptfs4j.core {
     exports de.sfuhrm.gocryptfs4j.core;
     exports de.sfuhrm.gocryptfs4j.fido2;
     exports de.sfuhrm.gocryptfs4j.benchmark;
+    exports de.sfuhrm.gocryptfs4j.store;
+    exports de.sfuhrm.gocryptfs4j.store.local;
 }

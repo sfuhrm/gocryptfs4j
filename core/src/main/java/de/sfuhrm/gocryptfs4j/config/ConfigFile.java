@@ -160,7 +160,19 @@ public final class ConfigFile {
      */
     public static ConfigFile load(Path path) throws IOException {
         Objects.requireNonNull(path, "path");
-        byte[] bytes = IoUtil.readBounded(path, Constants.CONFIG_MAX_SIZE);
+        return load(IoUtil.readBounded(path, Constants.CONFIG_MAX_SIZE));
+    }
+
+    /**
+     * Parses and validates a {@code gocryptfs.conf} from its raw bytes.
+     *
+     * @param bytes the raw config file content
+     * @return the parsed config file
+     * @throws IOException if the content is malformed or unsupported
+     * @throws NullPointerException if {@code bytes} is {@code null}
+     */
+    public static ConfigFile load(byte[] bytes) throws IOException {
+        Objects.requireNonNull(bytes, "bytes");
         String json = new String(bytes, StandardCharsets.UTF_8);
         ConfigFile cf;
         try {
@@ -848,6 +860,16 @@ public final class ConfigFile {
     }
 
     /**
+     * Serializes this config as JSON with a trailing newline.
+     *
+     * @return the JSON bytes
+     */
+    public byte[] toBytes() {
+        String json = GSON.toJson(this) + "\n";
+        return json.getBytes(StandardCharsets.UTF_8);
+    }
+
+    /**
      * Writes the config as JSON (with a trailing newline) to {@code path},
      * failing if the file already exists.
      *
@@ -876,8 +898,7 @@ public final class ConfigFile {
      */
     public void writeTo(Path path, boolean overwrite) throws IOException {
         Objects.requireNonNull(path, "path");
-        String json = GSON.toJson(this) + "\n";
-        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+        byte[] bytes = toBytes();
 
         Path absolute = path.toAbsolutePath();
         Path dir = absolute.getParent();

@@ -88,8 +88,12 @@ public final class GocryptFsFileSystem extends FileSystem {
      * @return the backing file store, or {@code null} if it cannot be determined
      */
     private static @Nullable FileStore fileStore(GocryptFs core) {
+        Path root = core.cipherRoot();
+        if (root == null) {
+            return null;
+        }
         try {
-            return Files.getFileStore(core.cipherRoot());
+            return Files.getFileStore(root);
         } catch (IOException e) {
             return null;
         }

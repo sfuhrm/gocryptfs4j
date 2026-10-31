@@ -10,9 +10,8 @@ import java.nio.ByteBuffer;
 import java.nio.channels.ClosedChannelException;
 import java.nio.channels.FileChannel;
 import java.nio.channels.NonWritableChannelException;
+import java.nio.channels.SeekableByteChannel;
 import java.nio.channels.WritableByteChannel;
-import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.security.GeneralSecurityException;
 import java.util.Arrays;
 import java.util.Objects;
@@ -34,7 +33,7 @@ public final class CipherFile implements AutoCloseable {
     private static final int MAX_BULK_BYTES = 256 * 1024;
 
     /** The underlying cipher file channel. */
-    private final FileChannel channel;
+    private final SeekableByteChannel channel;
 
     /** Whether the channel was opened for writing. */
     private final boolean writable;
@@ -79,7 +78,7 @@ public final class CipherFile implements AutoCloseable {
      * @param enc      the content-encryption helper
      * @param writable whether the channel permits writes
      */
-    private CipherFile(FileChannel channel, ContentEnc enc, boolean writable) {
+    private CipherFile(SeekableByteChannel channel, ContentEnc enc, boolean writable) {
         this.channel = channel;
         this.enc = enc;
         this.writable = writable;
@@ -94,7 +93,7 @@ public final class CipherFile implements AutoCloseable {
      * @param channel the underlying file channel
      * @param enc     the content-encryption helper
      */
-    private CipherFile(FileChannel channel, ContentEnc enc) {
+    private CipherFile(SeekableByteChannel channel, ContentEnc enc) {
         this(channel, enc, true);
     }
 
@@ -117,25 +116,18 @@ public final class CipherFile implements AutoCloseable {
     }
 
     /**
-     * Opens a cipher-side file for random access.
+     * Opens a cipher-side file for random access over an already-open channel.
      *
-     * @param cipherPath the ciphertext-side file path
-     * @param enc        the content-encryption helper (determines the cipher)
-     * @param writable   whether the file should be opened for writing
+     * @param channel  the underlying channel
+     * @param enc      the content-encryption helper (determines the cipher)
+     * @param writable whether the file should be opened for writing
      * @return the opened cipher file
-     * @throws IOException on filesystem errors
-     * @throws NullPointerException if {@code cipherPath} or {@code enc} is {@code null}
+     * @throws NullPointerException if {@code channel} or {@code enc} is {@code null}
      */
-    static CipherFile open(Path cipherPath, ContentEnc enc, boolean writable) throws IOException {
-        Objects.requireNonNull(cipherPath, "cipherPath");
+    static CipherFile open(SeekableByteChannel channel, ContentEnc enc, boolean writable) {
+        Objects.requireNonNull(channel, "channel");
         Objects.requireNonNull(enc, "enc");
-        FileChannel ch;
-        if (writable) {
-            ch = FileChannel.open(cipherPath, StandardOpenOption.READ, StandardOpenOption.WRITE);
-        } else {
-            ch = FileChannel.open(cipherPath, StandardOpenOption.READ);
-        }
-        return new CipherFile(ch, enc, writable);
+        return new CipherFile(channel, enc, writable);
     }
 
     /**
@@ -487,13 +479,12 @@ public final class CipherFile implements AutoCloseable {
     private byte[] readCipherRange(long offset, int length) throws IOException {
         byte[] buf = new byte[length];
         ByteBuffer bb = ByteBuffer.wrap(buf);
-        long pos = offset;
+        channel.position(offset);
         while (bb.hasRemaining()) {
-            int n = channel.read(bb, pos);
+            int n = channel.read(bb);
             if (n < 0) {
                 break;
             }
-            pos += n;
         }
         if (bb.position() == 0) {
             return EMPTY;
@@ -513,13 +504,12 @@ public final class CipherFile implements AutoCloseable {
      */
     private int readCipherRange(long offset, byte[] buf, int length) throws IOException {
         ByteBuffer bb = ByteBuffer.wrap(buf, 0, length);
-        long pos = offset;
+        channel.position(offset);
         while (bb.hasRemaining()) {
-            int n = channel.read(bb, pos);
+            int n = channel.read(bb);
             if (n < 0) {
                 break;
             }
-            pos += n;
         }
         return bb.position();
     }
@@ -546,9 +536,9 @@ public final class CipherFile implements AutoCloseable {
      */
     private void writeCipherRange(long offset, byte[] data, int dataOff, int dataLen) throws IOException {
         ByteBuffer bb = ByteBuffer.wrap(data, dataOff, dataLen);
-        long pos = offset;
+        channel.position(offset);
         while (bb.hasRemaining()) {
-            pos += channel.write(bb, pos);
+            channel.write(bb);
         }
     }
 
@@ -643,7 +633,9 @@ public final class CipherFile implements AutoCloseable {
      */
     public synchronized void force(boolean metaData) throws IOException {
         flushWriteBack();
-        channel.force(metaData);
+        if (channel instanceof FileChannel) {
+            ((FileChannel) channel).force(metaData);
+        }
     }
 
     /**

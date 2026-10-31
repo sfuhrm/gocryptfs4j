@@ -66,10 +66,10 @@ final class GocryptFsPosixFileAttributeView implements PosixFileAttributeView {
     /**
      * Returns the backing cipher path of the target.
      *
-     * @return the cipher path
+     * @return the cipher path, or {@code null} for a non-local backing store
      * @throws IOException on filesystem errors
      */
-    private Path cipherPath() throws IOException {
+    private @Nullable Path cipherPath() throws IOException {
         return fs.core().stat(target().toString()).cipherPath();
     }
 
@@ -81,7 +81,12 @@ final class GocryptFsPosixFileAttributeView implements PosixFileAttributeView {
      * @throws UnsupportedOperationException if the backing filesystem has no POSIX support
      */
     private PosixFileAttributeView delegate() throws IOException {
-        return GocryptFsProvider.posixView(cipherPath());
+        Path cipherPath = cipherPath();
+        if (cipherPath == null) {
+            throw new UnsupportedOperationException(
+                    "POSIX attributes are not supported by the backing store");
+        }
+        return GocryptFsProvider.posixView(cipherPath);
     }
 
     /**

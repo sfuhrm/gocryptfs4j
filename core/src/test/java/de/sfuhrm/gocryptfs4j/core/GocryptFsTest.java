@@ -1,6 +1,8 @@
 package de.sfuhrm.gocryptfs4j.core;
 
 import de.sfuhrm.gocryptfs4j.config.ConfigFile;
+import de.sfuhrm.gocryptfs4j.store.CipherStore;
+import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -20,6 +22,7 @@ import java.nio.file.NotDirectoryException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
@@ -131,11 +134,11 @@ class GocryptFsTest {
         Arrays.fill(masterKey, (byte) 0x5a);
 
         Constructor<GocryptFs> constructor = GocryptFs.class.getDeclaredConstructor(
-                Path.class, ConfigFile.class, byte[].class);
+                CipherStore.class, ConfigFile.class, byte[].class);
         constructor.setAccessible(true);
 
         InvocationTargetException thrown = assertThrows(InvocationTargetException.class,
-                () -> constructor.newInstance(tmp, config, masterKey));
+                () -> constructor.newInstance(new PathCipherStore(tmp), config, masterKey));
 
         assertInstanceOf(IllegalArgumentException.class, thrown.getCause());
         assertArrayEquals(new byte[16], masterKey,
@@ -457,12 +460,12 @@ class GocryptFsTest {
             fs.createFile("/d1/sub/f.txt");
             fs.write("/d1/sub/f.txt", 0, "deep".getBytes(StandardCharsets.UTF_8));
 
-            Path oldCipher = fs.resolve("/a.txt").cipherPath;
+            Path oldCipher = Paths.get(fs.resolve("/a.txt").cipherPath);
             fs.rename("/a.txt", "/d2/b.txt", false);
             assertFalse(Files.exists(oldCipher, LinkOption.NOFOLLOW_LINKS));
             assertEquals("data", new String(fs.readAll("/d2/b.txt"), StandardCharsets.UTF_8));
 
-            Path dirCipher = fs.resolve("/d1").cipherPath;
+            Path dirCipher = Paths.get(fs.resolve("/d1").cipherPath);
             fs.rename("/d1", "/d2/moved", false);
             assertFalse(Files.exists(dirCipher, LinkOption.NOFOLLOW_LINKS));
             assertEquals("deep", new String(
@@ -483,7 +486,7 @@ class GocryptFsTest {
         try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
             fs.createFile("/" + longA);
             fs.mkdir("/dir");
-            Path oldCipher = fs.resolve("/" + longA).cipherPath;
+            Path oldCipher = Paths.get(fs.resolve("/" + longA).cipherPath);
             Path oldName = oldCipher.resolveSibling(oldCipher.getFileName() + ".name");
             assertTrue(Files.exists(oldName));
 
@@ -491,7 +494,7 @@ class GocryptFsTest {
 
             assertFalse(Files.exists(oldCipher, LinkOption.NOFOLLOW_LINKS));
             assertFalse(Files.exists(oldName), "old long-name file must be removed");
-            Path newCipher = fs.resolve("/dir/" + longB).cipherPath;
+            Path newCipher = Paths.get(fs.resolve("/dir/" + longB).cipherPath);
             assertTrue(Files.exists(newCipher));
             assertTrue(Files.exists(newCipher.resolveSibling(newCipher.getFileName() + ".name")));
             assertEquals(1, fs.list("/dir").size());
@@ -535,7 +538,7 @@ class GocryptFsTest {
             fs.mkdir("/dir");
             fs.createFile("/dir/keep.txt");
 
-            Path cipherPath = fs.resolve("/dir").cipherPath;
+            Path cipherPath = Paths.get(fs.resolve("/dir").cipherPath);
             Path dirIV = cipherPath.resolve("gocryptfs.diriv");
             assertTrue(Files.exists(dirIV), "a fresh directory has a gocryptfs.diriv");
 
@@ -568,7 +571,7 @@ class GocryptFsTest {
             fs.mkdir("/" + name);
 
             GocryptFs.Resolved r = fs.resolve("/" + name);
-            Path cipherPath = r.cipherPath;
+            Path cipherPath = Paths.get(r.cipherPath);
             Path nameFile = cipherPath.resolveSibling(r.cipherName + ".name");
             assertTrue(Files.exists(nameFile), "long directories use a .name support file");
 
@@ -653,7 +656,7 @@ class GocryptFsTest {
         try (GocryptFs fs = GocryptFs.create(cipherDir, "pw".toCharArray())) {
             fs.createFile("/ok.txt");
 
-            byte[] iv = fs.readDirIV(fs.cipherRoot());
+            byte[] iv = fs.readDirIV(fs.cipherRoot().toString());
             Path root = fs.cipherRoot();
             String[] unsafe = {"..", ".", "a/b", "a\\b", "a\u0000b"};
             for (String name : unsafe) {

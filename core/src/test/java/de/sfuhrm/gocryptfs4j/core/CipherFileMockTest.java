@@ -9,18 +9,16 @@ import org.junit.jupiter.api.Test;
 import java.lang.reflect.Constructor;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.channels.SeekableByteChannel;
 import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -36,7 +34,7 @@ class CipherFileMockTest {
     }
 
     private static CipherFile newCipherFile(FileChannel channel, ContentEnc enc) throws Exception {
-        Constructor<CipherFile> ctor = CipherFile.class.getDeclaredConstructor(FileChannel.class, ContentEnc.class);
+        Constructor<CipherFile> ctor = CipherFile.class.getDeclaredConstructor(SeekableByteChannel.class, ContentEnc.class);
         ctor.setAccessible(true);
         return ctor.newInstance(channel, enc);
     }
@@ -48,7 +46,7 @@ class CipherFileMockTest {
         CipherFile cf = newCipherFile(channel, enc());
 
         assertEquals(-1, cf.read(ByteBuffer.allocate(100), 0));
-        verify(channel, never()).read(any(ByteBuffer.class), anyLong());
+        verify(channel, never()).read(any(ByteBuffer.class));
     }
 
     @Test
@@ -56,14 +54,20 @@ class CipherFileMockTest {
         byte[] header = FileHeader.random().pack();
         FileChannel channel = mock(FileChannel.class);
         when(channel.size()).thenReturn((long) header.length);
-        when(channel.read(any(ByteBuffer.class), anyLong())).thenAnswer(inv -> {
+        long[] pos = {0};
+        when(channel.position(anyLong())).thenAnswer(inv -> {
+            pos[0] = inv.getArgument(0);
+            return channel;
+        });
+        when(channel.read(any(ByteBuffer.class))).thenAnswer(inv -> {
             ByteBuffer bb = inv.getArgument(0);
-            long pos = inv.getArgument(1);
-            if (pos >= header.length) {
+            long p = pos[0];
+            if (p >= header.length) {
                 return -1;
             }
-            int n = (int) Math.min(2, header.length - pos);
-            bb.put(header, (int) pos, n);
+            int n = (int) Math.min(2, header.length - p);
+            bb.put(header, (int) p, n);
+            pos[0] = p + n;
             return n;
         });
         CipherFile cf = newCipherFile(channel, enc());
@@ -71,17 +75,23 @@ class CipherFileMockTest {
         byte[] id = cf.fileId();
 
         assertArrayEquals(FileHeader.parse(header).id(), id);
-        verify(channel, atLeast(2)).read(any(ByteBuffer.class), anyLong());
+        verify(channel, atLeast(2)).read(any(ByteBuffer.class));
     }
 
     @Test
     void writeHandlesPartialChannelWrites() throws Exception {
         FileChannel channel = mock(FileChannel.class);
         when(channel.size()).thenReturn(0L);
-        when(channel.write(any(ByteBuffer.class), anyLong())).thenAnswer(inv -> {
+        long[] pos = {0};
+        when(channel.position(anyLong())).thenAnswer(inv -> {
+            pos[0] = inv.getArgument(0);
+            return channel;
+        });
+        when(channel.write(any(ByteBuffer.class))).thenAnswer(inv -> {
             ByteBuffer bb = inv.getArgument(0);
             int n = Math.min(2, bb.remaining());
             bb.position(bb.position() + n);
+            pos[0] += n;
             return n;
         });
         ContentEnc enc = enc();
@@ -92,7 +102,7 @@ class CipherFileMockTest {
         int written = cf.write(ByteBuffer.wrap(data), 0);
 
         assertEquals(data.length, written);
-        verify(channel, atLeast(2)).write(any(ByteBuffer.class), anyLong());
+        verify(channel, atLeast(2)).write(any(ByteBuffer.class));
         assertEquals(Constants.HEADER_ID_LEN, cf.fileId().length);
     }
 
@@ -119,14 +129,24 @@ class CipherFileMockTest {
 
         FileChannel channel = mock(FileChannel.class);
         when(channel.size()).thenReturn((long) whole.length);
-        when(channel.read(any(ByteBuffer.class), anyLong())).thenAnswer(inv -> {
+        long[] pos = {0};
+        int[] readsAtHeaderLen = {0};
+        when(channel.position(anyLong())).thenAnswer(inv -> {
+            pos[0] = inv.getArgument(0);
+            return channel;
+        });
+        when(channel.read(any(ByteBuffer.class))).thenAnswer(inv -> {
             ByteBuffer bb = inv.getArgument(0);
-            long pos = inv.getArgument(1);
-            if (pos >= whole.length) {
+            long p = pos[0];
+            if (p == Constants.HEADER_LEN) {
+                readsAtHeaderLen[0]++;
+            }
+            if (p >= whole.length) {
                 return -1;
             }
-            int n = (int) Math.min(bb.remaining(), whole.length - pos);
-            bb.put(whole, (int) pos, n);
+            int n = (int) Math.min(bb.remaining(), whole.length - p);
+            bb.put(whole, (int) p, n);
+            pos[0] = p + n;
             return n;
         });
 
@@ -138,6 +158,6 @@ class CipherFileMockTest {
 
         // The first write read-modify-writes block 0; the next two merge into
         // the one-block write-back buffer without re-reading it.
-        verify(channel, times(1)).read(any(ByteBuffer.class), eq((long) Constants.HEADER_LEN));
+        assertEquals(1, readsAtHeaderLen[0]);
     }
 }

@@ -10,9 +10,11 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.channels.WritableByteChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -36,6 +38,13 @@ class CipherFileTest {
         return p;
     }
 
+    private static CipherFile open(Path p, ContentEnc enc, boolean writable) throws IOException {
+        FileChannel ch = writable
+                ? FileChannel.open(p, StandardOpenOption.READ, StandardOpenOption.WRITE)
+                : FileChannel.open(p, StandardOpenOption.READ);
+        return CipherFile.open(ch, enc, writable);
+    }
+
     private static byte[] readAll(CipherFile cf) throws IOException {
         long size = cf.plainSize();
         ByteArrayOutputStream out = new ByteArrayOutputStream((int) size);
@@ -55,7 +64,7 @@ class CipherFileTest {
 
     @Test
     void emptyFileHasNullFileIdAndZeroSize() throws IOException {
-        try (CipherFile cf = CipherFile.open(newFile(), enc(), true)) {
+        try (CipherFile cf = open(newFile(), enc(), true)) {
             assertNull(cf.fileId());
             assertEquals(0, cf.plainSize());
         }
@@ -66,7 +75,7 @@ class CipherFileTest {
         byte[] data = new byte[100];
         Arrays.fill(data, (byte) 0x5a);
 
-        try (CipherFile cf = CipherFile.open(newFile(), enc(), true)) {
+        try (CipherFile cf = open(newFile(), enc(), true)) {
             assertEquals(data.length, cf.write(ByteBuffer.wrap(data), 0));
             assertEquals(data.length, cf.plainSize());
             assertArrayEquals(data, readAll(cf));
@@ -81,7 +90,7 @@ class CipherFileTest {
             data[i] = (byte) (i * 31);
         }
 
-        try (CipherFile cf = CipherFile.open(newFile(), enc, true)) {
+        try (CipherFile cf = open(newFile(), enc, true)) {
             assertEquals(data.length, cf.write(ByteBuffer.wrap(data), 0));
             assertArrayEquals(data, readAll(cf));
         }
@@ -94,7 +103,7 @@ class CipherFileTest {
         byte[] data = new byte[bulk * 2 + 123];
         Arrays.fill(data, (byte) 0x11);
 
-        try (CipherFile cf = CipherFile.open(newFile(), enc, true)) {
+        try (CipherFile cf = open(newFile(), enc, true)) {
             cf.write(ByteBuffer.wrap(data), 0);
 
             ByteBuffer dst = ByteBuffer.allocate(data.length);
@@ -111,7 +120,7 @@ class CipherFileTest {
         byte[] data = new byte[bulk * 2 + 123];
         Arrays.fill(data, (byte) 0x22);
 
-        try (CipherFile cf = CipherFile.open(newFile(), enc, true)) {
+        try (CipherFile cf = open(newFile(), enc, true)) {
             assertEquals(bulk, cf.write(ByteBuffer.wrap(data), 0));
         }
     }
@@ -119,7 +128,7 @@ class CipherFileTest {
     @Test
     void readBeyondEofReturnsMinusOne() throws IOException {
         byte[] data = new byte[100];
-        try (CipherFile cf = CipherFile.open(newFile(), enc(), true)) {
+        try (CipherFile cf = open(newFile(), enc(), true)) {
             cf.write(ByteBuffer.wrap(data), 0);
 
             assertEquals(-1, cf.read(ByteBuffer.allocate(10), 100));
@@ -129,7 +138,7 @@ class CipherFileTest {
 
     @Test
     void readWithEmptyBufferReturnsZero() throws IOException {
-        try (CipherFile cf = CipherFile.open(newFile(), enc(), true)) {
+        try (CipherFile cf = open(newFile(), enc(), true)) {
             cf.write(ByteBuffer.wrap(new byte[100]), 0);
             assertEquals(0, cf.read(ByteBuffer.allocate(0), 0));
         }
@@ -141,7 +150,7 @@ class CipherFileTest {
         byte[] data = new byte[(int) enc.plainBS];
         Arrays.fill(data, (byte) 0x11);
 
-        try (CipherFile cf = CipherFile.open(newFile(), enc, true)) {
+        try (CipherFile cf = open(newFile(), enc, true)) {
             cf.write(ByteBuffer.wrap(data), 0);
 
             byte[] replacement = "REPLACED".getBytes();
@@ -164,7 +173,7 @@ class CipherFileTest {
         byte[] data = new byte[100];
         Arrays.fill(data, (byte) 0x77);
 
-        try (CipherFile cf = CipherFile.open(newFile(), enc, true)) {
+        try (CipherFile cf = open(newFile(), enc, true)) {
             long offset = 5000;
             cf.write(ByteBuffer.wrap(data), offset);
 
@@ -184,7 +193,7 @@ class CipherFileTest {
         byte[] data = new byte[100];
         Arrays.fill(data, (byte) 0x22);
 
-        try (CipherFile cf = CipherFile.open(newFile(), enc(), true)) {
+        try (CipherFile cf = open(newFile(), enc(), true)) {
             cf.write(ByteBuffer.wrap(data), 0);
             cf.truncate(1000);
 
@@ -206,7 +215,7 @@ class CipherFileTest {
         byte[] data = new byte[(int) (enc.plainBS + 500)];
         Arrays.fill(data, (byte) 0x33);
 
-        try (CipherFile cf = CipherFile.open(newFile(), enc, true)) {
+        try (CipherFile cf = open(newFile(), enc, true)) {
             cf.write(ByteBuffer.wrap(data), 0);
             cf.truncate(1000);
 
@@ -222,7 +231,7 @@ class CipherFileTest {
     @Test
     void truncateToZero() throws IOException {
         byte[] data = new byte[100];
-        try (CipherFile cf = CipherFile.open(newFile(), enc(), true)) {
+        try (CipherFile cf = open(newFile(), enc(), true)) {
             cf.write(ByteBuffer.wrap(data), 0);
             cf.truncate(0);
 
@@ -235,7 +244,7 @@ class CipherFileTest {
     void fileIdIsRandomAndPersistsAcrossReopen() throws IOException {
         Path p = newFile();
         byte[] id;
-        try (CipherFile cf = CipherFile.open(p, enc(), true)) {
+        try (CipherFile cf = open(p, enc(), true)) {
             cf.write(ByteBuffer.wrap(new byte[100]), 0);
             id = cf.fileId();
         }
@@ -250,7 +259,7 @@ class CipherFileTest {
         }
         assertTrue(nonZero, "file id should not be all-zero");
 
-        try (CipherFile cf = CipherFile.open(p, enc(), false)) {
+        try (CipherFile cf = open(p, enc(), false)) {
             assertArrayEquals(id, cf.fileId());
         }
     }
@@ -264,7 +273,7 @@ class CipherFileTest {
         }
 
         Path p = newFile();
-        try (CipherFile cf = CipherFile.open(p, enc, true)) {
+        try (CipherFile cf = open(p, enc, true)) {
             // Write in irregular chunks to exercise streaming across blocks.
             try (WritableByteChannel ch = cf.writeChannel(0)) {
                 int pos = 0;
@@ -276,14 +285,14 @@ class CipherFileTest {
             }
         }
 
-        try (CipherFile cf = CipherFile.open(p, enc, false)) {
+        try (CipherFile cf = open(p, enc, false)) {
             assertArrayEquals(data, readAll(cf));
         }
     }
 
     @Test
     void writeChannelRejectsNegativeOffset() throws IOException {
-        try (CipherFile cf = CipherFile.open(newFile(), enc(), true)) {
+        try (CipherFile cf = open(newFile(), enc(), true)) {
             assertThrows(IllegalArgumentException.class, () -> cf.writeChannel(-1));
         }
     }
@@ -294,7 +303,7 @@ class CipherFileTest {
         byte[] data = new byte[256];
         Arrays.fill(data, (byte) 0x5a);
 
-        try (CipherFile cf = CipherFile.open(newFile(), enc, true)) {
+        try (CipherFile cf = open(newFile(), enc, true)) {
             cf.write(ByteBuffer.wrap(data), 0);
 
             byte[] id = cf.fileId();
@@ -315,7 +324,7 @@ class CipherFileTest {
         byte[] data = new byte[(int) (enc.plainBS * 2 + 100)];
         Arrays.fill(data, (byte) 0x42);
 
-        CipherFile cf = CipherFile.open(newFile(), enc, true);
+        CipherFile cf = open(newFile(), enc, true);
         cf.write(ByteBuffer.wrap(data), 0);
         // A partial write forces a read-modify-write through the single-block
         // scratch buffers; readAll populates the bulk buffers.
@@ -357,10 +366,10 @@ class CipherFileTest {
     @Test
     void readOnlyRejectsWrite() throws IOException {
         Path p = newFile();
-        try (CipherFile cf = CipherFile.open(p, enc(), true)) {
+        try (CipherFile cf = open(p, enc(), true)) {
             cf.write(ByteBuffer.wrap(new byte[10]), 0);
         }
-        try (CipherFile cf = CipherFile.open(p, enc(), false)) {
+        try (CipherFile cf = open(p, enc(), false)) {
             assertThrows(Exception.class, () -> cf.write(ByteBuffer.wrap(new byte[10]), 0));
         }
     }

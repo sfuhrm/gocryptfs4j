@@ -841,6 +841,15 @@ public final class GocryptFsProvider extends FileSystemProvider {
         Objects.requireNonNull(path, "path");
         GocryptFsPath p = resolve(path);
         Path cipherPath = core(p).stat(p.toString()).cipherPath();
+        if (cipherPath == null) {
+            // Non-local backing store: only existence can be verified, which
+            // stat() above already did.
+            if (modes.length != 0) {
+                throw new UnsupportedOperationException(
+                        "access checks are not supported by the backing store");
+            }
+            return;
+        }
         cipherPath.getFileSystem().provider().checkAccess(cipherPath, modes);
     }
 
@@ -1142,7 +1151,12 @@ public final class GocryptFsProvider extends FileSystemProvider {
      */
     static GocryptFsPosixFileAttributes readPosixAttributes(GocryptFsPath path) throws IOException {
         DirEntry entry = core(path).stat(path.toString());
-        PosixFileAttributes delegate = posixView(entry.cipherPath()).readAttributes();
+        Path cipherPath = entry.cipherPath();
+        if (cipherPath == null) {
+            throw new UnsupportedOperationException(
+                    "POSIX attributes are not supported by the backing store");
+        }
+        PosixFileAttributes delegate = posixView(cipherPath).readAttributes();
         return new GocryptFsPosixFileAttributes(new GocryptFsFileAttributes(entry),
                 delegate.owner(), delegate.group(), delegate.permissions());
     }

@@ -29,8 +29,8 @@ public final class DirEntry {
     /** The ciphertext (encrypted) name, or {@code null} for the root. */
     private final @Nullable String cipherName;
 
-    /** The ciphertext-side path. */
-    private final Path cipherPath;
+    /** The ciphertext-side path, or {@code null} for a non-local store. */
+    private final @Nullable Path cipherPath;
 
     /** The entry kind. */
     private final Kind kind;
@@ -55,21 +55,22 @@ public final class DirEntry {
      *
      * @param plainName        the plaintext (decrypted) name
      * @param cipherName       the ciphertext (encrypted) name, or {@code null} for the root
-     * @param cipherPath       the ciphertext-side path
+     * @param cipherPath       the ciphertext-side path, or {@code null} for a non-local store
      * @param kind             the entry kind
      * @param size             the plaintext size in bytes
      * @param lastModifiedTime the last-modified time
      * @param lastAccessTime   the last-access time
      * @param creationTime     the creation time
      * @param fileKey          the file key, or {@code null} if there is none
-     * @throws NullPointerException if {@code plainName}, {@code cipherPath} or {@code kind} is {@code null}
+     * @throws NullPointerException if {@code plainName} or {@code kind} is {@code null}
      */
-    public DirEntry(String plainName, @Nullable String cipherName, Path cipherPath, Kind kind, long size,
+    public DirEntry(String plainName, @Nullable String cipherName, @Nullable Path cipherPath,
+                    Kind kind, long size,
                     FileTime lastModifiedTime, FileTime lastAccessTime, FileTime creationTime,
                     @Nullable Object fileKey) {
         this.plainName = Objects.requireNonNull(plainName, "plainName");
         this.cipherName = cipherName;
-        this.cipherPath = Objects.requireNonNull(cipherPath, "cipherPath");
+        this.cipherPath = cipherPath;
         this.kind = Objects.requireNonNull(kind, "kind");
         this.size = size;
         this.lastModifiedTime = lastModifiedTime;
@@ -97,11 +98,12 @@ public final class DirEntry {
     }
 
     /**
-     * Returns the ciphertext-side path.
+     * Returns the ciphertext-side path, or {@code null} when this entry is
+     * backed by a store that is not a local filesystem.
      *
-     * @return the ciphertext-side path
+     * @return the ciphertext-side path, or {@code null}
      */
-    public Path cipherPath() {
+    public @Nullable Path cipherPath() {
         return cipherPath;
     }
 

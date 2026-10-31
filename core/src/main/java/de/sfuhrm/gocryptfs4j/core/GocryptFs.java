@@ -7,10 +7,12 @@ import de.sfuhrm.gocryptfs4j.crypto.Constants;
 import de.sfuhrm.gocryptfs4j.crypto.ContentEnc;
 import de.sfuhrm.gocryptfs4j.crypto.Eme;
 import de.sfuhrm.gocryptfs4j.crypto.Hkdf;
-import de.sfuhrm.gocryptfs4j.crypto.IoUtil;
 import de.sfuhrm.gocryptfs4j.crypto.Keys;
 import de.sfuhrm.gocryptfs4j.fido2.Fido2Token;
 import de.sfuhrm.gocryptfs4j.names.NameTransform;
+import de.sfuhrm.gocryptfs4j.store.CipherNode;
+import de.sfuhrm.gocryptfs4j.store.CipherStore;
+import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
 import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
@@ -18,20 +20,16 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
+import java.nio.channels.SeekableByteChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryNotEmptyException;
-import java.nio.file.DirectoryStream;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileSystemException;
 import java.nio.file.Files;
-import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.NotDirectoryException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.file.StandardOpenOption;
-import java.nio.file.attribute.BasicFileAttributeView;
-import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
@@ -48,6 +46,12 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>Provides traversal, listing and content read/write on the plaintext view of
  * an encrypted directory using the gocryptfs forward-mode on-disk format.</p>
+ *
+ * <p>This class operates on a {@link CipherStore}, which supplies the
+ * ciphertext-side storage. The {@code open}/{@code create} factory methods that
+ * take a {@link Path} use a local-filesystem store; the overloads that take a
+ * {@link CipherStore} allow the same encrypted data to be stored on a remote
+ * filesystem, object store, or any other backend.</p>
  *
  * <p>Sensitive input buffers supplied by the caller &mdash; the password
  * {@code char[]} and the raw master-key {@code byte[]} &mdash; are read but
@@ -72,8 +76,14 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class GocryptFs implements AutoCloseable {
 
-    /** The absolute, normalized ciphertext root directory. */
-    private final Path cipherRoot;
+    /** The ciphertext-side store. */
+    private final CipherStore store;
+
+    /** The ciphertext root name, as returned by {@link CipherStore#root()}. */
+    private final String rootName;
+
+    /** The local-filesystem root, or {@code null} for a non-local store. */
+    private final @Nullable Path localRoot;
 
     /** The parsed configuration file. */
     private final ConfigFile config;
@@ -99,18 +109,18 @@ public final class GocryptFs implements AutoCloseable {
     /** Whether deterministic (no per-directory IV) name encryption is used. */
     private final boolean deterministicNames;
 
-    /** Cache of per-directory IVs, keyed by cipher directory path. */
-    private final Map<Path, byte[]> dirIvCache = new ConcurrentHashMap<>();
+    /** Cache of per-directory IVs, keyed by cipher directory name. */
+    private final Map<String, byte[]> dirIvCache = new ConcurrentHashMap<>();
 
     /**
      * Creates an instance, called after the master key has been unlocked.
      *
-     * @param cipherRoot the ciphertext root directory
-     * @param config     the parsed configuration
-     * @param masterKey  the 32-byte master key
+     * @param store     the ciphertext-side store
+     * @param config    the parsed configuration
+     * @param masterKey the 32-byte master key
      */
-    private GocryptFs(Path cipherRoot, ConfigFile config, byte[] masterKey) {
-        Path root = cipherRoot.toAbsolutePath().normalize();
+    private GocryptFs(CipherStore store, ConfigFile config, byte[] masterKey) {
+        String root = store.root();
         boolean plainNames = config.plaintextNames();
         boolean dirIv = config.dirIv();
         boolean deterministic = !plainNames && !dirIv;
@@ -132,7 +142,10 @@ public final class GocryptFs implements AutoCloseable {
             NameTransform nameTransformHelper = new NameTransform(emeHelper, config.longNames(),
                     config.longNameMax(), config.raw64(), deterministic);
 
-            this.cipherRoot = root;
+            this.store = store;
+            this.rootName = root;
+            this.localRoot = store instanceof PathCipherStore
+                    ? ((PathCipherStore) store).rootPath() : null;
             this.config = config;
             this.masterKey = masterKey;
             this.plaintextNames = plainNames;
@@ -173,10 +186,28 @@ public final class GocryptFs implements AutoCloseable {
     public static GocryptFs open(Path cipherDir, char[] password) throws IOException {
         Objects.requireNonNull(cipherDir, "cipherDir");
         Objects.requireNonNull(password, "password");
-        Path confPath = cipherDir.resolve(Constants.CONF_DEFAULT_NAME);
-        ConfigFile config = ConfigFile.load(confPath);
+        return open(new PathCipherStore(cipherDir), password);
+    }
+
+    /**
+     * Opens an existing cipher store, unlocking the master key from
+     * {@code password}.
+     *
+     * @param store    the ciphertext-side store
+     * @param password the password to unlock the master key with, encoded as
+     *                 UTF-8; read but neither retained nor wiped by this class
+     * @return the opened filesystem
+     * @throws IOException if the config is missing, the password is wrong or the filesystem is corrupt
+     * @throws NullPointerException if {@code store} or {@code password} is {@code null}
+     */
+    public static GocryptFs open(CipherStore store, char[] password) throws IOException {
+        Objects.requireNonNull(store, "store");
+        Objects.requireNonNull(password, "password");
+        byte[] configBytes = store.readSmall(join(store.root(), Constants.CONF_DEFAULT_NAME),
+                Constants.CONFIG_MAX_SIZE);
+        ConfigFile config = ConfigFile.load(configBytes);
         byte[] masterKey = config.decryptMasterKey(password);
-        return new GocryptFs(cipherDir, config, masterKey);
+        return new GocryptFs(store, config, masterKey);
     }
 
     /**
@@ -205,9 +236,31 @@ public final class GocryptFs implements AutoCloseable {
             throw new IllegalArgumentException("master key must be "
                     + Constants.KEY_LEN + " bytes");
         }
-        Path confPath = cipherDir.resolve(Constants.CONF_DEFAULT_NAME);
-        ConfigFile config = ConfigFile.load(confPath);
-        return new GocryptFs(cipherDir, config, masterKey.clone());
+        return open(new PathCipherStore(cipherDir), masterKey);
+    }
+
+    /**
+     * Opens an existing cipher store using the raw 32-byte master key.
+     *
+     * @param store     the ciphertext-side store
+     * @param masterKey the 32-byte master key; cloned, so the caller's array is
+     *                  neither retained nor wiped by this class
+     * @return the opened filesystem
+     * @throws IOException if the config is missing or the filesystem is corrupt
+     * @throws NullPointerException if {@code store} or {@code masterKey} is {@code null}
+     * @throws IllegalArgumentException if {@code masterKey} is not 32 bytes long
+     */
+    public static GocryptFs open(CipherStore store, byte[] masterKey) throws IOException {
+        Objects.requireNonNull(store, "store");
+        Objects.requireNonNull(masterKey, "masterKey");
+        if (masterKey.length != Constants.KEY_LEN) {
+            throw new IllegalArgumentException("master key must be "
+                    + Constants.KEY_LEN + " bytes");
+        }
+        byte[] configBytes = store.readSmall(join(store.root(), Constants.CONF_DEFAULT_NAME),
+                Constants.CONFIG_MAX_SIZE);
+        ConfigFile config = ConfigFile.load(configBytes);
+        return new GocryptFs(store, config, masterKey.clone());
     }
 
     /**
@@ -232,8 +285,24 @@ public final class GocryptFs implements AutoCloseable {
     public static GocryptFs open(Path cipherDir, Fido2Token token) throws IOException {
         Objects.requireNonNull(cipherDir, "cipherDir");
         Objects.requireNonNull(token, "token");
-        Path confPath = cipherDir.resolve(Constants.CONF_DEFAULT_NAME);
-        ConfigFile config = ConfigFile.load(confPath);
+        return open(new PathCipherStore(cipherDir), token);
+    }
+
+    /**
+     * Opens an existing FIDO2-protected cipher store.
+     *
+     * @param store the ciphertext-side store
+     * @param token the FIDO2 token implementation to unlock the master key with
+     * @return the opened filesystem
+     * @throws IOException if the config is missing, not FIDO2-protected, or the token fails
+     * @throws NullPointerException if {@code store} or {@code token} is {@code null}
+     */
+    public static GocryptFs open(CipherStore store, Fido2Token token) throws IOException {
+        Objects.requireNonNull(store, "store");
+        Objects.requireNonNull(token, "token");
+        byte[] configBytes = store.readSmall(join(store.root(), Constants.CONF_DEFAULT_NAME),
+                Constants.CONFIG_MAX_SIZE);
+        ConfigFile config = ConfigFile.load(configBytes);
         Fido2Params params = config.fido2();
         if (!config.isFeatureFlagSet(Constants.FLAG_FIDO2) || params == null) {
             throw new IOException("filesystem is not protected by a FIDO2 token");
@@ -249,7 +318,7 @@ public final class GocryptFs implements AutoCloseable {
         byte[] secret = token.hmacSecret(credentialId, hmacSalt, assertOptions);
         try {
             byte[] masterKey = config.decryptMasterKey(secret);
-            return new GocryptFs(cipherDir, config, masterKey);
+            return new GocryptFs(store, config, masterKey);
         } catch (IOException e) {
             if (e.getCause() instanceof GeneralSecurityException) {
                 throw new IOException("FIDO2 HMAC secret did not unlock the master key "
@@ -318,26 +387,44 @@ public final class GocryptFs implements AutoCloseable {
         if (!Files.isDirectory(dir)) {
             throw new IOException("cipher dir does not exist: " + dir);
         }
-        try (DirectoryStream<Path> ds = Files.newDirectoryStream(dir)) {
-            if (ds.iterator().hasNext()) {
-                throw new IOException("cipher dir is not empty: " + dir);
-            }
+        return create(new PathCipherStore(dir), password, plaintextNames, cipherType);
+    }
+
+    /**
+     * Creates a new filesystem in the given cipher store (whose root must be
+     * empty), optionally with plaintext names and a custom content cipher.
+     *
+     * @param store          the ciphertext-side store, whose root must be empty
+     * @param password       the password to protect the master key with
+     * @param plaintextNames whether to store file names unencrypted
+     * @param cipherType     the content-encryption cipher
+     * @return the opened filesystem
+     * @throws IOException on storage errors
+     * @throws NullPointerException if {@code store}, {@code password} or {@code cipherType} is {@code null}
+     */
+    public static GocryptFs create(CipherStore store, char[] password, boolean plaintextNames,
+                                   ContentCipherType cipherType) throws IOException {
+        Objects.requireNonNull(store, "store");
+        Objects.requireNonNull(password, "password");
+        Objects.requireNonNull(cipherType, "cipherType");
+        if (!store.list(store.root()).isEmpty()) {
+            throw new IOException("cipher dir is not empty: " + store.root());
         }
         byte[] masterKey = Keys.randomBytes(Constants.KEY_LEN);
         boolean ok = false;
         try {
             ConfigFile config = ConfigFile.create(masterKey, password, plaintextNames, cipherType);
-            config.writeTo(dir.resolve(Constants.CONF_DEFAULT_NAME));
-            GocryptFs fs = new GocryptFs(dir, config, masterKey);
+            store.writeSmall(join(store.root(), Constants.CONF_DEFAULT_NAME), config.toBytes(), false);
+            GocryptFs fs = new GocryptFs(store, config, masterKey);
             try {
                 if (!plaintextNames) {
-                    fs.writeDirIV(dir);
+                    fs.writeDirIV(store.root());
                 }
                 ok = true;
                 return fs;
             } catch (IOException e) {
                 fs.close();
-                Files.deleteIfExists(dir.resolve(Constants.CONF_DEFAULT_NAME));
+                deleteIfExists(store, join(store.root(), Constants.CONF_DEFAULT_NAME));
                 throw e;
             }
         } finally {
@@ -418,15 +505,37 @@ public final class GocryptFs implements AutoCloseable {
         if (!Files.isDirectory(dir)) {
             throw new IOException("cipher dir does not exist: " + dir);
         }
-        try (DirectoryStream<Path> ds = Files.newDirectoryStream(dir)) {
-            if (ds.iterator().hasNext()) {
-                throw new IOException("cipher dir is not empty: " + dir);
-            }
+        return create(new PathCipherStore(dir), token, userName, plaintextNames, cipherType,
+                assertOptions);
+    }
+
+    /**
+     * Creates a new FIDO2-protected filesystem in the given cipher store.
+     *
+     * @param store          the ciphertext-side store, whose root must be empty
+     * @param token          the FIDO2 token implementation to protect the master key with
+     * @param userName       the user name to register the credential with, or
+     *                       {@code null} to use the base name of the store root
+     * @param plaintextNames whether to store file names unencrypted
+     * @param cipherType     the content-encryption cipher
+     * @param assertOptions  options to pass to the token assertion, or {@code null}
+     * @return the opened filesystem
+     * @throws IOException on storage errors or if the token interaction fails
+     * @throws NullPointerException if {@code store}, {@code token} or {@code cipherType} is {@code null}
+     */
+    public static GocryptFs create(CipherStore store, Fido2Token token, @Nullable String userName,
+                                   boolean plaintextNames, ContentCipherType cipherType,
+                                   @Nullable List<String> assertOptions) throws IOException {
+        Objects.requireNonNull(store, "store");
+        Objects.requireNonNull(token, "token");
+        Objects.requireNonNull(cipherType, "cipherType");
+        if (!store.list(store.root()).isEmpty()) {
+            throw new IOException("cipher dir is not empty: " + store.root());
         }
         List<String> options = assertOptions == null
                 ? Collections.<String>emptyList()
                 : new ArrayList<>(assertOptions);
-        String name = userName != null ? userName : String.valueOf(dir.getFileName());
+        String name = userName != null ? userName : baseName(store.root());
 
         byte[] credentialId = token.registerCredential(name);
         byte[] hmacSalt = Keys.randomBytes(Fido2Params.HMAC_SALT_LEN);
@@ -437,17 +546,17 @@ public final class GocryptFs implements AutoCloseable {
             try {
                 ConfigFile config = ConfigFile.create(masterKey, secret, plaintextNames, cipherType,
                         new Fido2Params(credentialId, hmacSalt, options));
-                config.writeTo(dir.resolve(Constants.CONF_DEFAULT_NAME));
-                GocryptFs fs = new GocryptFs(dir, config, masterKey);
+                store.writeSmall(join(store.root(), Constants.CONF_DEFAULT_NAME), config.toBytes(), false);
+                GocryptFs fs = new GocryptFs(store, config, masterKey);
                 try {
                     if (!plaintextNames) {
-                        fs.writeDirIV(dir);
+                        fs.writeDirIV(store.root());
                     }
                     ok = true;
                     return fs;
                 } catch (IOException e) {
                     fs.close();
-                    Files.deleteIfExists(dir.resolve(Constants.CONF_DEFAULT_NAME));
+                    deleteIfExists(store, join(store.root(), Constants.CONF_DEFAULT_NAME));
                     throw e;
                 }
             } finally {
@@ -461,12 +570,13 @@ public final class GocryptFs implements AutoCloseable {
     }
 
     /**
-     * Returns the ciphertext root directory.
+     * Returns the ciphertext root directory, or {@code null} when this
+     * filesystem is backed by a non-local store.
      *
-     * @return the ciphertext root directory
+     * @return the ciphertext root directory, or {@code null}
      */
-    public Path cipherRoot() {
-        return cipherRoot;
+    public @Nullable Path cipherRoot() {
+        return localRoot;
     }
 
     /**
@@ -528,7 +638,7 @@ public final class GocryptFs implements AutoCloseable {
     public void changePassword(char[] password) throws IOException {
         Objects.requireNonNull(password, "password");
         config.reencryptMasterKey(masterKey, password);
-        config.writeTo(cipherRoot.resolve(Constants.CONF_DEFAULT_NAME), true);
+        store.writeSmall(join(rootName, Constants.CONF_DEFAULT_NAME), config.toBytes(), true);
     }
 
     // ------------------------------------------------------------------
@@ -538,12 +648,12 @@ public final class GocryptFs implements AutoCloseable {
     /**
      * Reads the {@code gocryptfs.diriv} of {@code cipherDir}.
      *
-     * @param cipherDir the ciphertext directory
+     * @param cipherDir the ciphertext directory name
      * @return the 16-byte directory IV
      * @throws IOException on filesystem errors
      * @throws NullPointerException if {@code cipherDir} is {@code null}
      */
-    byte[] readDirIV(Path cipherDir) throws IOException {
+    byte[] readDirIV(String cipherDir) throws IOException {
         Objects.requireNonNull(cipherDir, "cipherDir");
         if (plaintextNames) {
             return new byte[Constants.DIR_IV_LEN];
@@ -555,8 +665,7 @@ public final class GocryptFs implements AutoCloseable {
         if (cached != null) {
             return cached.clone();
         }
-        Path p = cipherDir.resolve(Constants.DIR_IV_FILENAME);
-        byte[] data = IoUtil.readBounded(p, Constants.DIR_IV_LEN);
+        byte[] data = store.readSmall(join(cipherDir, Constants.DIR_IV_FILENAME), Constants.DIR_IV_LEN);
         if (data.length != Constants.DIR_IV_LEN) {
             throw new IOException("bad diriv length " + data.length + " in " + cipherDir);
         }
@@ -572,18 +681,17 @@ public final class GocryptFs implements AutoCloseable {
     /**
      * Creates a {@code gocryptfs.diriv} in {@code cipherDir}.
      *
-     * @param cipherDir the ciphertext directory
+     * @param cipherDir the ciphertext directory name
      * @throws IOException on filesystem errors
      * @throws NullPointerException if {@code cipherDir} is {@code null}
      */
-    void writeDirIV(Path cipherDir) throws IOException {
+    void writeDirIV(String cipherDir) throws IOException {
         Objects.requireNonNull(cipherDir, "cipherDir");
         if (plaintextNames || deterministicNames) {
             return;
         }
-        Path p = cipherDir.resolve(Constants.DIR_IV_FILENAME);
-        Files.write(p, Keys.randomBytes(Constants.DIR_IV_LEN),
-                StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+        store.writeSmall(join(cipherDir, Constants.DIR_IV_FILENAME), Keys.randomBytes(Constants.DIR_IV_LEN),
+                false);
         dirIvCache.remove(cipherDir);
     }
 
@@ -592,11 +700,11 @@ public final class GocryptFs implements AutoCloseable {
      *
      * @param dir the cipher directory whose subtree is no longer valid
      */
-    private void invalidateDirIvCache(Path dir) {
+    private void invalidateDirIvCache(String dir) {
         if (dirIvCache.isEmpty()) {
             return;
         }
-        dirIvCache.keySet().removeIf(k -> k.startsWith(dir));
+        dirIvCache.keySet().removeIf(k -> k.equals(dir) || k.startsWith(dir + "/"));
     }
 
     // ------------------------------------------------------------------
@@ -648,10 +756,10 @@ public final class GocryptFs implements AutoCloseable {
 
     /** Result of resolving a plaintext path to a cipher-side path. */
     static final class Resolved {
-        /** The ciphertext-side path. */
-        public final Path cipherPath;
-        /** The ciphertext-side parent directory, or {@code null} for the root. */
-        public final @Nullable Path cipherParent;
+        /** The ciphertext-side name. */
+        public final String cipherPath;
+        /** The ciphertext-side parent name, or {@code null} for the root. */
+        public final @Nullable String cipherParent;
         /** The 16-byte IV of the parent directory. */
         public final byte[] parentDirIV;
         /** The ciphertext (encrypted) name, or {@code null} for the root. */
@@ -662,13 +770,13 @@ public final class GocryptFs implements AutoCloseable {
         /**
          * Creates a resolution result.
          *
-         * @param cipherPath   the ciphertext-side path
-         * @param cipherParent the ciphertext-side parent directory, or {@code null} for the root
+         * @param cipherPath   the ciphertext-side name
+         * @param cipherParent the ciphertext-side parent name, or {@code null} for the root
          * @param parentDirIV  the 16-byte IV of the parent directory
          * @param cipherName   the ciphertext (encrypted) name, or {@code null} for the root
          * @param plainName    the plaintext (decrypted) name
          */
-        Resolved(Path cipherPath, @Nullable Path cipherParent, byte[] parentDirIV,
+        Resolved(String cipherPath, @Nullable String cipherParent, byte[] parentDirIV,
                  @Nullable String cipherName, String plainName) {
             this.cipherPath = cipherPath;
             this.cipherParent = cipherParent;
@@ -693,20 +801,20 @@ public final class GocryptFs implements AutoCloseable {
         Objects.requireNonNull(plainPath, "plainPath");
         List<String> comps = normalize(plainPath);
         checkNotControlFile(comps);
-        Path cur = cipherRoot;
+        String cur = rootName;
         byte[] curIV = readDirIV(cur);
         for (int i = 0; i < comps.size() - 1; i++) {
             String cName = cipherNameFor(comps.get(i), curIV);
-            cur = cur.resolve(cName);
+            cur = join(cur, cName);
             checkIntermediateDirectory(cur);
             curIV = readDirIV(cur);
         }
         if (comps.isEmpty()) {
-            return new Resolved(cipherRoot, null, curIV, null, "");
+            return new Resolved(rootName, null, curIV, null, "");
         }
         String plainName = comps.get(comps.size() - 1);
         String cName = cipherNameFor(plainName, curIV);
-        return new Resolved(cur.resolve(cName), cur, curIV, cName, plainName);
+        return new Resolved(join(cur, cName), cur, curIV, cName, plainName);
     }
 
     /**
@@ -723,16 +831,16 @@ public final class GocryptFs implements AutoCloseable {
             throw new IOException("invalid path: " + plainPath);
         }
         String plainName = comps.remove(comps.size() - 1);
-        Path cur = cipherRoot;
+        String cur = rootName;
         byte[] curIV = readDirIV(cur);
         for (String c : comps) {
             String cName = cipherNameFor(c, curIV);
-            cur = cur.resolve(cName);
+            cur = join(cur, cName);
             checkIntermediateDirectory(cur);
             curIV = readDirIV(cur);
         }
         String cName = cipherNameFor(plainName, curIV);
-        return new Resolved(cur.resolve(cName), cur, curIV, cName, plainName);
+        return new Resolved(join(cur, cName), cur, curIV, cName, plainName);
     }
 
     /**
@@ -745,9 +853,9 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NotDirectoryException if {@code dir} is not a directory or is a
      *                               symbolic link
      */
-    private static void checkIntermediateDirectory(Path dir) throws IOException {
-        if (!Files.isDirectory(dir, LinkOption.NOFOLLOW_LINKS)) {
-            throw new NotDirectoryException(dir.toString());
+    private void checkIntermediateDirectory(String dir) throws IOException {
+        if (!store.stat(dir).isDirectory()) {
+            throw new NotDirectoryException(dir);
         }
     }
 
@@ -818,84 +926,78 @@ public final class GocryptFs implements AutoCloseable {
     /**
      * Lists a cipher-side directory, decrypting names and resolving long names.
      *
-     * @param cipherDir the ciphertext directory
+     * @param cipherDir the ciphertext directory name
      * @param iv        the 16-byte directory IV
      * @return the directory entries
      * @throws IOException on filesystem errors
      * @throws NullPointerException if {@code cipherDir} or {@code iv} is {@code null}
      */
-    List<DirEntry> listCipherDir(Path cipherDir, byte[] iv) throws IOException {
+    List<DirEntry> listCipherDir(String cipherDir, byte[] iv) throws IOException {
         Objects.requireNonNull(cipherDir, "cipherDir");
         Objects.requireNonNull(iv, "iv");
         List<DirEntry> out = new ArrayList<>();
-        boolean isRoot = cipherDir.equals(cipherRoot);
-        try (DirectoryStream<Path> ds = Files.newDirectoryStream(cipherDir)) {
-            for (Path p : ds) {
-                String cName = p.getFileName().toString();
-                if (cName.equals(Constants.DIR_IV_FILENAME)) {
+        boolean isRoot = cipherDir.equals(rootName);
+        for (CipherNode node : store.list(cipherDir)) {
+            String cName = node.name();
+            if (cName.equals(Constants.DIR_IV_FILENAME)) {
+                continue;
+            }
+            if (isRoot && cName.equals(Constants.CONF_DEFAULT_NAME)) {
+                continue;
+            }
+
+            String cipherName = cName;
+            if (!plaintextNames) {
+                int t = nameTransform.nameType(cName);
+                if (t == NameTransform.LONG_NAME_FILENAME) {
                     continue;
                 }
-                if (isRoot && cName.equals(Constants.CONF_DEFAULT_NAME)) {
-                    continue;
-                }
-
-                BasicFileAttributes attrs = Files.readAttributes(p, BasicFileAttributes.class,
-                        LinkOption.NOFOLLOW_LINKS);
-
-                String cipherName = cName;
-                if (!plaintextNames) {
-                    int t = nameTransform.nameType(cName);
-                    if (t == NameTransform.LONG_NAME_FILENAME) {
+                if (t == NameTransform.LONG_NAME_CONTENT) {
+                    String nameFile = join(cipherDir, cName + Constants.LONG_NAME_SUFFIX);
+                    byte[] nameBytes;
+                    try {
+                        nameBytes = store.readSmall(nameFile, Constants.LONG_NAME_CONTENT_MAX_SIZE);
+                    } catch (IOException e) {
+                        // A missing, oversized or otherwise unreadable .name
+                        // file is treated like a corrupt name: skip it.
                         continue;
                     }
-                    if (t == NameTransform.LONG_NAME_CONTENT) {
-                        Path nameFile = cipherDir.resolve(cName + Constants.LONG_NAME_SUFFIX);
-                        byte[] nameBytes;
-                        try {
-                            nameBytes = IoUtil.readBounded(nameFile,
-                                    Constants.LONG_NAME_CONTENT_MAX_SIZE);
-                        } catch (IOException e) {
-                            // A missing, oversized or otherwise unreadable .name
-                            // file is treated like a corrupt name: skip it.
-                            continue;
-                        }
-                        cipherName = new String(nameBytes, StandardCharsets.UTF_8);
-                    }
+                    cipherName = new String(nameBytes, StandardCharsets.UTF_8);
                 }
-
-                String plainName;
-                try {
-                    plainName = plainNameFor(cipherName, iv);
-                } catch (IllegalArgumentException e) {
-                    // Skip undecryptable (corrupt) entries.
-                    continue;
-                }
-                if (!isValidPlainName(plainName)) {
-                    // Skip names that would escape the directory in plaintext
-                    // space (e.g. "..", "/" or a NUL byte).
-                    continue;
-                }
-
-                DirEntry.Kind kind;
-                long size;
-                if (attrs.isDirectory()) {
-                    kind = DirEntry.Kind.DIRECTORY;
-                    size = 0;
-                } else if (attrs.isSymbolicLink()) {
-                    kind = DirEntry.Kind.SYMLINK;
-                    size = readSymlink(p).getBytes(StandardCharsets.UTF_8).length;
-                } else if (attrs.isRegularFile()) {
-                    kind = DirEntry.Kind.FILE;
-                    size = contentEnc.cipherSizeToPlainSize(attrs.size());
-                } else {
-                    kind = DirEntry.Kind.OTHER;
-                    size = attrs.size();
-                }
-
-                out.add(new DirEntry(plainName, cName, p, kind, size,
-                        attrs.lastModifiedTime(), attrs.lastAccessTime(),
-                        attrs.creationTime(), attrs.fileKey()));
             }
+
+            String plainName;
+            try {
+                plainName = plainNameFor(cipherName, iv);
+            } catch (IllegalArgumentException e) {
+                // Skip undecryptable (corrupt) entries.
+                continue;
+            }
+            if (!isValidPlainName(plainName)) {
+                // Skip names that would escape the directory in plaintext
+                // space (e.g. "..", "/" or a NUL byte).
+                continue;
+            }
+
+            DirEntry.Kind kind;
+            long size;
+            if (node.isDirectory()) {
+                kind = DirEntry.Kind.DIRECTORY;
+                size = 0;
+            } else if (node.isSymbolicLink()) {
+                kind = DirEntry.Kind.SYMLINK;
+                size = readSymlink(join(cipherDir, cName)).getBytes(StandardCharsets.UTF_8).length;
+            } else if (node.isRegularFile()) {
+                kind = DirEntry.Kind.FILE;
+                size = contentEnc.cipherSizeToPlainSize(node.size());
+            } else {
+                kind = DirEntry.Kind.OTHER;
+                size = node.size();
+            }
+
+            out.add(new DirEntry(plainName, cName, localPath(join(cipherDir, cName)), kind, size,
+                    node.lastModifiedTime(), node.lastAccessTime(),
+                    node.creationTime(), node.fileKey()));
         }
         return out;
     }
@@ -928,14 +1030,14 @@ public final class GocryptFs implements AutoCloseable {
     /**
      * Reads and decrypts the target of a cipher-side symlink.
      *
-     * @param cipherSymlink the ciphertext symlink path
+     * @param cipherSymlink the ciphertext symlink name
      * @return the plaintext symlink target
      * @throws IOException on filesystem or decryption errors
      * @throws NullPointerException if {@code cipherSymlink} is {@code null}
      */
-    String readSymlink(Path cipherSymlink) throws IOException {
+    String readSymlink(String cipherSymlink) throws IOException {
         Objects.requireNonNull(cipherSymlink, "cipherSymlink");
-        String target = Files.readSymbolicLink(cipherSymlink).toString();
+        String target = store.readSymlink(cipherSymlink);
         if (plaintextNames) {
             return target;
         }
@@ -991,27 +1093,26 @@ public final class GocryptFs implements AutoCloseable {
      * @throws IOException on filesystem errors
      */
     private DirEntry statResolved(Resolved r) throws IOException {
-        BasicFileAttributes attrs = Files.readAttributes(r.cipherPath, BasicFileAttributes.class,
-                LinkOption.NOFOLLOW_LINKS);
+        CipherNode node = store.stat(r.cipherPath);
         DirEntry.Kind kind;
         long size;
-        if (attrs.isDirectory()) {
+        if (node.isDirectory()) {
             kind = DirEntry.Kind.DIRECTORY;
             size = 0;
-        } else if (attrs.isSymbolicLink()) {
+        } else if (node.isSymbolicLink()) {
             kind = DirEntry.Kind.SYMLINK;
             size = readSymlink(r.cipherPath).getBytes(StandardCharsets.UTF_8).length;
-        } else if (attrs.isRegularFile()) {
+        } else if (node.isRegularFile()) {
             kind = DirEntry.Kind.FILE;
-            size = contentEnc.cipherSizeToPlainSize(attrs.size());
+            size = contentEnc.cipherSizeToPlainSize(node.size());
         } else {
             kind = DirEntry.Kind.OTHER;
-            size = attrs.size();
+            size = node.size();
         }
         String plainName = r.plainName.isEmpty() ? "/" : r.plainName;
-        return new DirEntry(plainName, r.cipherName, r.cipherPath, kind, size,
-                attrs.lastModifiedTime(), attrs.lastAccessTime(), attrs.creationTime(),
-                attrs.fileKey());
+        return new DirEntry(plainName, r.cipherName, localPath(r.cipherPath), kind, size,
+                node.lastModifiedTime(), node.lastAccessTime(), node.creationTime(),
+                node.fileKey());
     }
 
     /**
@@ -1026,21 +1127,22 @@ public final class GocryptFs implements AutoCloseable {
     public CipherFile openCipherFile(String plainFile, boolean writable) throws IOException {
         Objects.requireNonNull(plainFile, "plainFile");
         Resolved r = resolve(plainFile);
-        return openCipherFile(r.cipherPath, writable);
+        return openCipherFileByName(r.cipherPath, writable);
     }
 
     /**
      * Opens a cipher-side file for random access.
      *
-     * @param cipherFile the ciphertext file path
+     * @param cipherFile the ciphertext file name
      * @param writable   whether to open for writing
      * @return the opened cipher file
      * @throws IOException on filesystem errors
      * @throws NullPointerException if {@code cipherFile} is {@code null}
      */
-    CipherFile openCipherFile(Path cipherFile, boolean writable) throws IOException {
+    CipherFile openCipherFileByName(String cipherFile, boolean writable) throws IOException {
         Objects.requireNonNull(cipherFile, "cipherFile");
-        return CipherFile.open(cipherFile, contentEnc, writable);
+        SeekableByteChannel channel = store.open(cipherFile, writable);
+        return CipherFile.open(channel, contentEnc, writable);
     }
 
     /**
@@ -1054,7 +1156,7 @@ public final class GocryptFs implements AutoCloseable {
     public long size(String plainFile) throws IOException {
         Objects.requireNonNull(plainFile, "plainFile");
         Resolved r = resolve(plainFile);
-        try (CipherFile cf = openCipherFile(r.cipherPath, false)) {
+        try (CipherFile cf = openCipherFileByName(r.cipherPath, false)) {
             return cf.plainSize();
         }
     }
@@ -1070,7 +1172,7 @@ public final class GocryptFs implements AutoCloseable {
     public byte[] readAll(String plainFile) throws IOException {
         Objects.requireNonNull(plainFile, "plainFile");
         Resolved r = resolve(plainFile);
-        try (CipherFile cf = openCipherFile(r.cipherPath, false)) {
+        try (CipherFile cf = openCipherFileByName(r.cipherPath, false)) {
             long size = cf.plainSize();
             if (size > Integer.MAX_VALUE) {
                 throw new IOException("file too large to read into memory: " + size);
@@ -1099,7 +1201,7 @@ public final class GocryptFs implements AutoCloseable {
     public InputStream openRead(String plainFile) throws IOException {
         Objects.requireNonNull(plainFile, "plainFile");
         Resolved r = resolve(plainFile);
-        CipherFile cf = openCipherFile(r.cipherPath, false);
+        CipherFile cf = openCipherFileByName(r.cipherPath, false);
         try {
             return new CipherInputStream(cf);
         } catch (RuntimeException e) {
@@ -1123,7 +1225,7 @@ public final class GocryptFs implements AutoCloseable {
     public OutputStream openWrite(String plainFile) throws IOException {
         Objects.requireNonNull(plainFile, "plainFile");
         Resolved r = resolve(plainFile);
-        CipherFile cf = openCipherFile(r.cipherPath, true);
+        CipherFile cf = openCipherFileByName(r.cipherPath, true);
         try {
             cf.truncate(0);
             return Channels.newOutputStream(cf.writeChannel(0));
@@ -1150,7 +1252,7 @@ public final class GocryptFs implements AutoCloseable {
             throw new IllegalArgumentException("negative offset: " + offset);
         }
         Resolved r = resolve(plainFile);
-        try (CipherFile cf = openCipherFile(r.cipherPath, true)) {
+        try (CipherFile cf = openCipherFileByName(r.cipherPath, true)) {
             ByteBuffer buf = ByteBuffer.wrap(data);
             long pos = offset;
             while (buf.hasRemaining()) {
@@ -1178,7 +1280,7 @@ public final class GocryptFs implements AutoCloseable {
             throw new IllegalArgumentException("negative size: " + newSize);
         }
         Resolved r = resolve(plainFile);
-        try (CipherFile cf = openCipherFile(r.cipherPath, true)) {
+        try (CipherFile cf = openCipherFileByName(r.cipherPath, true)) {
             cf.truncate(newSize);
         }
     }
@@ -1198,12 +1300,7 @@ public final class GocryptFs implements AutoCloseable {
             throws IOException {
         Objects.requireNonNull(plainPath, "plainPath");
         Resolved r = resolve(plainPath);
-        BasicFileAttributeView view = Files.getFileAttributeView(r.cipherPath,
-                BasicFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
-        if (view == null) {
-            throw new IOException("basic attribute view not supported");
-        }
-        view.setTimes(lastModifiedTime, lastAccessTime, createTime);
+        store.setTimes(r.cipherPath, lastModifiedTime, lastAccessTime, createTime);
     }
 
     /**
@@ -1340,7 +1437,7 @@ public final class GocryptFs implements AutoCloseable {
         Objects.requireNonNull(plainFile, "plainFile");
         Resolved r = resolveParent(plainFile);
         prepareLongName(r);
-        Files.createFile(r.cipherPath);
+        store.createFile(r.cipherPath);
     }
 
     /**
@@ -1354,13 +1451,13 @@ public final class GocryptFs implements AutoCloseable {
         Objects.requireNonNull(plainDir, "plainDir");
         Resolved r = resolveParent(plainDir);
         prepareLongName(r);
-        Files.createDirectory(r.cipherPath);
+        store.mkdir(r.cipherPath);
         try {
             writeDirIV(r.cipherPath);
         } catch (IOException | RuntimeException e) {
             try {
-                Files.deleteIfExists(r.cipherPath.resolve(Constants.DIR_IV_FILENAME));
-                Files.deleteIfExists(r.cipherPath);
+                deleteIfExists(store, join(r.cipherPath, Constants.DIR_IV_FILENAME));
+                store.delete(r.cipherPath);
                 removeLongName(r);
             } catch (IOException cleanup) {
                 e.addSuppressed(cleanup);
@@ -1379,21 +1476,19 @@ public final class GocryptFs implements AutoCloseable {
     public void delete(String plainPath) throws IOException {
         Objects.requireNonNull(plainPath, "plainPath");
         Resolved r = resolve(plainPath);
-        if (Files.isDirectory(r.cipherPath, LinkOption.NOFOLLOW_LINKS)) {
+        if (store.stat(r.cipherPath).isDirectory()) {
             // Verify the directory is empty apart from its gocryptfs.diriv
             // before removing anything, so that rejecting a non-empty delete
             // leaves the directory (and its diriv) intact.
-            try (DirectoryStream<Path> ds = Files.newDirectoryStream(r.cipherPath)) {
-                for (Path entry : ds) {
-                    if (!entry.getFileName().toString().equals(Constants.DIR_IV_FILENAME)) {
-                        throw new DirectoryNotEmptyException(r.cipherPath.toString());
-                    }
+            for (CipherNode entry : store.list(r.cipherPath)) {
+                if (!entry.name().equals(Constants.DIR_IV_FILENAME)) {
+                    throw new DirectoryNotEmptyException(r.cipherPath);
                 }
             }
-            Files.deleteIfExists(r.cipherPath.resolve(Constants.DIR_IV_FILENAME));
-            Files.delete(r.cipherPath);
+            deleteIfExists(store, join(r.cipherPath, Constants.DIR_IV_FILENAME));
+            store.delete(r.cipherPath);
         } else {
-            Files.delete(r.cipherPath);
+            store.delete(r.cipherPath);
         }
         removeLongName(r);
         invalidateDirIvCache(r.cipherPath);
@@ -1408,12 +1503,12 @@ public final class GocryptFs implements AutoCloseable {
      */
     private void removeLongName(Resolved r) throws IOException {
         String cipherName = r.cipherName;
-        Path cipherParent = r.cipherParent;
+        String cipherParent = r.cipherParent;
         if (plaintextNames || cipherName == null || cipherParent == null
                 || !nameTransform.isLongContent(cipherName)) {
             return;
         }
-        Files.deleteIfExists(cipherParent.resolve(cipherName + Constants.LONG_NAME_SUFFIX));
+        deleteIfExists(store, join(cipherParent, cipherName + Constants.LONG_NAME_SUFFIX));
     }
 
     /**
@@ -1447,7 +1542,7 @@ public final class GocryptFs implements AutoCloseable {
             throw new IOException("cannot rename the root directory");
         }
         Resolved from = resolveParent(plainFrom);
-        if (!Files.exists(from.cipherPath, LinkOption.NOFOLLOW_LINKS)) {
+        if (!exists(from.cipherPath)) {
             throw new NoSuchFileException(plainFrom);
         }
         if (fromComps.equals(toComps)) {
@@ -1458,7 +1553,7 @@ public final class GocryptFs implements AutoCloseable {
             throw new IOException("cannot move " + plainFrom + " into its own subtree: " + plainTo);
         }
         Resolved to = resolveParent(plainTo);
-        if (Files.exists(to.cipherPath, LinkOption.NOFOLLOW_LINKS)) {
+        if (exists(to.cipherPath)) {
             if (!replaceExisting) {
                 throw new FileAlreadyExistsException(plainTo);
             }
@@ -1466,7 +1561,7 @@ public final class GocryptFs implements AutoCloseable {
             delete(plainTo);
         }
         prepareLongName(to);
-        Files.move(from.cipherPath, to.cipherPath);
+        store.rename(from.cipherPath, to.cipherPath, false);
         removeLongName(from);
         invalidateDirIvCache(from.cipherPath);
         invalidateDirIvCache(to.cipherPath);
@@ -1490,7 +1585,7 @@ public final class GocryptFs implements AutoCloseable {
             byte[] enc = contentEnc.encryptBlock(target.getBytes(StandardCharsets.UTF_8), 0, null);
             cTarget = nameTransform.b64Encode(enc);
         }
-        Files.createSymbolicLink(r.cipherPath, Paths.get(cTarget));
+        store.createSymlink(r.cipherPath, cTarget);
     }
 
     /**
@@ -1501,17 +1596,16 @@ public final class GocryptFs implements AutoCloseable {
      */
     private void prepareLongName(Resolved r) throws IOException {
         String cipherName = r.cipherName;
-        Path cipherParent = r.cipherParent;
+        String cipherParent = r.cipherParent;
         if (plaintextNames || cipherName == null || cipherParent == null
                 || !nameTransform.isLongContent(cipherName)) {
             return;
         }
-        Path nameFile = cipherParent.resolve(cipherName + Constants.LONG_NAME_SUFFIX);
+        String nameFile = join(cipherParent, cipherName + Constants.LONG_NAME_SUFFIX);
         byte[] fullCipher = nameTransform.encryptName(r.plainName, r.parentDirIV)
                 .getBytes(StandardCharsets.UTF_8);
         try {
-            Files.write(nameFile, fullCipher,
-                    StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+            store.writeSmall(nameFile, fullCipher, false);
         } catch (FileAlreadyExistsException ignored) {
             // Allowed on rename/overwrite.
         }
@@ -1523,5 +1617,75 @@ public final class GocryptFs implements AutoCloseable {
         eme.wipe();
         contentEnc.wipe();
         Keys.wipe(masterKey);
+    }
+
+    // ------------------------------------------------------------------
+    // Helpers
+    // ------------------------------------------------------------------
+
+    /**
+     * Joins a ciphertext parent name and a single child name with a slash.
+     *
+     * @param parent the parent name
+     * @param child  the child name
+     * @return the joined name
+     */
+    private static String join(String parent, String child) {
+        return parent.isEmpty() ? child : parent + "/" + child;
+    }
+
+    /**
+     * Returns the base name of a ciphertext root name (the part after the last
+     * {@code '/'} or {@code '\'}), used as the default FIDO2 registration user
+     * name.
+     *
+     * @param root the root name
+     * @return the base name
+     */
+    private static String baseName(String root) {
+        int idx = Math.max(root.lastIndexOf('/'), root.lastIndexOf('\\'));
+        return idx < 0 ? root : root.substring(idx + 1);
+    }
+
+    /**
+     * Deletes a ciphertext entry, ignoring an already-absent entry.
+     *
+     * @param store the store
+     * @param name  the ciphertext path to delete
+     * @throws IOException on storage errors other than the entry being absent
+     */
+    private static void deleteIfExists(CipherStore store, String name) throws IOException {
+        try {
+            store.delete(name);
+        } catch (NoSuchFileException ignored) {
+            // Already gone.
+        }
+    }
+
+    /**
+     * Returns whether a ciphertext entry exists.
+     *
+     * @param name the ciphertext path
+     * @return {@code true} if the entry exists
+     * @throws IOException on storage errors other than the entry being absent
+     */
+    private boolean exists(String name) throws IOException {
+        try {
+            store.stat(name);
+            return true;
+        } catch (NoSuchFileException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Returns the local filesystem {@link Path} for a ciphertext name, or
+     * {@code null} when this filesystem is not backed by the local filesystem.
+     *
+     * @param name the ciphertext name
+     * @return the path, or {@code null}
+     */
+    private @Nullable Path localPath(String name) {
+        return localRoot == null ? null : Paths.get(name);
     }
 }
