@@ -639,6 +639,21 @@ public final class GocryptFs implements AutoCloseable {
     }
 
     /**
+     * Encrypts a plaintext name under {@code dirIV} without validation and
+     * without long-name hashing. Used by tests to inject corrupt ciphertext
+     * entries (for example a name containing a NUL byte) that the public API
+     * refuses to create, so that listing robustness can be exercised.
+     *
+     * @param plainName the plaintext name
+     * @param dirIV     the 16-byte directory IV
+     * @return the full (unhashed) ciphertext name
+     * @throws NullPointerException if {@code plainName} or {@code dirIV} is {@code null}
+     */
+    String encryptNameRaw(String plainName, byte[] dirIV) {
+        return nameManager.encryptName(plainName, dirIV);
+    }
+
+    /**
      * Reads the {@code gocryptfs.diriv} of {@code cipherDir}.
      *
      * @param cipherDir the ciphertext directory name

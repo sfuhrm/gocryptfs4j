@@ -134,4 +134,16 @@ class DirectoryManagerTest {
         assertEquals(longName, entries.get(0).plainName());
         assertEquals(DirEntry.Kind.FILE, entries.get(0).kind());
     }
+
+    @Test
+    void listCipherDirIncludesBackslashNames() throws IOException {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.fileManager.createFile("/a\\b");
+
+        byte[] iv = h.directoryManager.readDirIV(h.store.root());
+        List<DirEntry> entries = h.directoryManager.listCipherDir(h.store.root(), iv);
+
+        assertEquals(1, entries.size());
+        assertEquals("a\\b", entries.get(0).plainName());
+    }
 }

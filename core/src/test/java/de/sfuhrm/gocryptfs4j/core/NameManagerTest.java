@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.nio.file.FileSystemException;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -60,6 +61,7 @@ class NameManagerTest {
         assertTrue(NameManager.isValidPlainName("a"));
         assertTrue(NameManager.isValidPlainName("hello world.txt"));
         assertTrue(NameManager.isValidPlainName("über"));
+        assertTrue(NameManager.isValidPlainName("a\\b"));
     }
 
     @Test
@@ -68,8 +70,44 @@ class NameManagerTest {
         assertFalse(NameManager.isValidPlainName("."));
         assertFalse(NameManager.isValidPlainName(".."));
         assertFalse(NameManager.isValidPlainName("a/b"));
-        assertFalse(NameManager.isValidPlainName("a\\b"));
         assertFalse(NameManager.isValidPlainName("a\u0000b"));
+    }
+
+    @Test
+    void cipherNameForRejectsNulByte() throws IOException {
+        ManagerHarness h = ManagerHarness.encrypted();
+        byte[] iv = h.directoryManager.readDirIV(h.store.root());
+
+        assertThrows(FileSystemException.class,
+                () -> h.nameManager.cipherNameFor("a\u0000b", iv));
+    }
+
+    @Test
+    void cipherNameForAllowsBackslash() throws IOException {
+        ManagerHarness h = ManagerHarness.encrypted();
+        byte[] iv = h.directoryManager.readDirIV(h.store.root());
+
+        String cipher = h.nameManager.cipherNameFor("a\\b", iv);
+
+        assertEquals("a\\b", h.nameManager.plainNameFor(cipher, iv));
+    }
+
+    @Test
+    void nonUtf8NameRoundTripsThroughCipherText() throws IOException {
+        ManagerHarness h = ManagerHarness.encrypted();
+        byte[] iv = h.directoryManager.readDirIV(h.store.root());
+
+        // Raw name bytes that are not valid UTF-8, as gocryptfs would store them.
+        byte[] raw = new byte[] { (byte) 0xC3, 0x28, (byte) 0xA0, (byte) 0xA1, (byte) 0xFF };
+        String escaped = NameTransform.decodeName(raw);
+
+        // The escaped form preserves the bytes losslessly instead of mangling them.
+        assertArrayEquals(raw, NameTransform.encodeName(escaped));
+
+        String cipher = h.nameManager.encryptName(escaped, iv);
+        assertEquals(escaped, h.nameManager.plainNameFor(cipher, iv));
+        // Re-resolving the listed name encrypts back to the same cipher name.
+        assertEquals(cipher, h.nameManager.encryptName(escaped, iv));
     }
 
     @Test

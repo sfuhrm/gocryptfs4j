@@ -3,6 +3,10 @@ package de.sfuhrm.gocryptfs4j.names;
 import de.sfuhrm.gocryptfs4j.crypto.Constants;
 import de.sfuhrm.gocryptfs4j.crypto.Eme;
 
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CharsetDecoder;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -20,6 +24,15 @@ public final class NameTransform {
     public static final int LONG_NAME_FILENAME = 1;
     /** Value returned by {@link #nameType} for an ordinary (non-long) name. */
     public static final int LONG_NAME_NONE = 2;
+
+    /**
+     * First code point used to escape a non-UTF-8 name byte. Decrypted plaintext
+     * names that are not valid UTF-8 are mapped byte-for-byte onto the low
+     * surrogate block {@code U+DC00..U+DCFF}, which valid UTF-8 can never
+     * produce, so {@link #encodeName(String)} can invert the mapping
+     * unambiguously.
+     */
+    private static final int SURROGATE_ESCAPE_BASE = 0xDC00;
 
     /** The EME wide-block cipher. */
     private final Eme eme;
@@ -85,7 +98,7 @@ public final class NameTransform {
     public String encryptName(String plainName, byte[] iv) {
         Objects.requireNonNull(plainName, "plainName");
         Objects.requireNonNull(iv, "iv");
-        byte[] bin = plainName.getBytes(StandardCharsets.UTF_8);
+        byte[] bin = encodeName(plainName);
         bin = pad16(bin);
         bin = eme.encrypt(iv, bin);
         return b64Encoder.encodeToString(bin);
@@ -117,7 +130,81 @@ public final class NameTransform {
         }
         bin = eme.decrypt(iv, bin);
         bin = unpad16(bin);
-        return new String(bin, StandardCharsets.UTF_8);
+        return decodeName(bin);
+    }
+
+    /**
+     * Encodes a plaintext name to the raw name bytes gocryptfs stores.
+     *
+     * <p>Names are normally encoded as UTF-8. A name that came back from
+     * {@link #decodeName(byte[])} in the surrogate-escaped form (a non-UTF-8
+     * name) is unescaped back to its exact original bytes instead, so listing
+     * such a name and then re-resolving it always round-trips.</p>
+     *
+     * @param name the plaintext name
+     * @return the raw name bytes
+     * @throws NullPointerException if {@code name} is {@code null}
+     */
+    public static byte[] encodeName(String name) {
+        Objects.requireNonNull(name, "name");
+        if (isSurrogateEscaped(name)) {
+            byte[] out = new byte[name.length()];
+            for (int i = 0; i < name.length(); i++) {
+                out[i] = (byte) (name.charAt(i) - SURROGATE_ESCAPE_BASE);
+            }
+            return out;
+        }
+        return name.getBytes(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Decodes raw plaintext name bytes to a Java string, losslessly.
+     *
+     * <p>Valid UTF-8 is decoded as UTF-8. Any other byte sequence &mdash;
+     * legal in gocryptfs, which treats names as opaque byte strings &mdash; is
+     * mapped one byte per character onto the low surrogate block
+     * {@code U+DC00..U+DCFF}. {@link #encodeName(String)} reverses that
+     * mapping, so such a name is never mangled and remains re-resolvable.</p>
+     *
+     * @param bytes the raw name bytes
+     * @return the plaintext name
+     * @throws NullPointerException if {@code bytes} is {@code null}
+     */
+    public static String decodeName(byte[] bytes) {
+        Objects.requireNonNull(bytes, "bytes");
+        CharsetDecoder decoder = StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT);
+        try {
+            return decoder.decode(ByteBuffer.wrap(bytes)).toString();
+        } catch (CharacterCodingException e) {
+            StringBuilder sb = new StringBuilder(bytes.length);
+            for (byte b : bytes) {
+                sb.append((char) (SURROGATE_ESCAPE_BASE + (b & 0xFF)));
+            }
+            return sb.toString();
+        }
+    }
+
+    /**
+     * Returns whether {@code name} consists solely of surrogate-escape
+     * characters ({@code U+DC00..U+DCFF}), i.e. it is the escaped form of a
+     * non-UTF-8 name produced by {@link #decodeName(byte[])}.
+     *
+     * @param name the name to inspect
+     * @return {@code true} if the name is surrogate-escaped
+     */
+    private static boolean isSurrogateEscaped(String name) {
+        if (name.isEmpty()) {
+            return false;
+        }
+        for (int i = 0; i < name.length(); i++) {
+            char c = name.charAt(i);
+            if (c < SURROGATE_ESCAPE_BASE || c > SURROGATE_ESCAPE_BASE + 0xFF) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

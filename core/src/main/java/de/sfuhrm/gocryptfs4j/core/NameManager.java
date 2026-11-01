@@ -60,13 +60,16 @@ final class NameManager {
      * @param dirIV     the 16-byte directory IV
      * @return the ciphertext name
      * @throws NullPointerException if {@code plainName} or {@code dirIV} is {@code null}
-     * @throws FileSystemException if {@code plainName} is longer than the 255-byte
-     *                             name limit
+     * @throws FileSystemException if {@code plainName} is empty, contains a NUL
+     *                             byte, or is longer than the 255-byte name limit
      */
     String cipherNameFor(String plainName, byte[] dirIV) throws IOException {
         Objects.requireNonNull(plainName, "plainName");
         Objects.requireNonNull(dirIV, "dirIV");
-        if (plainName.getBytes(StandardCharsets.UTF_8).length > Constants.NAME_MAX) {
+        if (!isValidPlainName(plainName)) {
+            throw new FileSystemException(plainName, null, "invalid file name");
+        }
+        if (NameTransform.encodeName(plainName).length > Constants.NAME_MAX) {
             throw new FileSystemException(plainName, null, "File name too long");
         }
         if (plaintextNames) {
@@ -193,9 +196,14 @@ final class NameManager {
      * Returns whether a decrypted name is safe to use as a single path
      * component.
      *
+     * <p>This matches gocryptfs's {@code IsValidName}: empty names, {@code "."},
+     * {@code ".."} and names containing a path separator or a NUL byte are
+     * rejected. A backslash is an ordinary character on Linux, so it is
+     * allowed.</p>
+     *
      * @param name the decrypted name
      * @return {@code false} if {@code name} is empty, {@code "."}, {@code ".."},
-     *         or contains a path separator or NUL byte
+     *         or contains a {@code "/"} or a NUL byte
      */
     static boolean isValidPlainName(String name) {
         if (name.isEmpty() || name.equals(".") || name.equals("..")) {
@@ -203,7 +211,7 @@ final class NameManager {
         }
         for (int i = 0; i < name.length(); i++) {
             char c = name.charAt(i);
-            if (c == '/' || c == '\\' || c == '\0') {
+            if (c == '/' || c == '\0') {
                 return false;
             }
         }

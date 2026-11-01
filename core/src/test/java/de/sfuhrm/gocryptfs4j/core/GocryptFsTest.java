@@ -710,9 +710,12 @@ class GocryptFsTest {
 
             byte[] iv = fs.readDirIV(cipherDir.toAbsolutePath().normalize().toString());
             Path root = cipherDir.toAbsolutePath().normalize();
-            String[] unsafe = {"..", ".", "a/b", "a\\b", "a\u0000b"};
+            // Names that are unsafe in plaintext space. They cannot be created
+            // through the API (a NUL or "/" is rejected up front), so inject
+            // their ciphertext directly to exercise the listing guard.
+            String[] unsafe = {"..", ".", "a/b", "a\u0000b"};
             for (String name : unsafe) {
-                String cName = fs.cipherNameFor(name, iv);
+                String cName = fs.encryptNameRaw(name, iv);
                 Files.write(root.resolve(cName), new byte[0]);
             }
 
@@ -720,6 +723,24 @@ class GocryptFsTest {
                     .map(DirEntry::plainName).collect(Collectors.toList());
             assertEquals(1, names.size());
             assertEquals("ok.txt", names.get(0));
+        }
+    }
+
+    @Test
+    void backslashNameIsListedAndReadable() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
+            fs.createFile("/a\\b");
+            fs.write("/a\\b", 0, "content".getBytes(StandardCharsets.UTF_8));
+
+            List<String> names = fs.list("/").stream()
+                    .map(DirEntry::plainName).collect(Collectors.toList());
+            assertEquals(1, names.size());
+            assertEquals("a\\b", names.get(0));
+
+            assertEquals("content", new String(fs.readAll("/a\\b"), StandardCharsets.UTF_8));
         }
     }
 
