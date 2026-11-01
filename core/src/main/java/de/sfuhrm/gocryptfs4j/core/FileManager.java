@@ -475,16 +475,7 @@ final class FileManager {
         Objects.requireNonNull(plainPath, "plainPath");
         PathResolver.Resolved r = pathResolver.resolve(plainPath);
         if (store.stat(r.cipherPath).isDirectory()) {
-            // Verify the directory is empty apart from its gocryptfs.diriv
-            // before removing anything, so that rejecting a non-empty delete
-            // leaves the directory (and its diriv) intact.
-            for (CipherNode entry : store.list(r.cipherPath)) {
-                if (!entry.name().equals(Constants.DIR_IV_FILENAME)) {
-                    throw new DirectoryNotEmptyException(r.cipherPath);
-                }
-            }
-            deleteIfExists(store, PathResolver.join(r.cipherPath, Constants.DIR_IV_FILENAME));
-            store.delete(r.cipherPath);
+            removeEmptyDir(r.cipherPath);
         } else {
             store.delete(r.cipherPath);
         }
@@ -546,13 +537,7 @@ final class FileManager {
                 // rejected replace leaves the target intact. The empty directory
                 // (and its diriv) is then removed explicitly, because an atomic
                 // rename cannot replace a directory that still contains its diriv.
-                for (CipherNode entry : store.list(to.cipherPath)) {
-                    if (!entry.name().equals(Constants.DIR_IV_FILENAME)) {
-                        throw new DirectoryNotEmptyException(to.cipherPath);
-                    }
-                }
-                deleteIfExists(store, PathResolver.join(to.cipherPath, Constants.DIR_IV_FILENAME));
-                store.delete(to.cipherPath);
+                removeEmptyDir(to.cipherPath);
                 nameManager.removeLongName(to);
             }
             // A non-directory target is replaced atomically by the rename below.
@@ -677,6 +662,69 @@ final class FileManager {
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
+
+    /**
+     * Removes an empty ciphertext directory together with its
+     * {@code gocryptfs.diriv}, if one is used.
+     *
+     * <p>The directory is verified empty first so a rejected removal leaves it
+     * intact. In per-directory-IV mode the directory IV is read before its
+     * file is removed; if removing the directory itself then fails (for
+     * example because an entry appeared concurrently, a permission error, or a
+     * remote store), the IV is written back so the names in the directory stay
+     * decryptable.</p>
+     *
+     * <p>In plaintext-names and deterministic-names mode there is no
+     * {@code gocryptfs.diriv}, so an entry of that name is an ordinary user
+     * entry: it makes the directory non-empty and is never deleted here.</p>
+     *
+     * @param cipherDir the ciphertext directory to remove
+     * @throws DirectoryNotEmptyException if the directory is not empty
+     * @throws IOException on filesystem errors
+     */
+    private void removeEmptyDir(String cipherDir) throws IOException {
+        if (directoryManager.usesDirIV()) {
+            removeEmptyDirWithDirIV(cipherDir);
+            return;
+        }
+        // No per-directory IV is used, so gocryptfs.diriv is an ordinary entry
+        // and any entry makes the directory non-empty.
+        if (!store.list(cipherDir).isEmpty()) {
+            throw new DirectoryNotEmptyException(cipherDir);
+        }
+        store.delete(cipherDir);
+    }
+
+    /**
+     * Removes an empty ciphertext directory in per-directory-IV mode.
+     *
+     * <p>The directory IV is read before its file is removed; if removing the
+     * directory itself then fails, the IV is written back so the names in the
+     * directory stay decryptable.</p>
+     *
+     * @param cipherDir the ciphertext directory to remove
+     * @throws DirectoryNotEmptyException if the directory is not empty
+     * @throws IOException on filesystem errors
+     */
+    private void removeEmptyDirWithDirIV(String cipherDir) throws IOException {
+        for (CipherNode entry : store.list(cipherDir)) {
+            if (!entry.name().equals(Constants.DIR_IV_FILENAME)) {
+                throw new DirectoryNotEmptyException(cipherDir);
+            }
+        }
+        byte[] iv = directoryManager.readDirIV(cipherDir);
+        deleteIfExists(store, PathResolver.join(cipherDir, Constants.DIR_IV_FILENAME));
+        try {
+            store.delete(cipherDir);
+        } catch (IOException | RuntimeException e) {
+            try {
+                directoryManager.restoreDirIV(cipherDir, iv);
+            } catch (IOException restore) {
+                e.addSuppressed(restore);
+            }
+            throw e;
+        }
+    }
 
     /**
      * Deletes a ciphertext entry, ignoring an already-absent entry.

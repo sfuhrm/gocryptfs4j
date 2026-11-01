@@ -560,6 +560,55 @@ class GocryptFsTest {
     }
 
     @Test
+    void deleteDirectoryFailureRestoresDirIV() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        FailingStore store = new FailingStore(new PathCipherStore(cipherDir));
+
+        try (GocryptFs fs = GocryptFs.create(store, "pw".toCharArray())) {
+            fs.mkdir("/dir");
+            Path cipherPath = Paths.get(fs.resolve("/dir").cipherPath);
+            Path dirIV = cipherPath.resolve("gocryptfs.diriv");
+            byte[] before = Files.readAllBytes(dirIV);
+
+            store.failDeleteDir = true;
+            assertThrows(IOException.class, () -> fs.delete("/dir"));
+
+            assertTrue(Files.isDirectory(cipherPath, LinkOption.NOFOLLOW_LINKS),
+                    "a failed delete must leave the directory");
+            assertArrayEquals(before, Files.readAllBytes(dirIV),
+                    "a failed delete must restore gocryptfs.diriv");
+
+            store.failDeleteDir = false;
+            fs.delete("/dir");
+            assertFalse(Files.exists(cipherPath, LinkOption.NOFOLLOW_LINKS));
+        }
+    }
+
+    @Test
+    void plaintextNamesDirivIsOrdinaryFile() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray(), true)) {
+            fs.mkdir("/dir");
+            fs.createFile("/dir/gocryptfs.diriv");
+
+            Path cipherPath = Paths.get(fs.resolve("/dir").cipherPath);
+            Path userDiriv = cipherPath.resolve("gocryptfs.diriv");
+            assertTrue(Files.exists(userDiriv), "a user file may be named gocryptfs.diriv");
+
+            assertThrows(DirectoryNotEmptyException.class, () -> fs.delete("/dir"));
+            assertTrue(Files.exists(userDiriv),
+                    "a user file named gocryptfs.diriv must not be deleted");
+
+            fs.delete("/dir/gocryptfs.diriv");
+            fs.delete("/dir");
+            assertFalse(Files.exists(cipherPath, LinkOption.NOFOLLOW_LINKS));
+        }
+    }
+
+    @Test
     void deleteLongNamedDirectoryRemovesNameFile() throws IOException {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
@@ -830,6 +879,7 @@ class GocryptFsTest {
         private final CipherStore delegate;
         boolean failRename;
         boolean failCreateFile;
+        boolean failDeleteDir;
 
         FailingStore(CipherStore delegate) {
             this.delegate = delegate;
@@ -875,6 +925,9 @@ class GocryptFsTest {
 
         @Override
         public void delete(String name) throws IOException {
+            if (failDeleteDir && delegate.stat(name).isDirectory()) {
+                throw new IOException("delete directory failed");
+            }
             delegate.delete(name);
         }
 

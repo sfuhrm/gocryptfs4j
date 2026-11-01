@@ -86,6 +86,31 @@ class FileManagerTest {
     }
 
     @Test
+    void deleteEmptyDirectoryDeterministicNames() throws IOException {
+        ManagerHarness h = ManagerHarness.deterministic();
+        h.fileManager.mkdir("/dir");
+
+        h.fileManager.delete("/dir");
+
+        assertThrows(NoSuchFileException.class, () -> h.fileManager.stat("/dir"));
+    }
+
+    @Test
+    void plaintextNamesDirivIsOrdinaryEntry() throws IOException {
+        ManagerHarness h = ManagerHarness.plaintext();
+        h.fileManager.mkdir("/dir");
+        h.fileManager.createFile("/dir/gocryptfs.diriv");
+
+        assertThrows(DirectoryNotEmptyException.class, () -> h.fileManager.delete("/dir"));
+        assertEquals(DirEntry.Kind.FILE,
+                h.fileManager.stat("/dir/gocryptfs.diriv").kind());
+
+        h.fileManager.delete("/dir/gocryptfs.diriv");
+        h.fileManager.delete("/dir");
+        assertThrows(NoSuchFileException.class, () -> h.fileManager.stat("/dir"));
+    }
+
+    @Test
     void renameMovesFileWithoutChangingContent() throws IOException {
         ManagerHarness h = ManagerHarness.encrypted();
         byte[] data = "move me".getBytes(StandardCharsets.UTF_8);

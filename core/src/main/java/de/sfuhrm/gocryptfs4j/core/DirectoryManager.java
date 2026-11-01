@@ -108,6 +108,18 @@ final class DirectoryManager {
     }
 
     /**
+     * Returns whether the filesystem uses per-directory {@code gocryptfs.diriv}
+     * files. This is false in plaintext-names mode and in deterministic-names
+     * mode, where an entry named {@code gocryptfs.diriv} is an ordinary user
+     * entry rather than a control file.
+     *
+     * @return {@code true} if a per-directory IV file is used
+     */
+    boolean usesDirIV() {
+        return !plaintextNames && !deterministicNames;
+    }
+
+    /**
      * Creates a {@code gocryptfs.diriv} in {@code cipherDir}.
      *
      * @param cipherDir the ciphertext directory name
@@ -116,12 +128,32 @@ final class DirectoryManager {
      */
     void writeDirIV(String cipherDir) throws IOException {
         Objects.requireNonNull(cipherDir, "cipherDir");
-        if (plaintextNames || deterministicNames) {
+        if (!usesDirIV()) {
             return;
         }
         store.writeSmall(PathResolver.join(cipherDir, Constants.DIR_IV_FILENAME),
                 Keys.randomBytes(Constants.DIR_IV_LEN), false);
         dirIvCache.remove(cipherDir);
+    }
+
+    /**
+     * Writes {@code iv} as the {@code gocryptfs.diriv} of {@code cipherDir},
+     * replacing any existing file. Used to restore the directory IV after a
+     * failed directory removal so the names in the directory stay decryptable.
+     *
+     * @param cipherDir the ciphertext directory name
+     * @param iv        the 16-byte directory IV
+     * @throws IOException on filesystem errors
+     * @throws NullPointerException if an argument is {@code null}
+     */
+    void restoreDirIV(String cipherDir, byte[] iv) throws IOException {
+        Objects.requireNonNull(cipherDir, "cipherDir");
+        Objects.requireNonNull(iv, "iv");
+        if (!usesDirIV()) {
+            return;
+        }
+        store.writeSmall(PathResolver.join(cipherDir, Constants.DIR_IV_FILENAME), iv.clone(), true);
+        dirIvCache.put(cipherDir, iv.clone());
     }
 
     /**
