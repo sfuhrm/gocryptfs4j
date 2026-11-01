@@ -164,6 +164,9 @@ public final class Constants {
      */
     public static final int CONFIG_MAX_SIZE = 1 << 20;
 
+    /** Minimum accepted FIDO2 HMAC-secret length in bytes, matching gocryptfs. */
+    public static final int FIDO2_MIN_SECRET_LEN = 32;
+
     /** Maximum accepted FIDO2 credential ID length in bytes. */
     public static final int FIDO2_MAX_CREDENTIAL_ID_LEN = 1024;
 

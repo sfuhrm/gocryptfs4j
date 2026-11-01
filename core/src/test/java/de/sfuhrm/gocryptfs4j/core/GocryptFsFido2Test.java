@@ -104,6 +104,48 @@ class GocryptFsFido2Test {
     }
 
     @Test
+    void createRejectsShortFido2Secret() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        byte[] shortSecret = new byte[31];
+        shortSecret[0] = 1;
+        Fido2Token token = new FixedSecretToken(shortSecret);
+
+        IOException e = assertThrows(IOException.class,
+                () -> GocryptFs.create(new PathCipherStore(cipherDir), token));
+        assertTrue(e.getMessage().contains("too short"), e.getMessage());
+    }
+
+    @Test
+    void createRejectsAllZeroFido2Secret() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        Fido2Token token = new FixedSecretToken(new byte[32]);
+
+        IOException e = assertThrows(IOException.class,
+                () -> GocryptFs.create(new PathCipherStore(cipherDir), token));
+        assertTrue(e.getMessage().contains("all zero"), e.getMessage());
+    }
+
+    @Test
+    void openRejectsShortFido2Secret() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        byte[] goodSecret = new byte[32];
+        goodSecret[0] = 1;
+        try (GocryptFs ignored = GocryptFs.create(
+                new PathCipherStore(cipherDir), new FixedSecretToken(goodSecret))) {
+            // just create
+        }
+
+        byte[] shortSecret = new byte[31];
+        shortSecret[0] = 1;
+        IOException e = assertThrows(IOException.class, () -> GocryptFs.open(
+                new PathCipherStore(cipherDir), new FixedSecretToken(shortSecret)));
+        assertTrue(e.getMessage().contains("too short"), e.getMessage());
+    }
+
+    @Test
     void createWithOptionsAndCipherStoresThem() throws IOException {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
@@ -162,6 +204,26 @@ class GocryptFsFido2Test {
             } catch (java.security.GeneralSecurityException e) {
                 throw new IOException(e);
             }
+        }
+    }
+
+    /** Token that returns a fixed, caller-supplied HMAC secret. */
+    private static final class FixedSecretToken implements Fido2Token {
+
+        private final byte[] secret;
+
+        FixedSecretToken(byte[] secret) {
+            this.secret = secret.clone();
+        }
+
+        @Override
+        public byte[] registerCredential(String userName) {
+            return new byte[]{1, 2, 3};
+        }
+
+        @Override
+        public byte[] hmacSecret(byte[] credentialId, byte[] hmacSalt, List<String> assertOptions) {
+            return secret.clone();
         }
     }
 }

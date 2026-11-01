@@ -52,8 +52,8 @@ public interface Fido2Token {
      * Derives the {@code hmac-secret} for the given credential and salt.
      *
      * <p>The returned bytes are used verbatim as the scrypt password protecting
-     * the master key. gocryptfs requires at least 32 bytes and rejects an
-     * all-zero secret.</p>
+     * the master key. gocryptfs4j enforces, matching gocryptfs, that the secret
+     * is at least 32 bytes and rejects an all-zero secret.</p>
      *
      * <p>The returned array is owned by gocryptfs4j and wiped once it has been
      * used: implementations should return a fresh array on every call and not

@@ -279,6 +279,7 @@ public final class GocryptFs implements AutoCloseable {
                 : params.assertOptions();
         byte[] secret = token.hmacSecret(credentialId, hmacSalt, assertOptions);
         try {
+            checkFido2Secret(secret);
             byte[] masterKey = config.decryptMasterKey(secret);
             return new GocryptFs(store, config, masterKey);
         } catch (IOException e) {
@@ -513,6 +514,7 @@ public final class GocryptFs implements AutoCloseable {
         byte[] hmacSalt = Keys.randomBytes(Fido2Params.HMAC_SALT_LEN);
         byte[] secret = token.hmacSecret(credentialId, hmacSalt, options);
         try {
+            checkFido2Secret(secret);
             byte[] masterKey = Keys.randomBytes(Constants.KEY_LEN);
             boolean ok = false;
             try {
@@ -541,6 +543,47 @@ public final class GocryptFs implements AutoCloseable {
         } finally {
             Keys.wipe(secret);
         }
+    }
+
+    /**
+     * Validates a FIDO2 {@code hmac-secret} returned by a {@link Fido2Token}.
+     *
+     * <p>A secret shorter than {@link Constants#FIDO2_MIN_SECRET_LEN} bytes or an
+     * all-zero secret is rejected. This is enforced here, in the core, rather
+     * than relying on individual token implementations, so that a buggy or
+     * failing custom {@link Fido2Token} cannot create an effectively unprotected
+     * filesystem.</p>
+     *
+     * @param secret the secret returned by the token
+     * @throws IOException if the secret is {@code null}, too short or all-zero
+     */
+    private static void checkFido2Secret(byte[] secret) throws IOException {
+        if (secret == null) {
+            throw new IOException("FIDO2 HMAC secret is null");
+        }
+        if (secret.length < Constants.FIDO2_MIN_SECRET_LEN) {
+            throw new IOException("FIDO2 HMAC secret too short ("
+                    + secret.length + " bytes, want at least "
+                    + Constants.FIDO2_MIN_SECRET_LEN + ")");
+        }
+        if (isAllZero(secret)) {
+            throw new IOException("FIDO2 HMAC secret is all zero");
+        }
+    }
+
+    /**
+     * Returns whether the whole array is all zero.
+     *
+     * @param data the array
+     * @return {@code true} if every byte is zero
+     */
+    private static boolean isAllZero(byte[] data) {
+        for (byte b : data) {
+            if (b != 0) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
