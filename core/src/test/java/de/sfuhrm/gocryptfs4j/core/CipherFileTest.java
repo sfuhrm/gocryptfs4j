@@ -12,9 +12,11 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
+import java.nio.channels.SeekableByteChannel;
 import java.nio.channels.WritableByteChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -236,6 +238,25 @@ class CipherFileTest {
 
             assertEquals(0, cf.plainSize());
             assertNull(cf.fileId());
+        }
+    }
+
+    @Test
+    void tornTailThrowsIoExceptionNotUnchecked() throws IOException {
+        ContentEnc enc = enc();
+        Path p = newFile();
+        try (CipherFile cf = open(p, enc, true)) {
+            cf.write(ByteBuffer.wrap(new byte[(int) enc.plainBS]), 0);
+            cf.force(false);
+        }
+
+        // Simulate a torn tail: cut the last block short of the nonce length.
+        try (SeekableByteChannel ch = Files.newByteChannel(p, StandardOpenOption.WRITE)) {
+            ch.truncate(Constants.HEADER_LEN + enc.ivLen - 1);
+        }
+
+        try (CipherFile cf = open(p, enc, false)) {
+            assertThrows(IOException.class, () -> cf.read(ByteBuffer.allocate(100), 0));
         }
     }
 

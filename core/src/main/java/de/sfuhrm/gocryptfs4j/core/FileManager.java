@@ -678,11 +678,16 @@ final class FileManager {
         if (plaintextNames || target.isEmpty()) {
             return target;
         }
-        byte[] cData = nameTransform.b64Decode(target);
+        byte[] cData;
+        try {
+            cData = nameTransform.b64Decode(target);
+        } catch (IllegalArgumentException e) {
+            throw new IOException("corrupt symlink target", e);
+        }
         try {
             byte[] data = contentEnc.decryptBlock(cData, 0, null);
             return new String(data, StandardCharsets.UTF_8);
-        } catch (GeneralSecurityException e) {
+        } catch (GeneralSecurityException | IllegalArgumentException e) {
             throw new IOException("corrupt symlink target", e);
         }
     }

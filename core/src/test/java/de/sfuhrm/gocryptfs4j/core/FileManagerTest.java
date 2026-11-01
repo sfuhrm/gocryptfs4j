@@ -8,6 +8,7 @@ import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.NoSuchFileException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.List;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
@@ -150,6 +151,25 @@ class FileManagerTest {
 
         String cipherPath = h.pathResolver.resolve("/link").cipherPath;
         assertEquals("/target", h.store.readSymlink(cipherPath));
+    }
+
+    @Test
+    void readSymlinkTargetWrapsBadBase64AsIoException() throws IOException {
+        ManagerHarness h = ManagerHarness.encrypted();
+        String cipherPath = h.pathResolver.resolve("/link").cipherPath;
+        h.store.createSymlink(cipherPath, "!!!not-valid-base64!!!");
+
+        assertThrows(IOException.class, () -> h.fileManager.readSymlinkTarget("/link"));
+    }
+
+    @Test
+    void readSymlinkTargetWrapsShortCiphertextAsIoException() throws IOException {
+        ManagerHarness h = ManagerHarness.encrypted();
+        String cipherPath = h.pathResolver.resolve("/link").cipherPath;
+        byte[] shortCipher = new byte[h.contentEnc.ivLen - 1];
+        h.store.createSymlink(cipherPath, Base64.getUrlEncoder().encodeToString(shortCipher));
+
+        assertThrows(IOException.class, () -> h.fileManager.readSymlinkTarget("/link"));
     }
 
     @Test

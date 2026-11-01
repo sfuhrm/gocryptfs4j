@@ -198,7 +198,7 @@ public final class CipherFile implements AutoCloseable {
         int plainLength;
         try {
             plainLength = enc.decryptBlocks(cipherBuf, 0, available, firstBlock, fileId, plainBuf, 0);
-        } catch (GeneralSecurityException e) {
+        } catch (GeneralSecurityException | IllegalArgumentException e) {
             throw new IOException("corrupt block in file", e);
         }
 
@@ -376,7 +376,11 @@ public final class CipherFile implements AutoCloseable {
                 if (hdr.length < Constants.HEADER_LEN) {
                     throw new IOException("corrupt file header");
                 }
-                fileId = FileHeader.parse(hdr).id();
+                try {
+                    fileId = FileHeader.parse(hdr).id();
+                } catch (IllegalArgumentException e) {
+                    throw new IOException("corrupt file header", e);
+                }
             }
             fileIdLoaded = true;
         }
@@ -450,7 +454,7 @@ public final class CipherFile implements AutoCloseable {
         try {
             int n = enc.decryptBlocks(blockCipher, 0, read, blockNo, fileId, blockPlain, 0);
             return Arrays.copyOf(blockPlain, n);
-        } catch (GeneralSecurityException e) {
+        } catch (GeneralSecurityException | IllegalArgumentException e) {
             throw new IOException("corrupt block in file", e);
         }
     }
