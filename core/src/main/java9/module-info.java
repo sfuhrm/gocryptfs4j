@@ -17,6 +17,8 @@ module de.sfuhrm.gocryptfs4j.core {
     exports de.sfuhrm.gocryptfs4j.store.local;
     exports de.sfuhrm.gocryptfs4j.store.memory;
 
+    opens de.sfuhrm.gocryptfs4j.config to com.google.gson;
+
     uses de.sfuhrm.gocryptfs4j.store.CipherStoreProvider;
 
     provides de.sfuhrm.gocryptfs4j.store.CipherStoreProvider
