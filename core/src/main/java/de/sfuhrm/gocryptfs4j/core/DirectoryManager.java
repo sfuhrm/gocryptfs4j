@@ -9,6 +9,8 @@ import de.sfuhrm.gocryptfs4j.store.CipherStore;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.NoSuchFileException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -93,8 +95,7 @@ final class DirectoryManager {
         if (cached != null) {
             return cached.clone();
         }
-        byte[] data = store.readSmall(PathResolver.join(cipherDir, Constants.DIR_IV_FILENAME),
-                Constants.DIR_IV_LEN);
+        byte[] data = readOrCreateDirIV(cipherDir);
         if (data.length != Constants.DIR_IV_LEN) {
             throw new IOException("bad diriv length " + data.length + " in " + cipherDir);
         }
@@ -105,6 +106,36 @@ final class DirectoryManager {
             }
         }
         throw new IOException("diriv is all-zero in " + cipherDir);
+    }
+
+    /**
+     * Reads the {@code gocryptfs.diriv} of {@code cipherDir}, minting and
+     * persisting a fresh one if the file is missing.
+     *
+     * <p>A crash between {@code mkdir} and {@code writeDirIV} (or a directory
+     * created by an older gocryptfs) can leave a directory without a
+     * {@code gocryptfs.diriv}. Such a directory is empty &mdash; no entry can be
+     * created under it while its diriv is missing &mdash; so minting a fresh
+     * random IV here is safe and makes the directory usable again.</p>
+     *
+     * @param cipherDir the ciphertext directory name
+     * @return the 16-byte directory IV
+     * @throws IOException on filesystem errors or a corrupt diriv
+     */
+    private byte[] readOrCreateDirIV(String cipherDir) throws IOException {
+        String path = PathResolver.join(cipherDir, Constants.DIR_IV_FILENAME);
+        try {
+            return store.readSmall(path, Constants.DIR_IV_LEN);
+        } catch (NoSuchFileException e) {
+            byte[] iv = Keys.randomBytes(Constants.DIR_IV_LEN);
+            try {
+                store.writeSmall(path, iv, false);
+            } catch (FileAlreadyExistsException ignored) {
+                // Another handle repaired the directory concurrently; the write
+                // below returns whichever diriv is there now.
+            }
+            return store.readSmall(path, Constants.DIR_IV_LEN);
+        }
     }
 
     /**

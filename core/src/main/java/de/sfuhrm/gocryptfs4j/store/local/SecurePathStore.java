@@ -35,6 +35,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -78,10 +79,6 @@ final class SecurePathStore implements CipherStore {
             Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
                     StandardOpenOption.READ, StandardOpenOption.WRITE,
                     LinkOption.NOFOLLOW_LINKS)));
-    private static final Set<OpenOption> WRITE_CREATE_TRUNC_NOFOLLOW =
-            Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
-                    StandardOpenOption.WRITE, StandardOpenOption.CREATE,
-                    StandardOpenOption.TRUNCATE_EXISTING, LinkOption.NOFOLLOW_LINKS)));
     private static final Set<OpenOption> WRITE_CREATE_NEW =
             Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
                     StandardOpenOption.WRITE, StandardOpenOption.CREATE_NEW)));
@@ -125,12 +122,45 @@ final class SecurePathStore implements CipherStore {
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(data, "data");
         try (SecurePath parent = requireParent(name)) {
-            Set<OpenOption> options = overwrite ? WRITE_CREATE_TRUNC_NOFOLLOW : WRITE_CREATE_NEW;
-            try (SeekableByteChannel channel = parent.dir().newByteChannel(parent.name(),
-                    options)) {
-                ByteBuffer buffer = ByteBuffer.wrap(data);
-                while (buffer.hasRemaining()) {
-                    channel.write(buffer);
+            // Write to a temporary file in the same directory and move it into
+            // place, so a crash never leaves a truncated control file (for
+            // example a gocryptfs.diriv).
+            Path temp = Paths.get(".gocryptfs-" + UUID.randomUUID() + ".tmp");
+            boolean moved = false;
+            try {
+                try (SeekableByteChannel channel = parent.dir().newByteChannel(temp,
+                        WRITE_CREATE_NEW)) {
+                    ByteBuffer buffer = ByteBuffer.wrap(data);
+                    while (buffer.hasRemaining()) {
+                        channel.write(buffer);
+                    }
+                    if (channel instanceof FileChannel) {
+                        ((FileChannel) channel).force(true);
+                    }
+                }
+                if (overwrite) {
+                    parent.dir().move(temp, parent.dir(), parent.name());
+                } else {
+                    // SecureDirectoryStream.move has no replace flag, so the
+                    // no-replace contract is enforced by checking the target
+                    // first (with the same unavoidable race as the plain
+                    // Files.move path).
+                    try {
+                        basicAttributes(parent.dir(), parent.name());
+                        throw new FileAlreadyExistsException(Paths.get(name).toString());
+                    } catch (NoSuchFileException e) {
+                        // Target is free.
+                    }
+                    parent.dir().move(temp, parent.dir(), parent.name());
+                }
+                moved = true;
+            } finally {
+                if (!moved) {
+                    try {
+                        parent.dir().deleteFile(temp);
+                    } catch (NoSuchFileException ignored) {
+                        // Already gone.
+                    }
                 }
             }
         }

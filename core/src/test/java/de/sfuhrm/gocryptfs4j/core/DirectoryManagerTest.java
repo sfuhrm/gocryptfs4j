@@ -12,7 +12,6 @@ import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -86,11 +85,16 @@ class DirectoryManagerTest {
     }
 
     @Test
-    void readDirIVThrowsWhenDirivMissing() throws IOException {
+    void readDirIVCreatesMissingDirIV() throws IOException {
         ManagerHarness h = ManagerHarness.encrypted();
         h.store.mkdir("sub");
 
-        assertThrows(IOException.class, () -> h.directoryManager.readDirIV("sub"));
+        byte[] iv = h.directoryManager.readDirIV("sub");
+
+        assertEquals(Constants.DIR_IV_LEN, iv.length);
+        assertTrue(anyNonZero(iv));
+        assertArrayEquals(iv, h.store.readSmall(
+                PathResolver.join("sub", Constants.DIR_IV_FILENAME), Constants.DIR_IV_LEN));
     }
 
     @Test

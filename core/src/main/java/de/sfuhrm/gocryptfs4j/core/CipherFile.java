@@ -355,8 +355,14 @@ public final class CipherFile implements AutoCloseable {
             byte[] blockPlain = readPlainBlock(blockNo);
             byte[] truncated = Arrays.copyOf(blockPlain, keep);
             byte[] cipherBlock = enc.encryptBlock(truncated, blockNo, fileId);
+            // Truncate the whole last block away before writing the re-encrypted
+            // partial block. Writing first and truncating afterwards leaves, on a
+            // crash in between, the new partial block followed by the stale tail
+            // of the old last block, which no longer authenticates. Truncating
+            // first leaves a clean (only slightly shorter) file at the block
+            // boundary, which then grows by the single re-encrypted block.
+            channel.truncate(enc.blockNoToCipherOff(blockNo));
             writeCipherRange(enc.blockNoToCipherOff(blockNo), cipherBlock);
-            channel.truncate(enc.plainSizeToCipherSize(newPlainSize));
         }
     }
 

@@ -108,12 +108,7 @@ final class PlainPathStore implements CipherStore {
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(data, "data");
         Path p = resolve(name);
-        if (overwrite) {
-            Files.write(p, data, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
-                    StandardOpenOption.WRITE);
-        } else {
-            Files.write(p, data, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
-        }
+        writeAtomically(p, data, overwrite, null);
     }
 
     @Override
@@ -121,13 +116,31 @@ final class PlainPathStore implements CipherStore {
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(data, "data");
         Path p = resolve(name);
+        // New files get mode 0400, matching gocryptfs.
+        writeAtomically(p, data, overwrite, PosixFilePermissions.fromString("r--------"));
+    }
+
+    /**
+     * Writes {@code data} to {@code p} atomically: to a temporary file in the
+     * same directory that is flushed to disk and moved into place, so a crash or
+     * a full disk never leaves the target truncated or half-written. After the
+     * move the parent directory is fsynced so the rename itself is durable.
+     *
+     * @param p           the target path
+     * @param data        the content to write
+     * @param overwrite   whether to replace an existing file
+     * @param permissions the POSIX permissions to apply to a new file, or
+     *                    {@code null} to keep the temporary file's default
+     * @throws IOException if the file cannot be written, or it exists and
+     *                     {@code overwrite} is {@code false}
+     */
+    private static void writeAtomically(Path p, byte[] data, boolean overwrite,
+                                        @Nullable Set<PosixFilePermission> permissions)
+            throws IOException {
         Path dir = p.getParent();
         if (dir == null) {
             throw new IOException("cannot determine parent directory of " + p);
         }
-        // Write to a temporary file in the same directory, flush it to disk and
-        // move it into place, so a crash or a full disk never leaves the config
-        // file truncated or half-written. New files get mode 0400, matching gocryptfs.
         Path temp = Files.createTempFile(dir, ".gocryptfs-", ".tmp");
         boolean moved = false;
         try {
@@ -139,10 +152,12 @@ final class PlainPathStore implements CipherStore {
                 }
                 channel.force(true);
             }
-            try {
-                Files.setPosixFilePermissions(temp, PosixFilePermissions.fromString("r--------"));
-            } catch (UnsupportedOperationException e) {
-                // Non-POSIX filesystem: keep the default permissions.
+            if (permissions != null) {
+                try {
+                    Files.setPosixFilePermissions(temp, permissions);
+                } catch (UnsupportedOperationException e) {
+                    // Non-POSIX filesystem: keep the default permissions.
+                }
             }
             if (overwrite) {
                 Files.move(temp, p, StandardCopyOption.ATOMIC_MOVE,
@@ -159,6 +174,23 @@ final class PlainPathStore implements CipherStore {
             if (!moved) {
                 Files.deleteIfExists(temp);
             }
+        }
+        fsyncDirectory(dir);
+    }
+
+    /**
+     * Best-effort fsync of a directory so that a rename into it becomes durable
+     * across power loss. Not all filesystems permit opening a directory; on such
+     * filesystems the move is still atomic, just not forced to stable storage.
+     *
+     * @param dir the directory to fsync
+     */
+    private static void fsyncDirectory(Path dir) {
+        try (FileChannel channel = FileChannel.open(dir, StandardOpenOption.READ)) {
+            channel.force(true);
+        } catch (IOException | UnsupportedOperationException e) {
+            // Non-POSIX or read-only filesystems cannot open a directory as a
+            // channel; ignore, the atomic move still holds.
         }
     }
 
