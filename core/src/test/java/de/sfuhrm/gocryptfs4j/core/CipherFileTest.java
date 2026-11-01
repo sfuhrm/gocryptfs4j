@@ -372,4 +372,25 @@ class CipherFileTest {
             assertThrows(Exception.class, () -> cf.write(ByteBuffer.wrap(new byte[10]), 0));
         }
     }
+
+    @Test
+    void plainSizeReflectsExternalGrowth() throws IOException {
+        ContentEnc enc = enc();
+        Path p = newFile();
+
+        try (CipherFile h1 = open(p, enc, true)) {
+            h1.write(ByteBuffer.wrap(new byte[100]), 0);
+            h1.force(false);
+            assertEquals(100, h1.plainSize());
+
+            // A second handle grows the file behind h1's back.
+            try (CipherFile h2 = open(p, enc, true)) {
+                h2.write(ByteBuffer.wrap(new byte[(int) enc.plainBS]), 100);
+            }
+
+            // h1 must observe the grown size instead of a stale cached value.
+            assertEquals(100 + enc.plainBS, h1.plainSize());
+            assertEquals(100 + enc.plainBS, readAll(h1).length);
+        }
+    }
 }

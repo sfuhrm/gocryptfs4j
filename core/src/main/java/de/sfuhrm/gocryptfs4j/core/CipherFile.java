@@ -58,9 +58,6 @@ public final class CipherFile implements AutoCloseable {
     /** Whether the file id has been loaded from the header. */
     private boolean fileIdLoaded;
 
-    /** Cached plaintext size, or {@code -1} if not yet determined. */
-    private long cachedPlainSize = -1;
-
     /** Write-back buffer holding the most recently written plaintext block. */
     private final byte[] wbPlain;
 
@@ -148,10 +145,11 @@ public final class CipherFile implements AutoCloseable {
      * @throws IOException on filesystem errors
      */
     public synchronized long plainSize() throws IOException {
-        if (cachedPlainSize < 0) {
-            cachedPlainSize = enc.cipherSizeToPlainSize(channel.size());
+        long size = enc.cipherSizeToPlainSize(channel.size());
+        if (wbBlockNo >= 0) {
+            size = Math.max(size, wbBlockNo * enc.plainBS + wbLen);
         }
-        return cachedPlainSize;
+        return size;
     }
 
     /**
@@ -310,7 +308,6 @@ public final class CipherFile implements AutoCloseable {
         wbBlockNo = lastBlock;
         wbLen = lastLen;
 
-        cachedPlainSize = Math.max(oldSize, plainOffset + length);
         return length;
     }
 
@@ -335,7 +332,6 @@ public final class CipherFile implements AutoCloseable {
             channel.truncate(0);
             fileId = null;
             fileIdLoaded = true;
-            cachedPlainSize = 0;
             return;
         }
         flushWriteBack();
@@ -362,7 +358,6 @@ public final class CipherFile implements AutoCloseable {
             writeCipherRange(enc.blockNoToCipherOff(blockNo), cipherBlock);
             channel.truncate(enc.plainSizeToCipherSize(newPlainSize));
         }
-        cachedPlainSize = newPlainSize;
     }
 
     /**
@@ -398,6 +393,18 @@ public final class CipherFile implements AutoCloseable {
     private byte[] ensureFileId() throws IOException {
         byte[] id = loadFileId();
         if (id == null) {
+            // The file looked empty, but another handle may have minted a header
+            // between loadFileId's size check and here. Re-check the size and,
+            // if a header appeared, adopt it instead of overwriting it with a
+            // fresh one (which would make every block written so far unreadable).
+            if (channel.size() > 0) {
+                fileIdLoaded = false;
+                id = loadFileId();
+                if (id == null) {
+                    throw new IOException("file header disappeared while writing");
+                }
+                return id;
+            }
             // The file is empty (or was truncated to empty): mint a fresh header.
             FileHeader h = FileHeader.random();
             writeCipherRange(0, h.pack());

@@ -26,8 +26,10 @@ import java.nio.file.attribute.UserPrincipal;
 import java.security.GeneralSecurityException;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Performs plaintext file operations (read, write, attributes, create, delete,
@@ -60,6 +62,13 @@ final class FileManager {
 
     /** The path resolver. */
     private final PathResolver pathResolver;
+
+    /**
+     * Per-file locks serializing whole-file operations so that two handles to
+     * the same cipher file cannot interleave header creation or size bookkeeping
+     * and corrupt each other.
+     */
+    private final Map<String, Object> fileLocks = new ConcurrentHashMap<>();
 
     /**
      * Creates a file manager.
@@ -168,6 +177,17 @@ final class FileManager {
     }
 
     /**
+     * Returns the monitor used to serialize whole-file operations on a
+     * ciphertext file, creating it on first use.
+     *
+     * @param cipherFile the ciphertext file name
+     * @return the per-file lock
+     */
+    private Object fileLock(String cipherFile) {
+        return fileLocks.computeIfAbsent(cipherFile, key -> new Object());
+    }
+
+    /**
      * Returns the plaintext size of a file.
      *
      * @param plainFile the plaintext file path
@@ -178,8 +198,10 @@ final class FileManager {
     long size(String plainFile) throws IOException {
         Objects.requireNonNull(plainFile, "plainFile");
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
-        try (CipherFile cf = openCipherFileByName(r.cipherPath, false)) {
-            return cf.plainSize();
+        synchronized (fileLock(r.cipherPath)) {
+            try (CipherFile cf = openCipherFileByName(r.cipherPath, false)) {
+                return cf.plainSize();
+            }
         }
     }
 
@@ -194,21 +216,23 @@ final class FileManager {
     byte[] readAll(String plainFile) throws IOException {
         Objects.requireNonNull(plainFile, "plainFile");
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
-        try (CipherFile cf = openCipherFileByName(r.cipherPath, false)) {
-            long size = cf.plainSize();
-            if (size > Integer.MAX_VALUE) {
-                throw new IOException("file too large to read into memory: " + size);
-            }
-            byte[] out = new byte[(int) size];
-            int pos = 0;
-            while (pos < size) {
-                int n = cf.read(ByteBuffer.wrap(out, pos, (int) (size - pos)), pos);
-                if (n < 0) {
-                    break;
+        synchronized (fileLock(r.cipherPath)) {
+            try (CipherFile cf = openCipherFileByName(r.cipherPath, false)) {
+                long size = cf.plainSize();
+                if (size > Integer.MAX_VALUE) {
+                    throw new IOException("file too large to read into memory: " + size);
                 }
-                pos += n;
+                byte[] out = new byte[(int) size];
+                int pos = 0;
+                while (pos < size) {
+                    int n = cf.read(ByteBuffer.wrap(out, pos, (int) (size - pos)), pos);
+                    if (n < 0) {
+                        break;
+                    }
+                    pos += n;
+                }
+                return Arrays.copyOf(out, pos);
             }
-            return Arrays.copyOf(out, pos);
         }
     }
 
@@ -274,15 +298,17 @@ final class FileManager {
             throw new IllegalArgumentException("negative offset: " + offset);
         }
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
-        try (CipherFile cf = openCipherFileByName(r.cipherPath, true)) {
-            ByteBuffer buf = ByteBuffer.wrap(data);
-            long pos = offset;
-            while (buf.hasRemaining()) {
-                int n = cf.write(buf, pos);
-                if (n <= 0) {
-                    throw new IOException("no progress writing to " + plainFile);
+        synchronized (fileLock(r.cipherPath)) {
+            try (CipherFile cf = openCipherFileByName(r.cipherPath, true)) {
+                ByteBuffer buf = ByteBuffer.wrap(data);
+                long pos = offset;
+                while (buf.hasRemaining()) {
+                    int n = cf.write(buf, pos);
+                    if (n <= 0) {
+                        throw new IOException("no progress writing to " + plainFile);
+                    }
+                    pos += n;
                 }
-                pos += n;
             }
         }
     }
@@ -302,8 +328,10 @@ final class FileManager {
             throw new IllegalArgumentException("negative size: " + newSize);
         }
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
-        try (CipherFile cf = openCipherFileByName(r.cipherPath, true)) {
-            cf.truncate(newSize);
+        synchronized (fileLock(r.cipherPath)) {
+            try (CipherFile cf = openCipherFileByName(r.cipherPath, true)) {
+                cf.truncate(newSize);
+            }
         }
     }
 

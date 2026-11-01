@@ -6,7 +6,13 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.NoSuchFileException;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -144,5 +150,40 @@ class FileManagerTest {
 
         String cipherPath = h.pathResolver.resolve("/link").cipherPath;
         assertEquals("/target", h.store.readSymlink(cipherPath));
+    }
+
+    @Test
+    void concurrentWritersToSameFileDoNotCorrupt() throws Exception {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.fileManager.createFile("/f.txt");
+
+        int threads = 8;
+        byte[] payload = new byte[(int) h.contentEnc.plainBS];
+        Arrays.fill(payload, (byte) 0x5a);
+
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        CyclicBarrier start = new CyclicBarrier(threads);
+        List<Future<?>> futures = new ArrayList<>();
+        try {
+            for (int i = 0; i < threads; i++) {
+                final int offset = i * (int) h.contentEnc.plainBS;
+                futures.add(pool.submit(() -> {
+                    start.await();
+                    h.fileManager.write("/f.txt", offset, payload);
+                    return null;
+                }));
+            }
+            for (Future<?> f : futures) {
+                f.get();
+            }
+        } finally {
+            pool.shutdown();
+        }
+
+        byte[] read = h.fileManager.readAll("/f.txt");
+        assertEquals(threads * payload.length, read.length);
+        for (byte b : read) {
+            assertEquals(0x5a, b, "concurrent writers must not corrupt the file");
+        }
     }
 }
