@@ -188,7 +188,7 @@ class ConfigFileTest {
     void loadRejectsOutOfRangeScryptParameters() throws Exception {
         Path dir = Files.createTempDirectory("gocryptfs4j-");
         String salt32 = Base64.getEncoder().encodeToString(new byte[32]);
-        String flags = "[\"HKDF\",\"GCMIV128\"]";
+        String flags = "[\"HKDF\",\"GCMIV128\",\"EMENames\"]";
         try {
             // A normal gocryptfs parameter set loads fine.
             assertNotNull(ConfigFile.load(
@@ -299,7 +299,7 @@ class ConfigFileTest {
     void loadRejectsOverlongFido2Parameters() throws Exception {
         Path dir = Files.createTempDirectory("gocryptfs4j-");
         String salt32 = Base64.getEncoder().encodeToString(new byte[32]);
-        String flags = "[\"HKDF\",\"GCMIV128\",\"FIDO2\"]";
+        String flags = "[\"HKDF\",\"GCMIV128\",\"EMENames\",\"FIDO2\"]";
         String goodSalt = Base64.getEncoder().encodeToString(new byte[32]);
         try {
             String hugeId = Base64.getEncoder().encodeToString(new byte[2048]);
@@ -338,6 +338,63 @@ class ConfigFileTest {
                     writeConf(dir, salt32, 1 << 16, 8, 1, 32, flags,
                             "{\"CredentialID\":\"" + shortId + "\",\"HMACSalt\":\""
                                     + goodSalt + "\",\"AssertOptions\":[\"" + longOption + "\"]}")));
+        } finally {
+            Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
+    void loadRejectsNullFeatureFlag() throws Exception {
+        Path dir = Files.createTempDirectory("gocryptfs4j-");
+        String salt32 = Base64.getEncoder().encodeToString(new byte[32]);
+        try {
+            assertThrows(IOException.class, () -> ConfigFile.load(
+                    writeConf(dir, salt32, 1 << 16, 8, 1, 32, "[null]", null)));
+        } finally {
+            Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
+    void loadRejectsNullAssertOption() throws Exception {
+        Path dir = Files.createTempDirectory("gocryptfs4j-");
+        String salt32 = Base64.getEncoder().encodeToString(new byte[32]);
+        String flags = "[\"HKDF\",\"GCMIV128\",\"EMENames\",\"FIDO2\"]";
+        String shortId = Base64.getEncoder().encodeToString(new byte[16]);
+        String goodSalt = Base64.getEncoder().encodeToString(new byte[32]);
+        try {
+            assertThrows(IOException.class, () -> ConfigFile.load(
+                    writeConf(dir, salt32, 1 << 16, 8, 1, 32, flags,
+                            "{\"CredentialID\":\"" + shortId + "\",\"HMACSalt\":\""
+                                    + goodSalt + "\",\"AssertOptions\":[null]}")));
+        } finally {
+            Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
+    void loadRejectsMissingEmeNamesFlag() throws Exception {
+        Path dir = Files.createTempDirectory("gocryptfs4j-");
+        String salt32 = Base64.getEncoder().encodeToString(new byte[32]);
+        try {
+            assertThrows(IOException.class, () -> ConfigFile.load(
+                    writeConf(dir, salt32, 1 << 16, 8, 1, 32, "[\"HKDF\",\"GCMIV128\"]", null)));
+        } finally {
+            Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
+    void loadRejectsMissingGcmIv128Flag() throws Exception {
+        Path dir = Files.createTempDirectory("gocryptfs4j-");
+        String salt32 = Base64.getEncoder().encodeToString(new byte[32]);
+        try {
+            assertThrows(IOException.class, () -> ConfigFile.load(
+                    writeConf(dir, salt32, 1 << 16, 8, 1, 32, "[\"HKDF\",\"EMENames\"]", null)));
         } finally {
             Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
             Files.deleteIfExists(dir);
@@ -387,7 +444,7 @@ class ConfigFileTest {
         }
         json.append("\"ScryptObject\":{\"Salt\":\"").append(salt32).append("\",");
         json.append("\"N\":").append(1 << 16).append(",\"R\":8,\"P\":1,\"KeyLen\":32},");
-        json.append("\"Version\":2,\"FeatureFlags\":[\"HKDF\",\"GCMIV128\"]}");
+        json.append("\"Version\":2,\"FeatureFlags\":[\"HKDF\",\"GCMIV128\",\"EMENames\"]}");
         return json.toString();
     }
 }

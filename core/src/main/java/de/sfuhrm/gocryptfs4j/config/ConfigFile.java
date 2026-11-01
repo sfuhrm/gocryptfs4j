@@ -197,8 +197,9 @@ public final class ConfigFile {
      * Validates the parsed configuration.
      *
      * @throws IOException if the format version is unsupported, a feature flag
-     *                     is unknown, the scrypt parameters are out of range or
-     *                     the FIDO2 data is incomplete
+     *                     is unknown or required but missing, the scrypt
+     *                     parameters are out of range or the FIDO2 data is
+     *                     incomplete
      */
     private void validate() throws IOException {
         if (version != Constants.CURRENT_VERSION) {
@@ -207,11 +208,12 @@ public final class ConfigFile {
         }
         if (featureFlags != null) {
             for (String flag : featureFlags) {
-                if (!isKnownFlag(flag)) {
+                if (flag == null || !isKnownFlag(flag)) {
                     throw new IOException("unknown feature flag: " + flag);
                 }
             }
         }
+        validateRequiredFlags();
         validateEncryptedKey();
         validateScrypt();
         if (isFeatureFlagSet(Constants.FLAG_FIDO2)) {
@@ -240,11 +242,37 @@ public final class ConfigFile {
                             + assertOptions.size());
                 }
                 for (String option : assertOptions) {
+                    if (option == null) {
+                        throw new IOException("FIDO2 assertion option is null");
+                    }
                     if (option.length() > Constants.FIDO2_MAX_ASSERT_OPTION_LEN) {
                         throw new IOException("FIDO2 assertion option too long");
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * Rejects configs that predate the name- and IV-schemes this implementation
+     * supports.
+     *
+     * <p>gocryptfs has used EME wide-block encryption for encrypted file names
+     * and 128-bit GCM IVs for content encryption for years. A config missing one
+     * of these flags describes a very old filesystem that we cannot decrypt:
+     * silently treating it as EME (or as 128-bit IVs) would corrupt every name
+     * and file, so it is rejected instead.</p>
+     *
+     * @throws IOException if a required feature flag is missing
+     */
+    private void validateRequiredFlags() throws IOException {
+        if (!isFeatureFlagSet(Constants.FLAG_PLAINTEXT_NAMES)
+                && !isFeatureFlagSet(Constants.FLAG_EME_NAMES)) {
+            throw new IOException("EMENames feature flag is missing (legacy filename encryption)");
+        }
+        if (!isFeatureFlagSet(Constants.FLAG_XCHACHA)
+                && !isFeatureFlagSet(Constants.FLAG_GCM_IV128)) {
+            throw new IOException("GCMIV128 feature flag is missing (legacy 96-bit IVs)");
         }
     }
 

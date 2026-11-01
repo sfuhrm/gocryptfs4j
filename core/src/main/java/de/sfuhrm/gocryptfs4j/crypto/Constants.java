@@ -154,6 +154,12 @@ public final class Constants {
      * 512 MiB ceiling keeps the allocation within a default JVM heap: the
      * previous 1 GiB limit allowed {@code N=2^20, R=8} (1 GiB) and threw
      * {@code OutOfMemoryError}.</p>
+     *
+     * <p>This deliberately rejects a legitimate gocryptfs filesystem created with
+     * {@code -scryptn 20} (the maximum gocryptfs accepts): {@code N=2^20} with the
+     * default {@code R=8} requests 1 GiB, above the ceiling. Such filesystems must
+     * be re-created with a smaller {@code N} (for example the gocryptfs default
+     * {@code -scryptn 16}) to be opened here.</p>
      */
     public static final long SCRYPT_MAX_MEMORY = 512L << 20;
 
