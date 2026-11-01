@@ -182,24 +182,27 @@ import java.nio.file.Paths;
 
 // Create a new encrypted filesystem. The directory must exist and be empty.
 Path cipherDir = Paths.get("/data/cipher");
-CipherStore store = new PathCipherStore(cipherDir);
-try (GocryptFs fs = GocryptFs.create(store, "my-password".toCharArray())) {
-    fs.mkdir("/docs");
-    fs.createFile("/docs/hello.txt");
-    fs.write("/docs/hello.txt", 0, "hello gocryptfs".getBytes(StandardCharsets.UTF_8));
-}
-
-// Later, open it again and read back.
-try (GocryptFs fs = GocryptFs.open(store, "my-password".toCharArray())) {
-    for (DirEntry e : fs.list("/")) {
-        System.out.println(e.plainName() + " (" + e.kind() + ", " + e.size() + " bytes)");
+try (CipherStore store = new PathCipherStore(cipherDir)) {
+    try (GocryptFs fs = GocryptFs.create(store, "my-password".toCharArray())) {
+        fs.mkdir("/docs");
+        fs.createFile("/docs/hello.txt");
+        fs.write("/docs/hello.txt", 0, "hello gocryptfs".getBytes(StandardCharsets.UTF_8));
     }
-    String content = new String(fs.readAll("/docs/hello.txt"), StandardCharsets.UTF_8);
+
+    // Later, open it again and read back.
+    try (GocryptFs fs = GocryptFs.open(store, "my-password".toCharArray())) {
+        for (DirEntry e : fs.list("/")) {
+            System.out.println(e.plainName() + " (" + e.kind() + ", " + e.size() + " bytes)");
+        }
+        String content = new String(fs.readAll("/docs/hello.txt"), StandardCharsets.UTF_8);
+    }
 }
 ```
 
 The `GocryptFs` object is `AutoCloseable` and wipes the master key and derived
-keys from memory on `close()`. Other operations include `size`, `truncate`,
+keys from memory on `close()`. A store you supply yourself is also yours to
+close — `GocryptFs` closes only stores it created from a URI — so pass it to
+try-with-resources as shown above. Other operations include `size`, `truncate`,
 `delete`, `createSymlink`, `readSymlinkTarget`, `setTimes`, `openRead` (a
 streaming decrypting `InputStream`) and `openWrite` (a streaming encrypting
 `OutputStream`).
@@ -318,17 +321,18 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Paths;
 
 Fido2Token token = new LibFido2Token("/dev/hidraw5");  // list with: fido2-token -L
-PathCipherStore store = new PathCipherStore(Paths.get("/data/cipher"));
 
-// Create a new filesystem: registers a credential on the key and touches it.
-try (GocryptFs fs = GocryptFs.create(store, token)) {
-    fs.createFile("/hello.txt");
-    fs.write("/hello.txt", 0, "hello fido2".getBytes(StandardCharsets.UTF_8));
-}
+try (PathCipherStore store = new PathCipherStore(Paths.get("/data/cipher"))) {
+    // Create a new filesystem: registers a credential on the key and touches it.
+    try (GocryptFs fs = GocryptFs.create(store, token)) {
+        fs.createFile("/hello.txt");
+        fs.write("/hello.txt", 0, "hello fido2".getBytes(StandardCharsets.UTF_8));
+    }
 
-// Open an existing one: the credential ID and salt come from gocryptfs.conf.
-try (GocryptFs fs = GocryptFs.open(store, token)) {
-    String content = new String(fs.readAll("/hello.txt"), StandardCharsets.UTF_8);
+    // Open an existing one: the credential ID and salt come from gocryptfs.conf.
+    try (GocryptFs fs = GocryptFs.open(store, token)) {
+        String content = new String(fs.readAll("/hello.txt"), StandardCharsets.UTF_8);
+    }
 }
 ```
 

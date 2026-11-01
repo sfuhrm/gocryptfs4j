@@ -108,13 +108,17 @@ Other operations include `mkdir`, `delete`, `rename`, `createSymlink`,
 ### deinit
 
 `GocryptFs` is `AutoCloseable`. Closing it wipes the master key and every
-derived key from memory — use try-with-resources so this always happens:
+derived key from memory — use try-with-resources so this always happens. The
+`CipherStore` is also `AutoCloseable` and, when you create it yourself, is yours
+to close (releasing the directory handle); `GocryptFs` only closes stores it
+created from a URI:
 
 ```java
-try (GocryptFs fs = GocryptFs.open(store, "my-password".toCharArray())) {
+try (CipherStore store = new PathCipherStore(Paths.get("/data/cipher"));
+     GocryptFs fs = GocryptFs.open(store, "my-password".toCharArray())) {
     // ... init, listing, access ...
 }
-// the master key and all derived keys have been wiped here
+// the master key, all derived keys and the store have been closed here
 ```
 
 ---

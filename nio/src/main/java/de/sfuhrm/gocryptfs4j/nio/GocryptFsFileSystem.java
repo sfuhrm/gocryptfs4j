@@ -1,6 +1,7 @@
 package de.sfuhrm.gocryptfs4j.nio;
 
 import de.sfuhrm.gocryptfs4j.core.GocryptFs;
+import de.sfuhrm.gocryptfs4j.store.CipherStore;
 import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
@@ -41,6 +42,9 @@ public final class GocryptFsFileSystem extends FileSystem {
     /** The core gocryptfs instance. */
     private final GocryptFs core;
 
+    /** The backing cipher store, owned and closed by this filesystem. */
+    private final CipherStore store;
+
     /** The absolute, normalized cipher directory key. */
     private final String key;
 
@@ -70,22 +74,24 @@ public final class GocryptFsFileSystem extends FileSystem {
      * opened.
      *
      * @param provider          the provider that created this filesystem
+     * @param store             the backing cipher store, owned and closed by this filesystem
      * @param core              the core gocryptfs instance
      * @param key               the absolute, normalized cipher directory key
      * @param windowsSeparators whether {@code "\"} is treated as a path separator
      */
-    GocryptFsFileSystem(GocryptFsProvider provider, GocryptFs core, String key,
-                        boolean windowsSeparators) {
+    GocryptFsFileSystem(GocryptFsProvider provider, CipherStore store, GocryptFs core,
+                        String key, boolean windowsSeparators) {
         this.provider = provider;
+        this.store = store;
         this.core = core;
         this.key = key;
         this.windowsSeparators = windowsSeparators;
         this.uri = URI.create("gocryptfs://" + urlEncode(key) + "/");
         this.root = GocryptFsPath.absolute(this, "/");
         this.userPrincipalLookupService = new GocryptFsUserPrincipalLookupService();
-        FileStore store = fileStore(key);
-        this.supportsPosix = store != null && store.supportsFileAttributeView("posix");
-        this.readOnly = store != null && store.isReadOnly();
+        FileStore backingStore = fileStore(key);
+        this.supportsPosix = backingStore != null && backingStore.supportsFileAttributeView("posix");
+        this.readOnly = backingStore != null && backingStore.isReadOnly();
     }
 
     /**
@@ -329,9 +335,9 @@ public final class GocryptFsFileSystem extends FileSystem {
     }
 
     /**
-     * Closes the filesystem, releasing the core gocryptfs instance and
-     * unregistering it from the provider. Closing an already-closed filesystem
-     * has no effect.
+     * Closes the filesystem, releasing the core gocryptfs instance and the
+     * backing cipher store, and unregistering it from the provider. Closing an
+     * already-closed filesystem has no effect.
      *
      * @throws IOException on filesystem errors
      */
@@ -339,7 +345,11 @@ public final class GocryptFsFileSystem extends FileSystem {
     public void close() throws IOException {
         if (open) {
             open = false;
-            core.close();
+            try {
+                core.close();
+            } finally {
+                store.close();
+            }
             provider.remove(this);
         }
     }

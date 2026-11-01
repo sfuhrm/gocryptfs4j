@@ -4,6 +4,7 @@ import de.sfuhrm.gocryptfs4j.core.DirEntry;
 import de.sfuhrm.gocryptfs4j.core.GocryptFs;
 import de.sfuhrm.gocryptfs4j.core.CipherFile;
 import de.sfuhrm.gocryptfs4j.fido2.Fido2Token;
+import de.sfuhrm.gocryptfs4j.store.CipherStore;
 import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
 import org.jspecify.annotations.Nullable;
 
@@ -110,8 +111,15 @@ public final class GocryptFsProvider extends FileSystemProvider {
             throws IOException {
         Objects.requireNonNull(cipherDir, "cipherDir");
         Objects.requireNonNull(password, "password");
-        return register(cipherDir, GocryptFs.open(new PathCipherStore(cipherDir), password),
-                windowsSeparators);
+        PathCipherStore store = new PathCipherStore(cipherDir);
+        GocryptFs core;
+        try {
+            core = GocryptFs.open(store, password);
+        } catch (IOException | RuntimeException e) {
+            closeQuietly(store);
+            throw e;
+        }
+        return register(cipherDir, store, core, windowsSeparators);
     }
 
     /**
@@ -141,8 +149,15 @@ public final class GocryptFsProvider extends FileSystemProvider {
             throws IOException {
         Objects.requireNonNull(cipherDir, "cipherDir");
         Objects.requireNonNull(token, "token");
-        return register(cipherDir, GocryptFs.open(new PathCipherStore(cipherDir), token),
-                windowsSeparators);
+        PathCipherStore store = new PathCipherStore(cipherDir);
+        GocryptFs core;
+        try {
+            core = GocryptFs.open(store, token);
+        } catch (IOException | RuntimeException e) {
+            closeQuietly(store);
+            throw e;
+        }
+        return register(cipherDir, store, core, windowsSeparators);
     }
 
     /**
@@ -150,17 +165,19 @@ public final class GocryptFsProvider extends FileSystemProvider {
      * is already open under this provider.
      *
      * @param cipherDir the ciphertext directory
+     * @param store     the backing cipher store, closed on registration failure
      * @param core      the freshly opened core instance
      * @return the registered filesystem
      * @throws FileSystemAlreadyExistsException if the cipher directory is already open
      * @throws IOException if the real path of the cipher directory cannot be resolved
      */
-    private FileSystem register(Path cipherDir, GocryptFs core, boolean windowsSeparators)
-            throws IOException {
+    private FileSystem register(Path cipherDir, CipherStore store, GocryptFs core,
+                                boolean windowsSeparators) throws IOException {
         boolean takenOver = false;
         try {
             String key = cipherDir.toRealPath().toString();
-            GocryptFsFileSystem fs = new GocryptFsFileSystem(this, core, key, windowsSeparators);
+            GocryptFsFileSystem fs = new GocryptFsFileSystem(this, store, core, key,
+                    windowsSeparators);
             GocryptFsFileSystem existing = filesystems.putIfAbsent(key, fs);
             if (existing != null) {
                 throw new FileSystemAlreadyExistsException(key);
@@ -169,24 +186,24 @@ public final class GocryptFsProvider extends FileSystemProvider {
             return fs;
         } finally {
             if (!takenOver) {
-                closeAfterFailedRegistration(core);
+                closeQuietly(core);
+                closeQuietly(store);
             }
         }
     }
 
     /**
-     * Releases a freshly opened core instance whose registration failed, so that
-     * key material and storage resources are not leaked when, for example, the
-     * real path of the cipher directory cannot be resolved.
+     * Closes a resource, suppressing any exception so that a cleanup failure does
+     * not mask the exception that caused the failed open or registration.
      *
-     * @param core the core instance to close
+     * @param closeable the resource to close
      */
-    private static void closeAfterFailedRegistration(GocryptFs core) {
+    private static void closeQuietly(AutoCloseable closeable) {
         try {
-            core.close();
-        } catch (IOException e) {
+            closeable.close();
+        } catch (Exception e) {
             // A cleanup failure must not mask the exception that caused the
-            // failed registration.
+            // failed open or registration.
         }
     }
 
