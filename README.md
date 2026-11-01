@@ -1,5 +1,21 @@
 # gocryptfs4j
 
+> ## ⚠️ IMPORTANT — NO WARRANTY FOR DATA INTEGRITY
+>
+> This software is provided **"as is"**, without warranty of any kind, express or
+> implied, including but not limited to the warranties of merchantability,
+> fitness for a particular purpose and non-infringement. **It gives no guarantee
+> whatsoever for the integrity, confidentiality or recoverability of your data.**
+>
+> **Data loss is possible.** Bugs, crashes, power failures, hardware faults,
+> misconfiguration, operator error or incompatibilities may render encrypted
+> data unreadable, corrupt it or destroy it. By using this software you accept
+> that risk and agree that the authors and contributors are not liable for any
+> loss or damage, however caused.
+>
+> **Always keep a separate, verified backup of any data you care about** before
+> encrypting it, and never use this software on the only copy of important data.
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![build](https://github.com/sfuhrm/gocryptfs4j/actions/workflows/build.yml/badge.svg)](https://github.com/sfuhrm/gocryptfs4j/actions/workflows/build.yml)
 ![Java](https://img.shields.io/badge/Java-8-blue.svg)
