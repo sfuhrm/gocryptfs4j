@@ -266,19 +266,21 @@ final class SecurePathStore implements CipherStore {
     public void rename(String from, String to, boolean replaceExisting) throws IOException {
         Objects.requireNonNull(from, "from");
         Objects.requireNonNull(to, "to");
+        if (!replaceExisting) {
+            // SecureDirectoryStream.move is rename(2): it always replaces an
+            // existing target, so enforcing no-replace by checking the target
+            // and then moving is racy. Delegate to the path-based store, whose
+            // Files.move without REPLACE_EXISTING fails with
+            // FileAlreadyExistsException instead of silently replacing. Both
+            // parents are still verified through the secure traversal first;
+            // see verifyParent for the residual window.
+            verifyParent(from);
+            verifyParent(to);
+            delegate.rename(from, to, false);
+            return;
+        }
         try (SecurePath src = requireParent(from);
              SecurePath dst = requireParent(to)) {
-            if (!replaceExisting) {
-                // SecureDirectoryStream.move has no replace flag, so the no-replace
-                // contract is enforced by checking the target first (with the same
-                // unavoidable race as the plain Files.move path).
-                try {
-                    basicAttributes(dst.dir(), dst.name());
-                    throw new FileAlreadyExistsException(Paths.get(to).toString());
-                } catch (NoSuchFileException e) {
-                    // Target is free.
-                }
-            }
             src.dir().move(src.name(), dst.dir(), dst.name());
         }
     }

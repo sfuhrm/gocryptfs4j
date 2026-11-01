@@ -34,6 +34,7 @@ import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.nio.file.attribute.UserPrincipal;
 import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
@@ -497,6 +498,55 @@ class GocryptFsProviderOperationsTest {
         assertThrows(java.nio.file.DirectoryNotEmptyException.class,
                 () -> Files.copy(src, dir, StandardCopyOption.REPLACE_EXISTING));
         assertTrue(Files.exists(dir.resolve("c.txt")));
+    }
+
+    @Test
+    void copyReplaceKeepsTargetWhenSourceIsCorrupt() throws IOException {
+        Path target = nio.getPath("/copy-safe-dst.txt");
+        Files.write(target, "TARGET-DATA".getBytes(StandardCharsets.UTF_8));
+
+        Set<String> before = cipherFileNames();
+        Path source = nio.getPath("/copy-safe-src.txt");
+        Files.write(source, "SOURCE-DATA".getBytes(StandardCharsets.UTF_8));
+        Set<String> after = cipherFileNames();
+        after.removeAll(before);
+        assertEquals(1, after.size());
+        Path sourceCipher = cipherDir.resolve(after.iterator().next());
+
+        // Corrupt the source ciphertext (flip the last byte, the GCM tag) so
+        // reading it fails authentication during the copy.
+        byte[] bytes = Files.readAllBytes(sourceCipher);
+        bytes[bytes.length - 1] ^= 0x01;
+        Files.write(sourceCipher, bytes);
+
+        assertThrows(IOException.class,
+                () -> Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING));
+
+        // The pre-existing target must survive the failed copy.
+        assertEquals("TARGET-DATA",
+                new String(Files.readAllBytes(target), StandardCharsets.UTF_8));
+        assertNoScratchFiles();
+    }
+
+    private static Set<String> cipherFileNames() throws IOException {
+        Set<String> names = new HashSet<>();
+        try (java.util.stream.Stream<Path> entries = Files.list(cipherDir)) {
+            for (Path p : (Iterable<Path>) entries::iterator) {
+                if (Files.isRegularFile(p)) {
+                    names.add(p.getFileName().toString());
+                }
+            }
+        }
+        return names;
+    }
+
+    private static void assertNoScratchFiles() throws IOException {
+        try (java.util.stream.Stream<Path> entries = Files.list(cipherDir)) {
+            for (Path p : (Iterable<Path>) entries::iterator) {
+                assertFalse(p.getFileName().toString().contains(".gocryptfs-copy"),
+                        "leftover copy scratch file in " + cipherDir);
+            }
+        }
     }
 
     @Test

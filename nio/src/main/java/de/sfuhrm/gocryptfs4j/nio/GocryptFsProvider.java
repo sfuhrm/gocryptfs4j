@@ -51,6 +51,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -663,40 +664,127 @@ public final class GocryptFsProvider extends FileSystemProvider {
         boolean copyAttributes = opts.contains(StandardCopyOption.COPY_ATTRIBUTES);
         GocryptFs fs = core(s);
 
-        if (exists(t)) {
-            if (!replace) {
-                throw new FileAlreadyExistsException(t.toString());
-            }
-            if (fs.stat(t.toString()).isDirectory() && !fs.list(t.toString()).isEmpty()) {
-                throw new DirectoryNotEmptyException(t.toString());
-            }
-            fs.delete(t.toString());
+        if (exists(t) && !replace) {
+            throw new FileAlreadyExistsException(t.toString());
         }
 
         DirEntry se = fs.stat(s.toString());
         if (se.isDirectory()) {
+            // Directory copies create only the (empty) target directory; there
+            // is no source content that can fail to decrypt, so an existing
+            // target can be replaced in place after checking it is empty.
+            if (exists(t)) {
+                DirEntry te = fs.stat(t.toString());
+                if (te.isDirectory() && !fs.list(t.toString()).isEmpty()) {
+                    throw new DirectoryNotEmptyException(t.toString());
+                }
+                fs.delete(t.toString());
+            }
             fs.mkdir(t.toString());
             if (copyAttributes) {
                 copyAttributes(s, t, false);
             }
         } else if (se.isSymbolicLink()) {
-            fs.createSymlink(t.toString(), fs.readSymlinkTarget(s.toString()));
+            // Read the (encrypted) source link target before touching the
+            // destination, so a corrupt source link leaves an existing target
+            // intact.
+            String target = fs.readSymlinkTarget(s.toString());
+            if (exists(t)) {
+                fs.delete(t.toString());
+            }
+            fs.createSymlink(t.toString(), target);
             if (copyAttributes) {
                 copySymlinkAttributes(s, t);
             }
         } else {
+            copyFile(fs, s, t, replace, copyAttributes);
+        }
+    }
+
+    /**
+     * Copies a regular file. When the target already exists and must be replaced,
+     * the content is first copied to a sibling temporary file that is then renamed
+     * over the target, so a decryption error on the source never leaves an
+     * existing target deleted.
+     *
+     * @param fs             the filesystem
+     * @param s              the absolute source
+     * @param t              the absolute target
+     * @param replace        whether an existing target may be replaced
+     * @param copyAttributes whether to copy attributes after the content
+     * @throws IOException on filesystem errors
+     */
+    private void copyFile(GocryptFs fs, GocryptFsPath s, GocryptFsPath t,
+                          boolean replace, boolean copyAttributes) throws IOException {
+        if (!replace || !exists(t)) {
             fs.createFile(t.toString());
             try (InputStream in = fs.openRead(s.toString());
                  OutputStream out = fs.openWrite(t.toString())) {
-                byte[] buf = new byte[8192];
-                int n;
-                while ((n = in.read(buf)) != -1) {
-                    out.write(buf, 0, n);
-                }
+                copyBytes(in, out);
             }
             if (copyAttributes) {
                 copyAttributes(s, t, false);
             }
+            return;
+        }
+        GocryptFsPath temp = tempSibling(t);
+        boolean done = false;
+        try {
+            fs.createFile(temp.toString());
+            try (InputStream in = fs.openRead(s.toString());
+                 OutputStream out = fs.openWrite(temp.toString())) {
+                copyBytes(in, out);
+            }
+            fs.rename(temp.toString(), t.toString(), true);
+            done = true;
+        } finally {
+            if (!done) {
+                deleteQuietly(fs, temp);
+            }
+        }
+        if (copyAttributes) {
+            copyAttributes(s, t, false);
+        }
+    }
+
+    /**
+     * Streams all bytes from {@code in} to {@code out}.
+     *
+     * @param in  the source
+     * @param out the destination
+     * @throws IOException on I/O errors
+     */
+    private static void copyBytes(InputStream in, OutputStream out) throws IOException {
+        byte[] buf = new byte[8192];
+        int n;
+        while ((n = in.read(buf)) != -1) {
+            out.write(buf, 0, n);
+        }
+    }
+
+    /**
+     * Returns a unique sibling path of {@code target} to use as a copy scratch
+     * file.
+     *
+     * @param target the copy target
+     * @return a sibling path that does not collide with an existing entry
+     */
+    private static GocryptFsPath tempSibling(GocryptFsPath target) {
+        return (GocryptFsPath) target.resolveSibling("." + UUID.randomUUID() + ".gocryptfs-copy");
+    }
+
+    /**
+     * Deletes a scratch file, ignoring any failure so that cleanup never masks
+     * the error that triggered it.
+     *
+     * @param fs   the filesystem
+     * @param path the scratch file to remove
+     */
+    private static void deleteQuietly(GocryptFs fs, GocryptFsPath path) {
+        try {
+            fs.delete(path.toString());
+        } catch (IOException e) {
+            // Best-effort cleanup of the temporary copy file.
         }
     }
 
