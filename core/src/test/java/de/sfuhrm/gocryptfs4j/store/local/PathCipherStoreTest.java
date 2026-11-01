@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.SeekableByteChannel;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.DirectoryStream;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -79,6 +80,55 @@ class PathCipherStoreTest {
         Files.createSymbolicLink(link, target);
         PathCipherStore store = new PathCipherStore(dir);
         assertThrows(IOException.class, () -> store.readSmall(link.toString(), 100));
+    }
+
+    @Test
+    void symlinkedRootIsResolvedToRealPath() throws Exception {
+        Path real = Files.createDirectory(tmp.resolve("real"));
+        Path vault = tmp.resolve("vault");
+        Files.createSymbolicLink(vault, real);
+
+        PathCipherStore store = new PathCipherStore(vault);
+
+        assertEquals(real.toRealPath(), Paths.get(store.root()));
+    }
+
+    @Test
+    void symlinkedRootStillRejectsIntermediateSymlink() throws Exception {
+        Path real = Files.createDirectory(tmp.resolve("real"));
+        assumeTrue(secureDirectoryStreamsAvailable(real),
+                "filesystem does not provide SecureDirectoryStream");
+        Path vault = tmp.resolve("vault");
+        Files.createSymbolicLink(vault, real);
+
+        Path outside = Files.createDirectory(tmp.resolve("outside"));
+        Files.write(outside.resolve("secret"), "secret".getBytes(StandardCharsets.UTF_8));
+        Files.createSymbolicLink(real.resolve("link"), outside);
+
+        PathCipherStore store = new PathCipherStore(vault);
+        String root = store.root();
+
+        assertThrows(IOException.class, () -> store.readSmall(root + "/link/secret", 100));
+        assertThrows(IOException.class, () -> store.mkdir(root + "/link/sub"));
+        assertThrows(IOException.class, () -> store.createSymlink(root + "/link/l", "target"));
+    }
+
+    @Test
+    void mkdirCreateSymlinkAndReadSymlinkRejectIntermediateSymlink() throws Exception {
+        Path dir = Files.createDirectory(tmp.resolve("cipher"));
+        assumeTrue(secureDirectoryStreamsAvailable(dir),
+                "filesystem does not provide SecureDirectoryStream");
+        Path other = Files.createDirectory(dir.resolve("other"));
+        Files.createSymbolicLink(other.resolve("l"), Paths.get("target"));
+        Files.createSymbolicLink(dir.resolve("link"), other);
+        PathCipherStore store = new PathCipherStore(dir);
+
+        assertThrows(IOException.class,
+                () -> store.mkdir(dir.resolve("link").resolve("sub").toString()));
+        assertThrows(IOException.class,
+                () -> store.createSymlink(dir.resolve("link").resolve("s").toString(), "target"));
+        assertThrows(IOException.class,
+                () -> store.readSymlink(dir.resolve("link").resolve("l").toString()));
     }
 
     @Test
@@ -244,6 +294,12 @@ class PathCipherStoreTest {
         try (java.util.stream.Stream<Path> entries = Files.list(dir)) {
             assertTrue(entries.noneMatch(p -> p.getFileName().toString().startsWith(".gocryptfs-")),
                     "leftover temporary file in " + dir);
+        }
+    }
+
+    private static boolean secureDirectoryStreamsAvailable(Path dir) throws IOException {
+        try (DirectoryStream<Path> ds = Files.newDirectoryStream(dir)) {
+            return ds instanceof SecureDirectoryStream;
         }
     }
 

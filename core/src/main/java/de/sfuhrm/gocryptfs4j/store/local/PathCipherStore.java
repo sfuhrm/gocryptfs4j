@@ -35,10 +35,14 @@ import java.util.Set;
  * resolves paths component-by-component without following symlinks; otherwise a
  * plain {@link PlainPathStore} is used, which still confines every path to the
  * root directory and rejects symlinks at the final component.</p>
+ *
+ * <p>A root directory that is itself a symlink is followed to its canonical
+ * real path before the backing is selected, so a symlinked root (for example
+ * {@code ~/Dropbox/vault}) is not silently downgraded to the plain store.</p>
  */
 public final class PathCipherStore implements CipherStore {
 
-    /** The absolute, normalized ciphertext root directory. */
+    /** The absolute, canonical (symlink-resolved) ciphertext root directory. */
     private final Path root;
 
     /** The store to which every operation is delegated. */
@@ -51,8 +55,29 @@ public final class PathCipherStore implements CipherStore {
      * @throws NullPointerException if {@code root} is {@code null}
      */
     public PathCipherStore(Path root) {
-        this.root = Objects.requireNonNull(root, "root").toAbsolutePath().normalize();
+        this.root = resolveRoot(Objects.requireNonNull(root, "root"));
         this.delegate = createDelegate(this.root);
+    }
+
+    /**
+     * Resolves the ciphertext root to its canonical real path, following
+     * symlinks. This lets a root that is itself a symlink (for example
+     * {@code ~/Dropbox/vault}) still receive the secure backing instead of
+     * silently degrading to the plain path store.
+     *
+     * @param root the caller-supplied root path
+     * @return the canonical real path, or the absolute normalized path when
+     *         the root does not exist yet (operations then fail lazily)
+     */
+    private static Path resolveRoot(Path root) {
+        Path normalized = root.toAbsolutePath().normalize();
+        try {
+            return normalized.toRealPath();
+        } catch (IOException e) {
+            // The root does not exist yet (or is a dangling symlink): keep the
+            // normalized path and let the first operation fail lazily.
+            return normalized;
+        }
     }
 
     /**

@@ -49,8 +49,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <p>Operations that {@code SecureDirectoryStream} cannot express
  * ({@link #writeConfig}, {@link #mkdir}, {@link #createSymlink},
  * {@link #readSymlink} and {@link #checkAccess}) are delegated to the wrapped
- * store; the three entry-creating operations first verify the parent through
- * the secure traversal.</p>
+ * store. The entry-creating operations {@link #mkdir} and {@link #createSymlink},
+ * and the link-reading {@link #readSymlink}, first verify the parent through the
+ * secure traversal. Because NIO exposes no {@code mkdirat}/{@code symlinkat}/
+ * {@code readlinkat}, the actual operation is then a path-based syscall: the
+ * traversal rejects a symlink that is already in place as an intermediate
+ * component, but a symlink swapped in between the traversal and that syscall
+ * remains a residual window (see {@link #verifyParent}).</p>
  */
 final class SecurePathStore implements CipherStore {
 
@@ -204,10 +209,10 @@ final class SecurePathStore implements CipherStore {
     public void mkdir(String name) throws IOException {
         Objects.requireNonNull(name, "name");
         // SecureDirectoryStream has no create-directory operation, so the actual
-        // creation is delegated. Walking to the parent first still verifies
-        // every intermediate component is a real directory, shrinking the window
-        // in which an attacker could swap one for a symlink (but not closing it
-        // entirely).
+        // creation is delegated. Walking to the parent first still rejects an
+        // intermediate symlink already in place, but the walk and the delegated
+        // syscall are not atomic: a symlink swapped in between remains a
+        // residual window (see verifyParent).
         verifyParent(name);
         delegate.mkdir(name);
     }
@@ -253,7 +258,7 @@ final class SecurePathStore implements CipherStore {
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(target, "target");
         // No SecureDirectoryStream API exists for creating symlinks; see
-        // {@link #mkdir} for the residual-window rationale.
+        // {@link #mkdir} and {@link #verifyParent} for the residual window.
         verifyParent(name);
         delegate.createSymlink(name, target);
     }
@@ -261,7 +266,8 @@ final class SecurePathStore implements CipherStore {
     @Override
     public String readSymlink(String name) throws IOException {
         Objects.requireNonNull(name, "name");
-        // No SecureDirectoryStream API exists for reading symlinks.
+        // No SecureDirectoryStream API exists for reading symlinks; see
+        // {@link #verifyParent} for the residual window.
         verifyParent(name);
         return delegate.readSymlink(name);
     }
@@ -484,7 +490,13 @@ final class SecurePathStore implements CipherStore {
     /**
      * Verifies that every intermediate directory of {@code name} is a real
      * directory, not a symlink. Used as a best-effort hardening for the
-     * operations {@code SecureDirectoryStream} cannot perform directly.
+     * operations {@code SecureDirectoryStream} cannot perform directly
+     * ({@link #mkdir}, {@link #createSymlink}, {@link #readSymlink}). The
+     * traversal pins each intermediate component with {@code NOFOLLOW_LINKS}
+     * and rejects a symlink already in place, but the directory handles are
+     * closed before the delegated path-based syscall runs, so a symlink swapped
+     * in between remains a residual TOCTOU window that NIO provides no
+     * {@code *at} primitive to close.
      */
     private void verifyParent(String name) throws IOException {
         requireParent(name).close();
