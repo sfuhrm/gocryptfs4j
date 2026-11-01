@@ -12,13 +12,16 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.nio.file.ClosedFileSystemException;
+import java.nio.file.ClosedWatchServiceException;
 import java.nio.file.FileSystem;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardWatchEventKinds;
 import java.nio.file.WatchService;
 import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -63,6 +66,32 @@ class GocryptFsFileSystemTest {
         fs.close();
         assertFalse(fs.isOpen());
         assertThrows(ClosedFileSystemException.class, fs::newWatchService);
+    }
+
+    @Test
+    void closeClosesWatchServices() throws Exception {
+        Path cipherDir = createCipherDir("watch-close");
+        FileSystem fs = new GocryptFsProvider().newFileSystem(cipherDir, "pw".toCharArray());
+        WatchService watcher = fs.newWatchService();
+        fs.getPath("/").register(watcher, StandardWatchEventKinds.ENTRY_CREATE);
+
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread blocked = new Thread(() -> {
+            try {
+                watcher.take();
+            } catch (Throwable t) {
+                failure.set(t);
+            }
+        }, "watch-take");
+        blocked.start();
+        Thread.sleep(200L);
+
+        fs.close();
+
+        blocked.join(5000L);
+        assertFalse(blocked.isAlive(), "thread blocked in take() must wake up on close");
+        assertTrue(failure.get() instanceof ClosedWatchServiceException,
+                "take() must fail with ClosedWatchServiceException but got " + failure.get());
     }
 
     @Test

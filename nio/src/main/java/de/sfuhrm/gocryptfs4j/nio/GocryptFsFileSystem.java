@@ -15,10 +15,12 @@ import java.nio.file.PathMatcher;
 import java.nio.file.Paths;
 import java.nio.file.WatchService;
 import java.nio.file.attribute.UserPrincipalLookupService;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * A {@link FileSystem} view over a gocryptfs cipher directory.
@@ -65,6 +67,9 @@ public final class GocryptFsFileSystem extends FileSystem {
 
     /** Whether the filesystem is still open. */
     private volatile boolean open = true;
+
+    /** The watch services created by this filesystem, closed on {@link #close()}. */
+    private final Set<GocryptFsWatchService> watchServices = ConcurrentHashMap.newKeySet();
 
     /** Whether backslashes are treated as path separators. */
     private final boolean windowsSeparators;
@@ -335,6 +340,24 @@ public final class GocryptFsFileSystem extends FileSystem {
     }
 
     /**
+     * Registers a watch service so it is closed when the filesystem closes.
+     *
+     * @param watchService the watch service to track
+     */
+    void addWatchService(GocryptFsWatchService watchService) {
+        watchServices.add(watchService);
+    }
+
+    /**
+     * Unregisters a watch service after it has been closed.
+     *
+     * @param watchService the watch service to stop tracking
+     */
+    void removeWatchService(GocryptFsWatchService watchService) {
+        watchServices.remove(watchService);
+    }
+
+    /**
      * Closes the filesystem, releasing the core gocryptfs instance and the
      * backing cipher store, and unregistering it from the provider. Closing an
      * already-closed filesystem has no effect.
@@ -345,6 +368,7 @@ public final class GocryptFsFileSystem extends FileSystem {
     public void close() throws IOException {
         if (open) {
             open = false;
+            closeWatchServices();
             try {
                 core.close();
             } finally {
@@ -352,6 +376,17 @@ public final class GocryptFsFileSystem extends FileSystem {
             }
             provider.remove(this);
         }
+    }
+
+    /**
+     * Closes and unregisters all outstanding watch services so that threads
+     * blocked in {@link java.nio.file.WatchService#take()} wake up.
+     */
+    private void closeWatchServices() {
+        for (GocryptFsWatchService watchService : new ArrayList<>(watchServices)) {
+            watchService.close();
+        }
+        watchServices.clear();
     }
 
     /**

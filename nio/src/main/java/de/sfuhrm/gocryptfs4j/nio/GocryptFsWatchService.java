@@ -74,6 +74,7 @@ final class GocryptFsWatchService implements WatchService {
         });
         this.scanTask = scheduler.scheduleWithFixedDelay(this::scan, pollIntervalMillis,
                 pollIntervalMillis, TimeUnit.MILLISECONDS);
+        fs.addWatchService(this);
     }
 
     /**
@@ -146,6 +147,10 @@ final class GocryptFsWatchService implements WatchService {
     /**
      * Scans all valid registered keys for changes. Called periodically by the
      * scheduler.
+     *
+     * <p>Runtime exceptions from a single key are swallowed so that one bad
+     * scan does not terminate the scheduled task that keeps the whole service
+     * running.</p>
      */
     void scan() {
         List<GocryptFsWatchKey> snapshot;
@@ -153,8 +158,13 @@ final class GocryptFsWatchService implements WatchService {
             snapshot = new ArrayList<>(keys.values());
         }
         for (GocryptFsWatchKey key : snapshot) {
-            if (key.isValid()) {
+            if (!key.isValid()) {
+                continue;
+            }
+            try {
                 key.scan();
+            } catch (RuntimeException e) {
+                // Swallow: a failing key must not kill the scheduler.
             }
         }
     }
@@ -234,5 +244,6 @@ final class GocryptFsWatchService implements WatchService {
         }
         scanTask.cancel(true);
         scheduler.shutdownNow();
+        fs.removeWatchService(this);
     }
 }
