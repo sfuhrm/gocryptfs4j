@@ -181,12 +181,15 @@ final class GocryptFsFileChannel implements SeekableByteChannel {
 
     /**
      * Truncates the file to the given plaintext size, forcing the update if a
-     * sync mode is active. If the current position lies beyond the new size it
-     * is moved to the new size.
+     * sync mode is active. As required by {@link SeekableByteChannel#truncate},
+     * the file is not modified when {@code size} is at least the current size
+     * (so this never grows a file). If the current position lies beyond the new
+     * size it is moved to the new size.
      *
      * @param size the new plaintext size in bytes
      * @return this channel
      * @throws NonWritableChannelException if the channel was opened read-only
+     * @throws IllegalArgumentException if {@code size} is negative
      * @throws IOException on filesystem or encryption errors
      */
     @Override
@@ -194,10 +197,15 @@ final class GocryptFsFileChannel implements SeekableByteChannel {
         if (!writable) {
             throw new NonWritableChannelException();
         }
-        file.truncate(size);
-        force();
-        if (position > size) {
-            position = size;
+        if (size < 0) {
+            throw new IllegalArgumentException("negative size");
+        }
+        if (size < size()) {
+            file.truncate(size);
+            force();
+            if (position > size) {
+                position = size;
+            }
         }
         return this;
     }

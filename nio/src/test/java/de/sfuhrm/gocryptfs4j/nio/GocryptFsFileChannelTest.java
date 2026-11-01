@@ -95,6 +95,31 @@ class GocryptFsFileChannelTest {
     }
 
     @Test
+    void truncateToLargerSizeIsNoOp() throws IOException {
+        Path file = nio.getPath("/no-grow.txt");
+        Files.write(file, "0123456789".getBytes(StandardCharsets.UTF_8));
+
+        try (SeekableByteChannel ch = Files.newByteChannel(file,
+                EnumSet.of(StandardOpenOption.READ, StandardOpenOption.WRITE))) {
+            ch.truncate(100);
+            assertEquals(10, ch.size());
+            assertEquals(0, ch.position());
+        }
+        assertArrayEquals("0123456789".getBytes(StandardCharsets.UTF_8), Files.readAllBytes(file));
+    }
+
+    @Test
+    void truncateNegativeSizeThrows() throws IOException {
+        Path file = nio.getPath("/negative-trunc.txt");
+        Files.write(file, "0123456789".getBytes(StandardCharsets.UTF_8));
+
+        try (SeekableByteChannel ch = Files.newByteChannel(file,
+                EnumSet.of(StandardOpenOption.READ, StandardOpenOption.WRITE))) {
+            assertThrows(IllegalArgumentException.class, () -> ch.truncate(-1));
+        }
+    }
+
+    @Test
     void writeOnlyChannelRejectsRead() throws IOException {
         try (SeekableByteChannel ch = Files.newByteChannel(nio.getPath("/data.txt"),
                 EnumSet.of(StandardOpenOption.WRITE))) {
