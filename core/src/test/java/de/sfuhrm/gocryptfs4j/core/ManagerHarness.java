@@ -66,6 +66,7 @@ final class ManagerHarness {
                 nameManager, directoryManager);
         this.fileManager = new FileManager(store, contentEnc, nameTransform, plaintextNames,
                 nameManager, directoryManager, pathResolver);
+        directoryManager.setFileManager(fileManager);
 
         if (!plaintextNames && !deterministicNames) {
             directoryManager.writeDirIV(store.root());

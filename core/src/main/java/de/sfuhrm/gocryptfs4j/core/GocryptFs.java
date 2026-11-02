@@ -201,6 +201,7 @@ public final class GocryptFs implements AutoCloseable {
                     this.nameManager, this.directoryManager);
             this.fileManager = new FileManager(store, contentEncHelper, nameTransformHelper,
                     plainNames, this.nameManager, this.directoryManager, this.pathResolver);
+            this.directoryManager.setFileManager(this.fileManager);
             constructed = true;
         } finally {
             if (!constructed) {

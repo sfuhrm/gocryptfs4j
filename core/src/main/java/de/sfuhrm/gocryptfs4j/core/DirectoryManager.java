@@ -6,6 +6,7 @@ import de.sfuhrm.gocryptfs4j.crypto.Keys;
 import de.sfuhrm.gocryptfs4j.names.NameTransform;
 import de.sfuhrm.gocryptfs4j.store.CipherNode;
 import de.sfuhrm.gocryptfs4j.store.CipherStore;
+import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -48,6 +49,13 @@ final class DirectoryManager {
     /** The name manager. */
     private final NameManager nameManager;
 
+    /**
+     * The file manager, used to resolve the write-back-aware plaintext size of
+     * listed files. Set after construction, once the file manager exists, so it
+     * is {@code null} in tests that construct the directory manager alone.
+     */
+    private @Nullable FileManager fileManager;
+
     /** Cache of per-directory IVs, keyed by cipher directory name. */
     private final Map<String, byte[]> dirIvCache = new ConcurrentHashMap<>();
 
@@ -73,6 +81,16 @@ final class DirectoryManager {
         this.nameTransform = Objects.requireNonNull(nameTransform, "nameTransform");
         this.contentEnc = Objects.requireNonNull(contentEnc, "contentEnc");
         this.nameManager = Objects.requireNonNull(nameManager, "nameManager");
+    }
+
+    /**
+     * Supplies the file manager so listed file sizes account for unflushed
+     * write-back data. Called once, after the file manager is constructed.
+     *
+     * @param fileManager the file manager
+     */
+    void setFileManager(FileManager fileManager) {
+        this.fileManager = Objects.requireNonNull(fileManager, "fileManager");
     }
 
     /**
@@ -289,7 +307,12 @@ final class DirectoryManager {
                 size = target.getBytes(StandardCharsets.UTF_8).length;
             } else if (node.isRegularFile()) {
                 kind = DirEntry.Kind.FILE;
-                size = contentEnc.cipherSizeToPlainSize(node.size());
+                if (fileManager != null) {
+                    size = fileManager.plainSizeIncludingWriteBack(
+                            PathResolver.join(cipherDir, cName), node.size());
+                } else {
+                    size = contentEnc.cipherSizeToPlainSize(node.size());
+                }
             } else {
                 kind = DirEntry.Kind.OTHER;
                 size = node.size();

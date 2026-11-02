@@ -70,6 +70,19 @@ class FileManagerTest {
     }
 
     @Test
+    void statReflectsUnflushedWriteBack() throws IOException {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.fileManager.createFile("/f.txt");
+
+        try (SharedCipherFile cf = h.fileManager.openCipherFile("/f.txt", true)) {
+            // A single short block stays in the write-back buffer and is not yet
+            // written through, but stat must still report its plaintext size.
+            cf.write(ByteBuffer.wrap(new byte[100]), 0);
+            assertEquals(100L, h.fileManager.stat("/f.txt").size());
+        }
+    }
+
+    @Test
     void mkdirCreatesDirectory() throws IOException {
         ManagerHarness h = ManagerHarness.encrypted();
 

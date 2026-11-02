@@ -143,7 +143,7 @@ final class FileManager {
             size = readSymlink(r.cipherPath).getBytes(StandardCharsets.UTF_8).length;
         } else if (node.isRegularFile()) {
             kind = DirEntry.Kind.FILE;
-            size = contentEnc.cipherSizeToPlainSize(node.size());
+            size = plainSizeIncludingWriteBack(r.cipherPath, node.size());
         } else {
             kind = DirEntry.Kind.OTHER;
             size = node.size();
@@ -319,6 +319,31 @@ final class FileManager {
                 }
             }
         }
+    }
+
+    /**
+     * Returns the plaintext size of a cipher file, accounting for any unflushed
+     * write-back block of its shared backing {@link CipherFile}. The store's
+     * ciphertext size alone misses a block that has been buffered by an open
+     * handle but not yet written through.
+     *
+     * @param cipherFile the ciphertext file path
+     * @param cipherSize the ciphertext size reported by the store
+     * @return the plaintext size including buffered write-back data
+     * @throws IOException on filesystem errors
+     */
+    long plainSizeIncludingWriteBack(String cipherFile, long cipherSize) throws IOException {
+        long size = contentEnc.cipherSizeToPlainSize(cipherSize);
+        SharedCipherFile.Entry entry = sharedFiles.get(cipherFile);
+        if (entry != null) {
+            synchronized (entry.lock) {
+                CipherFile file = entry.file;
+                if (file != null) {
+                    size = Math.max(size, file.plainSize());
+                }
+            }
+        }
+        return size;
     }
 
     /**

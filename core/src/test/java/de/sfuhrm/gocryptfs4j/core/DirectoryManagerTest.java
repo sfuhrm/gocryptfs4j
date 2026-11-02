@@ -4,6 +4,7 @@ import de.sfuhrm.gocryptfs4j.crypto.Constants;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
@@ -189,6 +190,24 @@ class DirectoryManagerTest {
         assertEquals(1, entries.size());
         assertEquals("gocryptfs.diriv", entries.get(0).plainName());
         assertEquals(DirEntry.Kind.FILE, entries.get(0).kind());
+    }
+
+    @Test
+    void listCipherDirReflectsUnflushedWriteBack() throws IOException {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.fileManager.createFile("/f.txt");
+
+        try (SharedCipherFile cf = h.fileManager.openCipherFile("/f.txt", true)) {
+            // A single short block stays in the write-back buffer and is not yet
+            // written through, but listing must still report its plaintext size.
+            cf.write(ByteBuffer.wrap(new byte[100]), 0);
+
+            byte[] iv = h.directoryManager.readDirIV(h.store.root());
+            List<DirEntry> entries = h.directoryManager.listCipherDir(h.store.root(), iv);
+
+            assertEquals(1, entries.size());
+            assertEquals(100L, entries.get(0).size());
+        }
     }
 
     @Test
