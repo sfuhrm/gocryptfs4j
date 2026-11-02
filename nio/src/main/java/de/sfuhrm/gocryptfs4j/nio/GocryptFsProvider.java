@@ -53,6 +53,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.Lock;
 
 /**
  * A {@link FileSystemProvider} for gocryptfs cipher directories.
@@ -422,51 +423,57 @@ public final class GocryptFsProvider extends FileSystemProvider {
             read = true;
         }
 
-        boolean exists;
+        Lock writeLock = fs.writeLock();
+        writeLock.lock();
         try {
-            fs.stat(plain);
-            exists = true;
-        } catch (NoSuchFileException e) {
-            exists = false;
-        }
-        boolean created = false;
-        if (createNew && exists) {
-            throw new FileAlreadyExistsException(plain);
-        }
-        if ((create || createNew) && !exists) {
-            fs.createFile(plain);
-            created = true;
-        } else if (!exists) {
-            throw new NoSuchFileException(plain);
-        }
-
-        SharedCipherFile cf = fs.openCipherFile(plain, write);
-        long position = 0;
-        if (truncate && write) {
-            cf.truncate(0);
-        }
-        if (append) {
-            position = cf.plainSize();
-        }
-        if (created) {
-            // Applied after opening so that restrictive modes (for example
-            // read-only permissions) do not prevent the channel from opening.
+            boolean exists;
             try {
-                applyAttributes(p, attrs);
-            } catch (IOException | RuntimeException e) {
-                cf.close();
-                throw e;
+                fs.stat(plain);
+                exists = true;
+            } catch (NoSuchFileException e) {
+                exists = false;
             }
+            boolean created = false;
+            if (createNew && exists) {
+                throw new FileAlreadyExistsException(plain);
+            }
+            if ((create || createNew) && !exists) {
+                fs.createFile(plain);
+                created = true;
+            } else if (!exists) {
+                throw new NoSuchFileException(plain);
+            }
+
+            SharedCipherFile cf = fs.openCipherFile(plain, write);
+            long position = 0;
+            if (truncate && write) {
+                cf.truncate(0);
+            }
+            if (append) {
+                position = cf.plainSize();
+            }
+            if (created) {
+                // Applied after opening so that restrictive modes (for example
+                // read-only permissions) do not prevent the channel from opening.
+                try {
+                    applyAttributes(p, attrs);
+                } catch (IOException | RuntimeException e) {
+                    cf.close();
+                    throw e;
+                }
+            }
+            GocryptFsFileChannel.Sync sync = options.contains(StandardOpenOption.SYNC)
+                    ? GocryptFsFileChannel.Sync.FULL
+                    : options.contains(StandardOpenOption.DSYNC)
+                            ? GocryptFsFileChannel.Sync.DATA
+                            : GocryptFsFileChannel.Sync.NONE;
+            GocryptFsFileChannel.CloseAction onClose = deleteOnClose
+                    ? () -> deleteOnClose(fs, p)
+                    : null;
+            return new GocryptFsFileChannel(cf, read, write, append, position, sync, onClose);
+        } finally {
+            writeLock.unlock();
         }
-        GocryptFsFileChannel.Sync sync = options.contains(StandardOpenOption.SYNC)
-                ? GocryptFsFileChannel.Sync.FULL
-                : options.contains(StandardOpenOption.DSYNC)
-                        ? GocryptFsFileChannel.Sync.DATA
-                        : GocryptFsFileChannel.Sync.NONE;
-        GocryptFsFileChannel.CloseAction onClose = deleteOnClose
-                ? () -> deleteOnClose(fs, p)
-                : null;
-        return new GocryptFsFileChannel(cf, read, write, append, position, sync, onClose);
     }
 
     /**

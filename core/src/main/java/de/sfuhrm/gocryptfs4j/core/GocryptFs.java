@@ -33,6 +33,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
  * A Java API to a gocryptfs cipher directory.
@@ -125,6 +127,21 @@ public final class GocryptFs implements AutoCloseable {
 
     /** The file manager (file operations and symlinks). */
     private final FileManager fileManager;
+
+    /**
+     * A single reentrant read/write lock making metadata operations atomic
+     * against each other.
+     *
+     * <p>Read operations (listing, stat, reads and content writes to existing
+     * files) take the {@link #readLock()} and may proceed concurrently with one
+     * another. Namespace-mutating operations (create, delete, rename, mkdir and
+     * open) take the {@link #writeLock()}, which excludes every other
+     * operation. Callers that must perform several operations atomically
+     * &mdash; for example the NIO provider's check-then-create in
+     * {@code newByteChannel} &mdash; may take the exposed locks directly; both
+     * are reentrant.</p>
+     */
+    private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
 
     /**
      * Creates an instance, called after the master key has been unlocked.
@@ -596,6 +613,26 @@ public final class GocryptFs implements AutoCloseable {
     }
 
     /**
+     * Returns the read lock guarding read operations (listing, stat, reads and
+     * content writes to existing files).
+     *
+     * @return the read lock
+     */
+    public Lock readLock() {
+        return lock.readLock();
+    }
+
+    /**
+     * Returns the write lock guarding namespace-mutating operations (create,
+     * delete, rename, mkdir and open).
+     *
+     * @return the write lock
+     */
+    public Lock writeLock() {
+        return lock.writeLock();
+    }
+
+    /**
      * Changes the password protecting this filesystem's master key and writes
      * the updated {@code gocryptfs.conf} atomically.
      *
@@ -617,9 +654,15 @@ public final class GocryptFs implements AutoCloseable {
      */
     public void changePassword(char[] password) throws IOException {
         Objects.requireNonNull(password, "password");
-        config.reencryptMasterKey(masterKey, password);
-        store.writeConfig(PathResolver.join(rootName, Constants.CONF_DEFAULT_NAME),
-                config.toBytes(), true);
+        Lock writeLock = lock.writeLock();
+        writeLock.lock();
+        try {
+            config.reencryptMasterKey(masterKey, password);
+            store.writeConfig(PathResolver.join(rootName, Constants.CONF_DEFAULT_NAME),
+                    config.toBytes(), true);
+        } finally {
+            writeLock.unlock();
+        }
     }
 
     // ------------------------------------------------------------------
@@ -698,11 +741,17 @@ public final class GocryptFs implements AutoCloseable {
      */
     public List<DirEntry> list(String plainDir) throws IOException {
         Objects.requireNonNull(plainDir, "plainDir");
-        PathResolver.Resolved r = pathResolver.resolve(plainDir);
-        byte[] iv = directoryManager.readDirIV(r.cipherPath);
-        List<DirEntry> entries = directoryManager.listCipherDir(r.cipherPath, iv);
-        entries.sort(Comparator.comparing(DirEntry::plainName));
-        return entries;
+        Lock readLock = lock.readLock();
+        readLock.lock();
+        try {
+            PathResolver.Resolved r = pathResolver.resolve(plainDir);
+            byte[] iv = directoryManager.readDirIV(r.cipherPath);
+            List<DirEntry> entries = directoryManager.listCipherDir(r.cipherPath, iv);
+            entries.sort(Comparator.comparing(DirEntry::plainName));
+            return entries;
+        } finally {
+            readLock.unlock();
+        }
     }
 
     // ------------------------------------------------------------------
@@ -718,7 +767,13 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainPath} is {@code null}
      */
     public DirEntry stat(String plainPath) throws IOException {
-        return fileManager.stat(plainPath);
+        Lock readLock = lock.readLock();
+        readLock.lock();
+        try {
+            return fileManager.stat(plainPath);
+        } finally {
+            readLock.unlock();
+        }
     }
 
     /**
@@ -733,7 +788,13 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainFile} is {@code null}
      */
     public SharedCipherFile openCipherFile(String plainFile, boolean writable) throws IOException {
-        return fileManager.openCipherFile(plainFile, writable);
+        Lock writeLock = lock.writeLock();
+        writeLock.lock();
+        try {
+            return fileManager.openCipherFile(plainFile, writable);
+        } finally {
+            writeLock.unlock();
+        }
     }
 
     /**
@@ -745,7 +806,13 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainFile} is {@code null}
      */
     public long size(String plainFile) throws IOException {
-        return fileManager.size(plainFile);
+        Lock readLock = lock.readLock();
+        readLock.lock();
+        try {
+            return fileManager.size(plainFile);
+        } finally {
+            readLock.unlock();
+        }
     }
 
     /**
@@ -757,7 +824,13 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainFile} is {@code null}
      */
     public byte[] readAll(String plainFile) throws IOException {
-        return fileManager.readAll(plainFile);
+        Lock readLock = lock.readLock();
+        readLock.lock();
+        try {
+            return fileManager.readAll(plainFile);
+        } finally {
+            readLock.unlock();
+        }
     }
 
     /**
@@ -769,7 +842,13 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainFile} is {@code null}
      */
     public InputStream openRead(String plainFile) throws IOException {
-        return fileManager.openRead(plainFile);
+        Lock readLock = lock.readLock();
+        readLock.lock();
+        try {
+            return fileManager.openRead(plainFile);
+        } finally {
+            readLock.unlock();
+        }
     }
 
     /**
@@ -785,7 +864,13 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainFile} is {@code null}
      */
     public OutputStream openWrite(String plainFile) throws IOException {
-        return fileManager.openWrite(plainFile);
+        Lock writeLock = lock.writeLock();
+        writeLock.lock();
+        try {
+            return fileManager.openWrite(plainFile);
+        } finally {
+            writeLock.unlock();
+        }
     }
 
     /**
@@ -799,7 +884,13 @@ public final class GocryptFs implements AutoCloseable {
      * @throws IllegalArgumentException if {@code offset} is negative
      */
     public void write(String plainFile, long offset, byte[] data) throws IOException {
-        fileManager.write(plainFile, offset, data);
+        Lock readLock = lock.readLock();
+        readLock.lock();
+        try {
+            fileManager.write(plainFile, offset, data);
+        } finally {
+            readLock.unlock();
+        }
     }
 
     /**
@@ -812,7 +903,13 @@ public final class GocryptFs implements AutoCloseable {
      * @throws IllegalArgumentException if {@code newSize} is negative
      */
     public void truncate(String plainFile, long newSize) throws IOException {
-        fileManager.truncate(plainFile, newSize);
+        Lock readLock = lock.readLock();
+        readLock.lock();
+        try {
+            fileManager.truncate(plainFile, newSize);
+        } finally {
+            readLock.unlock();
+        }
     }
 
     /**
@@ -828,7 +925,13 @@ public final class GocryptFs implements AutoCloseable {
     public void setTimes(String plainPath, @Nullable FileTime lastModifiedTime,
                          @Nullable FileTime lastAccessTime, @Nullable FileTime createTime)
             throws IOException {
-        fileManager.setTimes(plainPath, lastModifiedTime, lastAccessTime, createTime);
+        Lock writeLock = lock.writeLock();
+        writeLock.lock();
+        try {
+            fileManager.setTimes(plainPath, lastModifiedTime, lastAccessTime, createTime);
+        } finally {
+            writeLock.unlock();
+        }
     }
 
     /**
@@ -842,7 +945,13 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainPath} is {@code null}
      */
     public void checkAccess(String plainPath, AccessMode... modes) throws IOException {
-        fileManager.checkAccess(plainPath, modes);
+        Lock readLock = lock.readLock();
+        readLock.lock();
+        try {
+            fileManager.checkAccess(plainPath, modes);
+        } finally {
+            readLock.unlock();
+        }
     }
 
     /**
@@ -855,7 +964,13 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainPath} is {@code null}
      */
     public @Nullable PosixFileAttributes posixAttributes(String plainPath) throws IOException {
-        return fileManager.posixAttributes(plainPath);
+        Lock readLock = lock.readLock();
+        readLock.lock();
+        try {
+            return fileManager.posixAttributes(plainPath);
+        } finally {
+            readLock.unlock();
+        }
     }
 
     /**
@@ -868,7 +983,13 @@ public final class GocryptFs implements AutoCloseable {
      */
     public void setPosixPermissions(String plainPath, Set<PosixFilePermission> permissions)
             throws IOException {
-        fileManager.setPosixPermissions(plainPath, permissions);
+        Lock writeLock = lock.writeLock();
+        writeLock.lock();
+        try {
+            fileManager.setPosixPermissions(plainPath, permissions);
+        } finally {
+            writeLock.unlock();
+        }
     }
 
     /**
@@ -880,7 +1001,13 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainPath} or {@code owner} is {@code null}
      */
     public void setPosixOwner(String plainPath, UserPrincipal owner) throws IOException {
-        fileManager.setPosixOwner(plainPath, owner);
+        Lock writeLock = lock.writeLock();
+        writeLock.lock();
+        try {
+            fileManager.setPosixOwner(plainPath, owner);
+        } finally {
+            writeLock.unlock();
+        }
     }
 
     /**
@@ -892,7 +1019,13 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainPath} or {@code group} is {@code null}
      */
     public void setPosixGroup(String plainPath, GroupPrincipal group) throws IOException {
-        fileManager.setPosixGroup(plainPath, group);
+        Lock writeLock = lock.writeLock();
+        writeLock.lock();
+        try {
+            fileManager.setPosixGroup(plainPath, group);
+        } finally {
+            writeLock.unlock();
+        }
     }
 
     // ------------------------------------------------------------------
@@ -907,7 +1040,13 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainFile} is {@code null}
      */
     public void createFile(String plainFile) throws IOException {
-        fileManager.createFile(plainFile);
+        Lock writeLock = lock.writeLock();
+        writeLock.lock();
+        try {
+            fileManager.createFile(plainFile);
+        } finally {
+            writeLock.unlock();
+        }
     }
 
     /**
@@ -918,7 +1057,13 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainDir} is {@code null}
      */
     public void mkdir(String plainDir) throws IOException {
-        fileManager.mkdir(plainDir);
+        Lock writeLock = lock.writeLock();
+        writeLock.lock();
+        try {
+            fileManager.mkdir(plainDir);
+        } finally {
+            writeLock.unlock();
+        }
     }
 
     /**
@@ -929,7 +1074,13 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainPath} is {@code null}
      */
     public void delete(String plainPath) throws IOException {
-        fileManager.delete(plainPath);
+        Lock writeLock = lock.writeLock();
+        writeLock.lock();
+        try {
+            fileManager.delete(plainPath);
+        } finally {
+            writeLock.unlock();
+        }
     }
 
     /**
@@ -957,7 +1108,13 @@ public final class GocryptFs implements AutoCloseable {
      */
     public void rename(String plainFrom, String plainTo, boolean replaceExisting)
             throws IOException {
-        fileManager.rename(plainFrom, plainTo, replaceExisting);
+        Lock writeLock = lock.writeLock();
+        writeLock.lock();
+        try {
+            fileManager.rename(plainFrom, plainTo, replaceExisting);
+        } finally {
+            writeLock.unlock();
+        }
     }
 
     /**
@@ -969,7 +1126,13 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainPath} or {@code target} is {@code null}
      */
     public void createSymlink(String plainPath, String target) throws IOException {
-        fileManager.createSymlink(plainPath, target);
+        Lock writeLock = lock.writeLock();
+        writeLock.lock();
+        try {
+            fileManager.createSymlink(plainPath, target);
+        } finally {
+            writeLock.unlock();
+        }
     }
 
     /**
@@ -981,7 +1144,13 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainPath} is {@code null}
      */
     public String readSymlinkTarget(String plainPath) throws IOException {
-        return fileManager.readSymlinkTarget(plainPath);
+        Lock readLock = lock.readLock();
+        readLock.lock();
+        try {
+            return fileManager.readSymlinkTarget(plainPath);
+        } finally {
+            readLock.unlock();
+        }
     }
 
     // ------------------------------------------------------------------
