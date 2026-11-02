@@ -572,8 +572,12 @@ class GocryptFsTest {
 
             fs.rename("/a", "/b", true);
             assertEquals("A", new String(fs.readAll("/b"), StandardCharsets.UTF_8));
-            fs.rename("/b", "/empty", true);
-            assertEquals("A", new String(fs.readAll("/empty"), StandardCharsets.UTF_8));
+
+            // A file cannot replace a directory, even an empty one.
+            assertThrows(FileSystemException.class, () -> fs.rename("/b", "/empty", true));
+            assertTrue(fs.list("/").stream().anyMatch(e -> e.plainName().equals("b")));
+            assertTrue(fs.list("/").stream().anyMatch(e -> e.plainName().equals("empty")));
+
             fs.rename("/empty", "/empty", false);
         }
     }
@@ -912,6 +916,46 @@ class GocryptFsTest {
             // A failed replace must not have deleted the existing target.
             assertEquals("B", new String(fs.readAll("/b"), StandardCharsets.UTF_8));
             assertEquals("A", new String(fs.readAll("/a"), StandardCharsets.UTF_8));
+        }
+    }
+
+    @Test
+    void renameDirectoryReplaceEmptyDirectory() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
+            fs.mkdir("/src");
+            fs.createFile("/src/f.txt");
+            fs.write("/src/f.txt", 0, "deep".getBytes(StandardCharsets.UTF_8));
+            fs.mkdir("/dst");
+
+            fs.rename("/src", "/dst", true);
+
+            assertEquals("deep", new String(fs.readAll("/dst/f.txt"), StandardCharsets.UTF_8));
+            assertTrue(fs.list("/").stream().noneMatch(e -> e.plainName().equals("src")));
+        }
+    }
+
+    @Test
+    void renameDirectoryReplaceKeepsTargetOnFailure() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        FailingStore store = new FailingStore(new PathCipherStore(cipherDir));
+        try (GocryptFs fs = GocryptFs.create(store, "pw".toCharArray())) {
+            fs.mkdir("/src");
+            fs.mkdir("/dst");
+
+            Path dstCipher = Paths.get(fs.resolve("/dst").cipherPath);
+            Path dstDirIV = dstCipher.resolve("gocryptfs.diriv");
+            byte[] before = Files.readAllBytes(dstDirIV);
+
+            store.failRename = true;
+            assertThrows(IOException.class, () -> fs.rename("/src", "/dst", true));
+
+            // The target directory and its diriv must survive the failed replace.
+            assertTrue(Files.isDirectory(dstCipher, LinkOption.NOFOLLOW_LINKS));
+            assertArrayEquals(before, Files.readAllBytes(dstDirIV),
+                    "a failed directory replace must restore gocryptfs.diriv");
         }
     }
 

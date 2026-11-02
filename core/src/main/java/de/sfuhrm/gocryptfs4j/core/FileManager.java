@@ -16,6 +16,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.AccessMode;
 import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.FileSystemException;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.attribute.FileTime;
 import java.nio.file.attribute.GroupPrincipal;
@@ -655,9 +656,10 @@ final class FileManager {
      * own {@code gocryptfs.diriv}, and symlink targets are not path-bound, so
      * only the entry's encrypted name (and its long-name support file, if any)
      * changes. Directories are therefore moved together with their whole
-     * subtree. An existing file or symlink target is replaced atomically;
-     * only a directory target is removed first, after verifying it is empty
-     * apart from its {@code gocryptfs.diriv}.</p>
+     * subtree. An existing file or symlink target is replaced atomically. A
+     * directory target is replaced only by another directory, after verifying
+     * the target is empty apart from its {@code gocryptfs.diriv}; the target's
+     * diriv is removed so the rename is atomic and restored if it fails.</p>
      *
      * @param plainFrom       the plaintext source path
      * @param plainTo         the plaintext target path
@@ -666,6 +668,7 @@ final class FileManager {
      * @throws NoSuchFileException if the source or the target's parent does not exist
      * @throws FileAlreadyExistsException if the target exists and {@code replaceExisting} is {@code false}
      * @throws DirectoryNotEmptyException if the target is a non-empty directory
+     * @throws FileSystemException if a non-directory source would replace a directory
      * @throws IOException if the target lies inside the source or on filesystem errors
      * @throws NullPointerException if an argument is {@code null}
      */
@@ -679,7 +682,10 @@ final class FileManager {
             throw new IOException("cannot rename the root directory");
         }
         PathResolver.Resolved from = pathResolver.resolveParent(plainFrom);
-        if (!exists(from.cipherPath)) {
+        CipherNode fromNode;
+        try {
+            fromNode = store.stat(from.cipherPath);
+        } catch (NoSuchFileException e) {
             throw new NoSuchFileException(plainFrom);
         }
         if (fromComps.equals(toComps)) {
@@ -690,25 +696,47 @@ final class FileManager {
             throw new IOException("cannot move " + plainFrom + " into its own subtree: " + plainTo);
         }
         PathResolver.Resolved to = pathResolver.resolveParent(plainTo);
+        byte @Nullable [] replacedDirIV = null;
         if (exists(to.cipherPath)) {
             if (!replaceExisting) {
                 throw new FileAlreadyExistsException(plainTo);
             }
             if (store.stat(to.cipherPath).isDirectory()) {
-                // A directory can only be replaced when it is empty apart from
-                // its gocryptfs.diriv. Verify that before removing anything so a
-                // rejected replace leaves the target intact. The empty directory
-                // (and its diriv) is then removed explicitly, because an atomic
-                // rename cannot replace a directory that still contains its diriv.
-                removeEmptyDir(to.cipherPath);
-                nameManager.removeLongName(to);
+                // A directory can only be replaced by another directory, and
+                // only when it is empty apart from its gocryptfs.diriv. Verify
+                // both before removing anything so a rejected replace leaves the
+                // target intact.
+                verifyEmptyDir(to.cipherPath);
+                if (!fromNode.isDirectory()) {
+                    throw new FileSystemException(plainFrom, plainTo,
+                            "cannot replace a directory with a non-directory");
+                }
+                // An atomic rename cannot replace a directory that still
+                // contains its gocryptfs.diriv, so remove just the diriv,
+                // leaving the now-truly-empty directory in place for the store
+                // to replace atomically. The diriv is restored if the rename
+                // fails.
+                if (directoryManager.usesDirIV()) {
+                    replacedDirIV = directoryManager.readDirIV(to.cipherPath);
+                    deleteIfExists(store, PathResolver.join(to.cipherPath, Constants.DIR_IV_FILENAME));
+                }
             }
             // A non-directory target is replaced atomically by the rename below.
         }
-        boolean wroteName = nameManager.prepareLongName(to);
+        boolean wroteName = false;
         try {
+            wroteName = nameManager.prepareLongName(to);
             store.rename(from.cipherPath, to.cipherPath, replaceExisting);
         } catch (IOException | RuntimeException e) {
+            // Restore the target's diriv so a failed directory replace leaves
+            // the target directory intact.
+            if (replacedDirIV != null) {
+                try {
+                    directoryManager.restoreDirIV(to.cipherPath, replacedDirIV);
+                } catch (IOException restore) {
+                    e.addSuppressed(restore);
+                }
+            }
             // prepareLongName may have created a long-name support file that no
             // longer has a matching entry; drop it so a failed rename leaves no
             // orphan behind.
@@ -853,8 +881,30 @@ final class FileManager {
      * @throws IOException on filesystem errors
      */
     private void removeEmptyDir(String cipherDir) throws IOException {
+        verifyEmptyDir(cipherDir);
         if (directoryManager.usesDirIV()) {
             removeEmptyDirWithDirIV(cipherDir);
+            return;
+        }
+        store.delete(cipherDir);
+    }
+
+    /**
+     * Verifies that {@code cipherDir} contains no entries other than its
+     * {@code gocryptfs.diriv} (in per-directory-IV mode) or no entries at all
+     * (otherwise).
+     *
+     * @param cipherDir the ciphertext directory to check
+     * @throws DirectoryNotEmptyException if the directory is not empty
+     * @throws IOException on filesystem errors
+     */
+    private void verifyEmptyDir(String cipherDir) throws IOException {
+        if (directoryManager.usesDirIV()) {
+            for (CipherNode entry : store.list(cipherDir)) {
+                if (!entry.name().equals(Constants.DIR_IV_FILENAME)) {
+                    throw new DirectoryNotEmptyException(cipherDir);
+                }
+            }
             return;
         }
         // No per-directory IV is used, so gocryptfs.diriv is an ordinary entry
@@ -862,26 +912,20 @@ final class FileManager {
         if (!store.list(cipherDir).isEmpty()) {
             throw new DirectoryNotEmptyException(cipherDir);
         }
-        store.delete(cipherDir);
     }
 
     /**
-     * Removes an empty ciphertext directory in per-directory-IV mode.
+     * Removes a ciphertext directory (already verified empty by
+     * {@link #verifyEmptyDir(String)}) together with its {@code gocryptfs.diriv}.
      *
      * <p>The directory IV is read before its file is removed; if removing the
      * directory itself then fails, the IV is written back so the names in the
      * directory stay decryptable.</p>
      *
      * @param cipherDir the ciphertext directory to remove
-     * @throws DirectoryNotEmptyException if the directory is not empty
      * @throws IOException on filesystem errors
      */
     private void removeEmptyDirWithDirIV(String cipherDir) throws IOException {
-        for (CipherNode entry : store.list(cipherDir)) {
-            if (!entry.name().equals(Constants.DIR_IV_FILENAME)) {
-                throw new DirectoryNotEmptyException(cipherDir);
-            }
-        }
         byte[] iv = directoryManager.readDirIV(cipherDir);
         deleteIfExists(store, PathResolver.join(cipherDir, Constants.DIR_IV_FILENAME));
         try {
