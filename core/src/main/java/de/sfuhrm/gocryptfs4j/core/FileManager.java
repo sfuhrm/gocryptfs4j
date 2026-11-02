@@ -23,6 +23,7 @@ import java.nio.file.attribute.PosixFileAttributes;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.UserPrincipal;
 import java.security.GeneralSecurityException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -65,7 +66,9 @@ final class FileManager {
     /**
      * Per-file locks serializing whole-file operations so that two handles to
      * the same cipher file cannot interleave header creation or size bookkeeping
-     * and corrupt each other.
+     * and corrupt each other. Entries are removed when a file is deleted and
+     * moved when it is renamed, so the map does not grow without bound and the
+     * lock follows the file across renames.
      */
     private final Map<String, Object> fileLocks = new ConcurrentHashMap<>();
 
@@ -74,8 +77,7 @@ final class FileManager {
      * open channels and streams on the same file share a single backing
      * {@link CipherFile} (with its single file-id cache and write-back buffer)
      * instead of each holding stale state that could overwrite another handle's
-     * data. Entries are retained for the lifetime of the manager, like
-     * {@link #fileLocks}.
+     * data. Entries are retained for the lifetime of the manager.
      */
     private final Map<String, SharedCipherFile.Entry> sharedFiles = new ConcurrentHashMap<>();
 
@@ -213,6 +215,47 @@ final class FileManager {
      */
     private Object fileLock(String cipherFile) {
         return fileLocks.computeIfAbsent(cipherFile, key -> new Object());
+    }
+
+    /**
+     * Removes the per-file lock for a ciphertext file that no longer exists.
+     *
+     * @param cipherFile the ciphertext file name
+     */
+    private void releaseFileLock(String cipherFile) {
+        fileLocks.remove(cipherFile);
+    }
+
+    /**
+     * Moves the per-file lock for a ciphertext file from one path to another, so
+     * a rename neither leaves a stale lock behind nor lets the lock drift away
+     * from the file it protects. A lock that already exists at the target (from
+     * a replaced entry) is dropped. A directory rename also relocates the locks
+     * of every file below it.
+     *
+     * @param from the source ciphertext path
+     * @param to   the target ciphertext path
+     */
+    private void moveFileLock(String from, String to) {
+        Object lock = fileLocks.remove(from);
+        if (lock != null) {
+            fileLocks.put(to, lock);
+        } else {
+            fileLocks.remove(to);
+        }
+        String prefix = from + "/";
+        List<String> keys = new ArrayList<>();
+        for (String key : fileLocks.keySet()) {
+            if (key.startsWith(prefix)) {
+                keys.add(key);
+            }
+        }
+        for (String key : keys) {
+            Object descendant = fileLocks.remove(key);
+            if (descendant != null) {
+                fileLocks.put(to + key.substring(from.length()), descendant);
+            }
+        }
     }
 
     /**
@@ -535,6 +578,7 @@ final class FileManager {
         } else {
             store.delete(r.cipherPath);
         }
+        releaseFileLock(r.cipherPath);
         nameManager.removeLongName(r);
         directoryManager.invalidateDirIvCache(r.cipherPath);
     }
@@ -611,6 +655,7 @@ final class FileManager {
             throw e;
         }
         nameManager.removeLongName(from);
+        moveFileLock(from.cipherPath, to.cipherPath);
         directoryManager.invalidateDirIvCache(from.cipherPath);
         directoryManager.invalidateDirIvCache(to.cipherPath);
     }

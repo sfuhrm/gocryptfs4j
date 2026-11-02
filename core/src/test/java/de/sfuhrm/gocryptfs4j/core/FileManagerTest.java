@@ -3,6 +3,7 @@ package de.sfuhrm.gocryptfs4j.core;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryNotEmptyException;
@@ -11,6 +12,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -18,8 +20,12 @@ import java.util.concurrent.Future;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Tests {@link FileManager} in isolation: file content operations, create,
@@ -235,5 +241,67 @@ class FileManagerTest {
         // The second handle's write must win; the first handle must not flush its
         // stale block over it when it closes.
         assertArrayEquals(second, h.fileManager.readAll("/f.txt"));
+    }
+
+    @Test
+    void fileLocksShrinkOnDelete() throws Exception {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.fileManager.createFile("/f.txt");
+        h.fileManager.write("/f.txt", 0, "x".getBytes(StandardCharsets.UTF_8));
+        String cipherPath = h.pathResolver.resolve("/f.txt").cipherPath;
+
+        assertTrue(fileLocks(h).containsKey(cipherPath));
+
+        h.fileManager.delete("/f.txt");
+
+        assertFalse(fileLocks(h).containsKey(cipherPath));
+    }
+
+    @Test
+    void fileLockFollowsRename() throws Exception {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.fileManager.createFile("/a.txt");
+        h.fileManager.write("/a.txt", 0, "x".getBytes(StandardCharsets.UTF_8));
+        String from = h.pathResolver.resolve("/a.txt").cipherPath;
+        String to = h.pathResolver.resolve("/b.txt").cipherPath;
+
+        Object lock = fileLocks(h).get(from);
+        assertNotNull(lock);
+
+        h.fileManager.rename("/a.txt", "/b.txt", false);
+
+        assertFalse(fileLocks(h).containsKey(from));
+        assertSame(lock, fileLocks(h).get(to));
+    }
+
+    @Test
+    void fileLockFollowsDirectoryRename() throws Exception {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.fileManager.mkdir("/dir");
+        h.fileManager.createFile("/dir/f.txt");
+        h.fileManager.write("/dir/f.txt", 0, "x".getBytes(StandardCharsets.UTF_8));
+        String from = h.pathResolver.resolve("/dir/f.txt").cipherPath;
+
+        Object lock = fileLocks(h).get(from);
+        assertNotNull(lock);
+
+        h.fileManager.rename("/dir", "/dir2", false);
+
+        String to = h.pathResolver.resolve("/dir2/f.txt").cipherPath;
+        assertFalse(fileLocks(h).containsKey(from));
+        assertSame(lock, fileLocks(h).get(to));
+    }
+
+    /**
+     * Returns the private per-file lock map of a harness's file manager.
+     *
+     * @param h the harness
+     * @return the lock map keyed by cipher path
+     */
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> fileLocks(ManagerHarness h) throws Exception {
+        Field field = FileManager.class.getDeclaredField("fileLocks");
+        field.setAccessible(true);
+        return (Map<String, Object>) field.get(h.fileManager);
     }
 }
