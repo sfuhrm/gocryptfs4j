@@ -41,12 +41,12 @@ class CipherFileMockTest {
     }
 
     @Test
-    void readOnEmptyFileReturnsMinusOneWithoutReading() throws Exception {
+    void readBlockOnEmptyFileReturnsZeroWithoutReading() throws Exception {
         CipherChannel channel = mock(CipherChannel.class);
         when(channel.size()).thenReturn(0L);
         CipherFile cf = newCipherFile(channel, enc());
 
-        assertEquals(-1, cf.read(ByteBuffer.allocate(100), 0));
+        assertEquals(0, cf.readBlock(0, new byte[100], 0));
         verify(channel, never()).read(any(ByteBuffer.class));
     }
 
@@ -80,7 +80,7 @@ class CipherFileMockTest {
     }
 
     @Test
-    void writeHandlesPartialChannelWrites() throws Exception {
+    void writeBlockHandlesPartialChannelWrites() throws Exception {
         CipherChannel channel = mock(CipherChannel.class);
         when(channel.size()).thenReturn(0L);
         long[] pos = {0};
@@ -100,9 +100,8 @@ class CipherFileMockTest {
 
         byte[] data = new byte[(int) enc.plainBS];
         Arrays.fill(data, (byte) 0x33);
-        int written = cf.write(ByteBuffer.wrap(data), 0);
+        cf.writeBlock(0, data, 0, data.length);
 
-        assertEquals(data.length, written);
         verify(channel, atLeast(2)).write(any(ByteBuffer.class));
         assertEquals(Constants.HEADER_ID_LEN, cf.fileId().length);
     }
@@ -119,51 +118,7 @@ class CipherFileMockTest {
     }
 
     @Test
-    void smallWritesToSameBlockReadItOnce() throws Exception {
-        ContentEnc enc = enc();
-        byte[] header = FileHeader.random().pack();
-        byte[] fileId = FileHeader.parse(header).id();
-        byte[] block = enc.encryptBlock(new byte[(int) enc.plainBS], 0, fileId);
-        byte[] whole = new byte[header.length + block.length];
-        System.arraycopy(header, 0, whole, 0, header.length);
-        System.arraycopy(block, 0, whole, header.length, block.length);
-
-        CipherChannel channel = mock(CipherChannel.class);
-        when(channel.size()).thenReturn((long) whole.length);
-        long[] pos = {0};
-        int[] readsAtHeaderLen = {0};
-        when(channel.position(anyLong())).thenAnswer(inv -> {
-            pos[0] = inv.getArgument(0);
-            return channel;
-        });
-        when(channel.read(any(ByteBuffer.class))).thenAnswer(inv -> {
-            ByteBuffer bb = inv.getArgument(0);
-            long p = pos[0];
-            if (p == Constants.HEADER_LEN) {
-                readsAtHeaderLen[0]++;
-            }
-            if (p >= whole.length) {
-                return -1;
-            }
-            int n = (int) Math.min(bb.remaining(), whole.length - p);
-            bb.put(whole, (int) p, n);
-            pos[0] = p + n;
-            return n;
-        });
-
-        CipherFile cf = newCipherFile(channel, enc);
-
-        cf.write(ByteBuffer.wrap(new byte[]{1}), 0);
-        cf.write(ByteBuffer.wrap(new byte[]{2}), 1);
-        cf.write(ByteBuffer.wrap(new byte[]{3}), 2);
-
-        // The first write read-modify-writes block 0; the next two merge into
-        // the one-block write-back buffer without re-reading it.
-        assertEquals(1, readsAtHeaderLen[0]);
-    }
-
-    @Test
-    void writeBeyondEofLeavesHoleBlocks() throws Exception {
+    void writeBlockBeyondEofLeavesHoleBlocks() throws Exception {
         ContentEnc enc = enc();
         CipherChannel channel = mock(CipherChannel.class);
         when(channel.size()).thenReturn(0L);
@@ -185,7 +140,7 @@ class CipherFileMockTest {
         CipherFile cf = newCipherFile(channel, enc);
 
         long blockNo = 1000;
-        cf.write(ByteBuffer.wrap(new byte[]{0x11}), blockNo * enc.plainBS);
+        cf.writeBlock(blockNo, new byte[]{0x11}, 0, 1);
         cf.force(false);
 
         // Only the header and the final block are written; the blocks in

@@ -1,6 +1,6 @@
 package de.sfuhrm.gocryptfs4j.nio;
 
-import de.sfuhrm.gocryptfs4j.core.SharedCipherFile;
+import de.sfuhrm.gocryptfs4j.core.BlockBufferedChannel;
 import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
@@ -13,8 +13,9 @@ import java.nio.channels.SeekableByteChannel;
  * A {@link SeekableByteChannel} over a single encrypted file, exposing the
  * decrypted (plaintext) content.
  *
- * <p>The channel keeps a plaintext position and delegates all reads and writes
- * to a {@link SharedCipherFile}. Read and write access are controlled independently by
+ * <p>The channel delegates all reads and writes to an underlying
+ * {@link BlockBufferedChannel}, which buffers one plaintext block and tracks
+ * the plaintext position. Read and write access are controlled independently by
  * the {@code readable} and {@code writable} flags. Updates may optionally be
  * forced to storage, according to the {@link Sync} mode, and an optional
  * {@link CloseAction} runs after the underlying file has been closed (used for
@@ -46,8 +47,8 @@ final class GocryptFsFileChannel implements SeekableByteChannel {
         void run() throws IOException;
     }
 
-    /** The encrypted file backing this channel. */
-    private final SharedCipherFile file;
+    /** The buffered channel backing this channel. */
+    private final BlockBufferedChannel channel;
 
     /** Whether the channel permits reads. */
     private final boolean readable;
@@ -64,31 +65,25 @@ final class GocryptFsFileChannel implements SeekableByteChannel {
     /** The action to run on close, or {@code null} for none. */
     private final @Nullable CloseAction closeAction;
 
-    /** The current plaintext position. */
-    private long position;
-
     /** Whether the channel is still open. */
     private boolean open = true;
 
     /**
      * Creates a channel.
      *
-     * @param file            the encrypted file to read from and write to
-     * @param readable        whether the channel permits reads
-     * @param writable        whether the channel permits writes and truncation
-     * @param append          whether writes are appended to the end of the file
-     * @param initialPosition the initial plaintext position
-     * @param sync            how updates are forced to storage
-     * @param closeAction     an action to run on close, or {@code null} for none
+     * @param channel     the buffered channel to read from and write to
+     * @param readable    whether the channel permits reads
+     * @param writable    whether the channel permits writes and truncation
+     * @param append      whether writes are appended to the end of the file
+     * @param sync        how updates are forced to storage
+     * @param closeAction an action to run on close, or {@code null} for none
      */
-    GocryptFsFileChannel(SharedCipherFile file, boolean readable, boolean writable,
-                         boolean append, long initialPosition, Sync sync,
-                         @Nullable CloseAction closeAction) {
-        this.file = file;
+    GocryptFsFileChannel(BlockBufferedChannel channel, boolean readable, boolean writable,
+                         boolean append, Sync sync, @Nullable CloseAction closeAction) {
+        this.channel = channel;
         this.readable = readable;
         this.writable = writable;
         this.append = append;
-        this.position = initialPosition;
         this.sync = sync;
         this.closeAction = closeAction;
     }
@@ -107,11 +102,7 @@ final class GocryptFsFileChannel implements SeekableByteChannel {
         if (!readable) {
             throw new NonReadableChannelException();
         }
-        int n = file.read(dst, position);
-        if (n > 0) {
-            position += n;
-        }
-        return n;
+        return channel.read(dst);
     }
 
     /**
@@ -130,13 +121,14 @@ final class GocryptFsFileChannel implements SeekableByteChannel {
         if (!writable) {
             throw new NonWritableChannelException();
         }
-        int n;
         if (append) {
-            n = file.append(src);
-            position = file.plainSize();
-        } else {
-            n = file.write(src, position);
-            position += n;
+            channel.position(channel.size());
+        }
+        int n = channel.write(src);
+        if (append) {
+            // Flush each append through so a later append (possibly on another
+            // channel) observes the updated end of file.
+            channel.flush();
         }
         force();
         return n;
@@ -149,9 +141,9 @@ final class GocryptFsFileChannel implements SeekableByteChannel {
      */
     private void force() throws IOException {
         if (sync == Sync.FULL) {
-            file.force(true);
+            channel.force(true);
         } else if (sync == Sync.DATA) {
-            file.force(false);
+            channel.force(false);
         }
     }
 
@@ -162,7 +154,7 @@ final class GocryptFsFileChannel implements SeekableByteChannel {
      */
     @Override
     public long position() {
-        return position;
+        return channel.position();
     }
 
     /**
@@ -174,10 +166,7 @@ final class GocryptFsFileChannel implements SeekableByteChannel {
      */
     @Override
     public SeekableByteChannel position(long newPosition) {
-        if (newPosition < 0) {
-            throw new IllegalArgumentException("negative position");
-        }
-        this.position = newPosition;
+        channel.position(newPosition);
         return this;
     }
 
@@ -189,7 +178,7 @@ final class GocryptFsFileChannel implements SeekableByteChannel {
      */
     @Override
     public long size() throws IOException {
-        return file.plainSize();
+        return channel.size();
     }
 
     /**
@@ -213,12 +202,9 @@ final class GocryptFsFileChannel implements SeekableByteChannel {
         if (size < 0) {
             throw new IllegalArgumentException("negative size");
         }
-        if (size < size()) {
-            file.truncate(size);
+        if (size < channel.size()) {
+            channel.truncate(size);
             force();
-            if (position > size) {
-                position = size;
-            }
         }
         return this;
     }
@@ -243,7 +229,7 @@ final class GocryptFsFileChannel implements SeekableByteChannel {
         if (open) {
             open = false;
             try {
-                file.close();
+                channel.close();
             } finally {
                 if (closeAction != null) {
                     closeAction.run();

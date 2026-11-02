@@ -445,32 +445,34 @@ public final class GocryptFsProvider extends FileSystemProvider {
             }
 
             SharedCipherFile cf = fs.openCipherFile(plain, write);
-            long position = 0;
-            if (truncate && write) {
-                cf.truncate(0);
-            }
-            if (append) {
-                position = cf.plainSize();
-            }
-            if (created) {
-                // Applied after opening so that restrictive modes (for example
-                // read-only permissions) do not prevent the channel from opening.
-                try {
-                    applyAttributes(p, attrs);
-                } catch (IOException | RuntimeException e) {
-                    cf.close();
-                    throw e;
+            try {
+                if (truncate && write) {
+                    cf.truncate(0);
                 }
+                long position = 0;
+                if (append) {
+                    position = cf.plainSize();
+                }
+                if (created) {
+                    // Applied after opening so that restrictive modes (for
+                    // example read-only permissions) do not prevent the channel
+                    // from opening.
+                    applyAttributes(p, attrs);
+                }
+                GocryptFsFileChannel.Sync sync = options.contains(StandardOpenOption.SYNC)
+                        ? GocryptFsFileChannel.Sync.FULL
+                        : options.contains(StandardOpenOption.DSYNC)
+                                ? GocryptFsFileChannel.Sync.DATA
+                                : GocryptFsFileChannel.Sync.NONE;
+                GocryptFsFileChannel.CloseAction onClose = deleteOnClose
+                        ? () -> deleteOnClose(fs, p)
+                        : null;
+                return new GocryptFsFileChannel(cf.newChannel(position, write),
+                        read, write, append, sync, onClose);
+            } catch (IOException | RuntimeException e) {
+                cf.close();
+                throw e;
             }
-            GocryptFsFileChannel.Sync sync = options.contains(StandardOpenOption.SYNC)
-                    ? GocryptFsFileChannel.Sync.FULL
-                    : options.contains(StandardOpenOption.DSYNC)
-                            ? GocryptFsFileChannel.Sync.DATA
-                            : GocryptFsFileChannel.Sync.NONE;
-            GocryptFsFileChannel.CloseAction onClose = deleteOnClose
-                    ? () -> deleteOnClose(fs, p)
-                    : null;
-            return new GocryptFsFileChannel(cf, read, write, append, position, sync, onClose);
         } finally {
             writeLock.unlock();
         }

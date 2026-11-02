@@ -197,10 +197,11 @@ class DirectoryManagerTest {
         ManagerHarness h = ManagerHarness.encrypted();
         h.fileManager.createFile("/f.txt");
 
-        try (SharedCipherFile cf = h.fileManager.openCipherFile("/f.txt", true)) {
-            // A single short block stays in the write-back buffer and is not yet
+        try (SharedCipherFile cf = h.fileManager.openCipherFile("/f.txt", true);
+             BlockBufferedChannel ch = cf.newChannel(0, true)) {
+            // A single short block stays in the channel's buffer and is not yet
             // written through, but listing must still report its plaintext size.
-            cf.write(ByteBuffer.wrap(new byte[100]), 0);
+            ch.write(ByteBuffer.wrap(new byte[100]));
 
             byte[] iv = h.directoryManager.readDirIV(h.store.root());
             List<DirEntry> entries = h.directoryManager.listCipherDir(h.store.root(), iv);

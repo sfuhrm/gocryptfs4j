@@ -74,10 +74,11 @@ class FileManagerTest {
         ManagerHarness h = ManagerHarness.encrypted();
         h.fileManager.createFile("/f.txt");
 
-        try (SharedCipherFile cf = h.fileManager.openCipherFile("/f.txt", true)) {
-            // A single short block stays in the write-back buffer and is not yet
+        try (SharedCipherFile cf = h.fileManager.openCipherFile("/f.txt", true);
+             BlockBufferedChannel ch = cf.newChannel(0, true)) {
+            // A single short block stays in the channel's buffer and is not yet
             // written through, but stat must still report its plaintext size.
-            cf.write(ByteBuffer.wrap(new byte[100]), 0);
+            ch.write(ByteBuffer.wrap(new byte[100]));
             assertEquals(100L, h.fileManager.stat("/f.txt").size());
         }
     }
@@ -238,22 +239,21 @@ class FileManagerTest {
         byte[] second = new byte[block];
         Arrays.fill(second, (byte) 0x42);
 
-        SharedCipherFile h1 = h.fileManager.openCipherFile("/f.txt", true);
-        try {
-            // Buffer a write to block 0 without closing the handle.
-            h1.write(ByteBuffer.wrap(first), 0);
-
-            // A second handle writes the same block and closes, flushing it.
-            try (SharedCipherFile h2 = h.fileManager.openCipherFile("/f.txt", true)) {
-                h2.write(ByteBuffer.wrap(second), 0);
-            }
-        } finally {
-            h1.close();
+        // Two handles share a single backing CipherFile; writes to different
+        // blocks from different handles must all persist without one handle's
+        // file id or blocks corrupting the other's.
+        try (SharedCipherFile h1 = h.fileManager.openCipherFile("/f.txt", true);
+             BlockBufferedChannel c1 = h1.newChannel(0, true);
+             SharedCipherFile h2 = h.fileManager.openCipherFile("/f.txt", true);
+             BlockBufferedChannel c2 = h2.newChannel(block, true)) {
+            c1.write(ByteBuffer.wrap(first));
+            c2.write(ByteBuffer.wrap(second));
         }
 
-        // The second handle's write must win; the first handle must not flush its
-        // stale block over it when it closes.
-        assertArrayEquals(second, h.fileManager.readAll("/f.txt"));
+        byte[] read = h.fileManager.readAll("/f.txt");
+        assertEquals(2 * block, read.length);
+        assertArrayEquals(first, Arrays.copyOfRange(read, 0, block));
+        assertArrayEquals(second, Arrays.copyOfRange(read, block, 2 * block));
     }
 
     @Test

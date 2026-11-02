@@ -91,10 +91,11 @@ class GocryptFsTest {
              GocryptFs fs = GocryptFs.create(store, "pw".toCharArray())) {
             fs.createFile("/f.txt");
             SharedCipherFile cf = fs.openCipherFile("/f.txt", true);
-            // A single short block stays in the write-back buffer; it must be
+            // A single short block stays in the channel's buffer; it must be
             // flushed by close() before the content-encryption keys are wiped.
-            cf.write(ByteBuffer.wrap(data), 0);
-            // cf is deliberately left open.
+            BlockBufferedChannel ch = cf.newChannel(0, true);
+            ch.write(ByteBuffer.wrap(data));
+            // ch and cf are deliberately left open.
         }
 
         try (PathCipherStore store = new PathCipherStore(cipherDir);
@@ -685,7 +686,7 @@ class GocryptFsTest {
     }
 
     @Test
-    void cipherInputStreamWipesReadAheadBufferOnClose() throws Exception {
+    void cipherInputStreamWipesBufferedPlaintextOnClose() throws Exception {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
 
@@ -694,25 +695,28 @@ class GocryptFsTest {
             fs.write("/f.txt", 0, "secret plaintext".getBytes(StandardCharsets.UTF_8));
 
             InputStream in = fs.openRead("/f.txt");
-            // A single-byte read populates the read-ahead buffer.
+            // A single-byte read populates the buffered plaintext block.
             assertTrue(in.read() >= 0);
 
-            Field bufField = in.getClass().getDeclaredField("buf");
-            bufField.setAccessible(true);
-            byte[] buf = (byte[]) bufField.get(in);
+            Field chField = in.getClass().getDeclaredField("ch");
+            chField.setAccessible(true);
+            BlockBufferedChannel ch = (BlockBufferedChannel) chField.get(in);
+            Field blockField = BlockBufferedChannel.class.getDeclaredField("block");
+            blockField.setAccessible(true);
+            byte[] block = (byte[]) blockField.get(ch);
             boolean nonZero = false;
-            for (byte b : buf) {
+            for (byte b : block) {
                 if (b != 0) {
                     nonZero = true;
                     break;
                 }
             }
-            assertTrue(nonZero, "the read-ahead buffer should hold plaintext before close");
+            assertTrue(nonZero, "the channel should hold plaintext before close");
 
             in.close();
 
-            for (byte b : (byte[]) bufField.get(in)) {
-                assertEquals(0, b, "the read-ahead buffer must be wiped on close");
+            for (byte b : (byte[]) blockField.get(ch)) {
+                assertEquals(0, b, "the buffered plaintext must be wiped on close");
             }
         }
     }

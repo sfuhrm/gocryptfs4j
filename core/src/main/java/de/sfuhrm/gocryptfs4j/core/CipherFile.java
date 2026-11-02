@@ -8,28 +8,23 @@ import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.channels.ClosedChannelException;
 import java.nio.channels.NonWritableChannelException;
-import java.nio.channels.WritableByteChannel;
 import java.security.GeneralSecurityException;
 import java.util.Arrays;
 import java.util.Objects;
 
 /**
- * Random-access read/write access to a single encrypted (cipher-side) file.
+ * Low-level, whole-block read/write access to a single encrypted (cipher-side)
+ * file.
  *
- * <p>Encapsulates the per-file header (file id) and the block-wise
- * authenticated content encryption (AES-256-GCM, XChaCha20-Poly1305 or
- * AES-SIV, depending on the supplied {@link ContentEnc}), including
- * read-modify-write for partial block writes.</p>
+ * <p>Encapsulates the per-file header (file id) and block-wise authenticated
+ * content encryption (AES-256-GCM, XChaCha20-Poly1305 or AES-SIV, depending on
+ * the supplied {@link ContentEnc}). It exposes only whole-block operations;
+ * byte- and range-level buffering, read-modify-write of partial blocks and
+ * position tracking live in {@link BlockBufferedChannel}, which sits on top of
+ * the shared {@link SharedCipherFile}.</p>
  */
 public final class CipherFile implements AutoCloseable {
-
-    /** A shared, immutable empty byte array. */
-    private static final byte[] EMPTY = new byte[0];
-
-    /** Maximum plaintext bytes processed per bulk read or write call. */
-    private static final int MAX_BULK_BYTES = 256 * 1024;
 
     /** The underlying cipher file channel. */
     private final CipherChannel channel;
@@ -46,26 +41,11 @@ public final class CipherFile implements AutoCloseable {
     /** Scratch buffer for a single plaintext block. */
     private final byte[] blockPlain;
 
-    /** Scratch buffer for multiple ciphertext blocks, grown on demand. */
-    private byte @Nullable [] bulkCipher;
-
-    /** Scratch buffer for multiple plaintext blocks, grown on demand. */
-    private byte @Nullable [] bulkPlain;
-
     /** The file id from the header, or {@code null} for an empty file. */
     private byte @Nullable [] fileId;
 
     /** Whether the file id has been loaded from the header. */
     private boolean fileIdLoaded;
-
-    /** Write-back buffer holding the most recently written plaintext block. */
-    private final byte[] wbPlain;
-
-    /** The block number buffered in {@link #wbPlain}, or {@code -1} if none. */
-    private long wbBlockNo = -1;
-
-    /** The number of valid plaintext bytes in {@link #wbPlain}. */
-    private int wbLen;
 
     /**
      * Creates an instance over an open channel.
@@ -80,7 +60,6 @@ public final class CipherFile implements AutoCloseable {
         this.writable = writable;
         this.blockCipher = new byte[(int) enc.cipherBS];
         this.blockPlain = new byte[(int) enc.plainBS];
-        this.wbPlain = new byte[(int) enc.plainBS];
     }
 
     /**
@@ -92,24 +71,6 @@ public final class CipherFile implements AutoCloseable {
     @SuppressWarnings("UnusedMethod") // accessed reflectively by tests
     private CipherFile(CipherChannel channel, ContentEnc enc) {
         this(channel, enc, true);
-    }
-
-    /**
-     * Ensures the reusable multi-block scratch buffers hold at least
-     * {@code blockCount} blocks. The buffers are only ever used by one
-     * synchronized operation at a time.
-     *
-     * @param blockCount the number of blocks the current operation needs
-     */
-    private void ensureBulk(int blockCount) {
-        int cipherLength = (int) (blockCount * enc.cipherBS);
-        int plainLength = (int) (blockCount * enc.plainBS);
-        if (bulkCipher == null || bulkCipher.length < cipherLength) {
-            bulkCipher = new byte[cipherLength];
-        }
-        if (bulkPlain == null || bulkPlain.length < plainLength) {
-            bulkPlain = new byte[plainLength];
-        }
     }
 
     /**
@@ -128,6 +89,15 @@ public final class CipherFile implements AutoCloseable {
     }
 
     /**
+     * Returns the plaintext block size in bytes.
+     *
+     * @return the plaintext block size
+     */
+    int blockSize() {
+        return (int) enc.plainBS;
+    }
+
+    /**
      * Returns the file id from the header, or {@code null} if the file is empty.
      *
      * @return a copy of the 16-byte file id, or {@code null} for an empty file
@@ -139,202 +109,83 @@ public final class CipherFile implements AutoCloseable {
     }
 
     /**
-     * Returns the plaintext size of the file.
+     * Returns the plaintext size of the file, derived from the ciphertext size.
      *
      * @return the plaintext size in bytes
      * @throws IOException on filesystem errors
      */
     public synchronized long plainSize() throws IOException {
-        long size = enc.cipherSizeToPlainSize(channel.size());
-        if (wbBlockNo >= 0) {
-            size = Math.max(size, wbBlockNo * enc.plainBS + wbLen);
-        }
-        return size;
+        return enc.cipherSizeToPlainSize(channel.size());
     }
 
     /**
-     * Reads up to {@code dst.remaining()} plaintext bytes at {@code plainOffset}.
+     * Reads and decrypts a whole plaintext block into {@code out[off, ...]}.
      *
-     * @param dst         the destination buffer
-     * @param plainOffset the plaintext offset to read from
-     * @return number of bytes read, or -1 if at or past end of file
+     * <p>A block entirely past the end of the file yields a length of zero.
+     * Sparse holes decrypt to zero-filled plaintext of the full block size.</p>
+     *
+     * @param blockNo the block number
+     * @param out     the destination buffer
+     * @param off     the destination offset
+     * @return the number of valid plaintext bytes in the block, or zero past EOF
      * @throws IOException on filesystem or decryption errors
-     * @throws NullPointerException if {@code dst} is {@code null}
-     * @throws IllegalArgumentException if {@code plainOffset} is negative
+     * @throws NullPointerException if {@code out} is {@code null}
      */
-    public synchronized int read(ByteBuffer dst, long plainOffset) throws IOException {
-        Objects.requireNonNull(dst, "dst");
-        if (plainOffset < 0) {
-            throw new IllegalArgumentException("negative offset: " + plainOffset);
-        }
-        flushWriteBack();
-        long size = plainSize();
-        if (plainOffset >= size) {
-            return -1;
-        }
-        int maxLen = dst.remaining();
-        if (maxLen == 0) {
+    public synchronized int readBlock(long blockNo, byte[] out, int off) throws IOException {
+        Objects.requireNonNull(out, "out");
+        byte[] id = fileId();
+        if (id == null) {
             return 0;
         }
-        long length = Math.min(Math.min(maxLen, size - plainOffset), MAX_BULK_BYTES);
-
-        byte[] fileId = fileId();
-        if (fileId == null) {
-            return -1;
+        long cipherOffset = enc.blockNoToCipherOff(blockNo);
+        long cipherSize = channel.size();
+        if (cipherOffset >= cipherSize) {
+            return 0;
         }
-
-        long firstBlock = plainOffset / enc.plainBS;
-        int skip = (int) (plainOffset % enc.plainBS);
-        long lastBlock = (plainOffset + length - 1) / enc.plainBS;
-        int blockCount = (int) (lastBlock - firstBlock + 1);
-
-        long cipherOffset = enc.blockNoToCipherOff(firstBlock);
-        int cipherLength = (int) (blockCount * enc.cipherBS);
-        ensureBulk(blockCount);
-        byte[] cipherBuf = Objects.requireNonNull(bulkCipher, "bulkCipher");
-        byte[] plainBuf = Objects.requireNonNull(bulkPlain, "bulkPlain");
-        int available = readCipherRange(cipherOffset, cipherBuf, cipherLength);
-
-        int plainLength;
+        int len = (int) Math.min(enc.cipherBS, cipherSize - cipherOffset);
+        int read = readCipherRange(cipherOffset, blockCipher, len);
         try {
-            plainLength = enc.decryptBlocks(cipherBuf, 0, available, firstBlock, fileId, plainBuf, 0);
+            return enc.decryptBlocks(blockCipher, 0, read, blockNo, id, out, off);
         } catch (GeneralSecurityException | IllegalArgumentException e) {
             throw new IOException("corrupt block in file", e);
         }
-
-        int readable = plainLength - skip;
-        if (readable <= 0) {
-            return -1;
-        }
-        int n = Math.min((int) length, readable);
-        dst.put(plainBuf, skip, n);
-        return n;
     }
 
     /**
-     * Writes {@code src.remaining()} plaintext bytes at {@code plainOffset},
-     * performing read-modify-write for partial blocks.
+     * Encrypts {@code plain[off, off+len)} as block {@code blockNo} and writes
+     * it. Writing a block beyond the current end of the file leaves the blocks
+     * in between as sparse holes.
      *
-     * @param src         the source buffer
-     * @param plainOffset the plaintext offset to write at
-     * @return number of bytes written
+     * @param blockNo the block number
+     * @param plain   the plaintext buffer
+     * @param off     the plaintext offset
+     * @param len     the number of plaintext bytes
      * @throws IOException on filesystem or encryption errors
-     * @throws NullPointerException if {@code src} is {@code null}
-     * @throws IllegalArgumentException if {@code plainOffset} is negative
+     * @throws NullPointerException if {@code plain} is {@code null}
      */
-    public synchronized int write(ByteBuffer src, long plainOffset) throws IOException {
-        Objects.requireNonNull(src, "src");
+    public synchronized void writeBlock(long blockNo, byte[] plain, int off, int len) throws IOException {
+        Objects.requireNonNull(plain, "plain");
         if (!writable) {
             throw new NonWritableChannelException();
         }
-        if (plainOffset < 0) {
-            throw new IllegalArgumentException("negative offset: " + plainOffset);
-        }
-        int length = src.remaining();
-        if (length == 0) {
-            return 0;
-        }
-        length = Math.min(length, MAX_BULK_BYTES);
-
-        // A write beyond EOF leaves a hole. Only the final partial block of the
-        // old content must be completed to a whole block so that the fixed
-        // per-block layout still holds for the hole blocks that follow; the
-        // full blocks in between remain holes and read back as zeros.
-        long oldSize = plainSize();
-        if (plainOffset > oldSize) {
-            long oldBlockEnd = ((oldSize + enc.plainBS - 1) / enc.plainBS) * enc.plainBS;
-            if (plainOffset >= oldBlockEnd && oldSize != oldBlockEnd) {
-                writeZeros(oldSize, oldBlockEnd - oldSize);
-            }
-        }
-
-        byte[] fileId = ensureFileId();
-
-        long firstBlock = plainOffset / enc.plainBS;
-        long lastBlock = (plainOffset + length - 1) / enc.plainBS;
-        int blockCount = (int) (lastBlock - firstBlock + 1);
-
-        // A write that does not continue into the buffered block must flush it.
-        if (wbBlockNo >= 0 && wbBlockNo != firstBlock) {
-            flushWriteBack();
-        }
-
-        ensureBulk(blockCount);
-        byte[] cipherBuf = Objects.requireNonNull(bulkCipher, "bulkCipher");
-        byte[] plainBuf = Objects.requireNonNull(bulkPlain, "bulkPlain");
-
-        int plainPos = 0;
-        int lastStart = 0;
-        int lastLen = 0;
-        for (long b = firstBlock; b <= lastBlock; b++) {
-            long blockStart = b * enc.plainBS;
-            long lo = Math.max(plainOffset, blockStart);
-            long hi = Math.min(plainOffset + length, blockStart + enc.plainBS);
-            int segLen = (int) (hi - lo);
-            int segSkip = (int) (lo - blockStart);
-
-            int blockPlainLen;
-            if (segSkip == 0 && segLen == enc.plainBS) {
-                src.get(plainBuf, plainPos, segLen);
-                blockPlainLen = segLen;
-            } else if (b == wbBlockNo) {
-                blockPlainLen = Math.max(wbLen, segSkip + segLen);
-                System.arraycopy(wbPlain, 0, plainBuf, plainPos, wbLen);
-                for (int i = wbLen; i < segSkip; i++) {
-                    plainBuf[plainPos + i] = 0;
-                }
-                src.get(plainBuf, plainPos + segSkip, segLen);
-            } else {
-                byte[] old = readPlainBlock(b);
-                blockPlainLen = Math.max(old.length, segSkip + segLen);
-                System.arraycopy(old, 0, plainBuf, plainPos, old.length);
-                for (int i = old.length; i < segSkip; i++) {
-                    plainBuf[plainPos + i] = 0;
-                }
-                src.get(plainBuf, plainPos + segSkip, segLen);
-            }
-
-            if (b == lastBlock) {
-                lastStart = plainPos;
-                lastLen = blockPlainLen;
-            }
-            plainPos += blockPlainLen;
-        }
-
-        // Write every block except the last one, which is kept in the write-back
-        // buffer so a later small write into it merges without a full
-        // read-decrypt-merge-encrypt cycle.
-        int cipherLen = enc.encryptBlocks(plainBuf, 0, lastStart, firstBlock, fileId, cipherBuf, 0);
-        writeCipherRange(enc.blockNoToCipherOff(firstBlock), cipherBuf, 0, cipherLen);
-        System.arraycopy(plainBuf, lastStart, wbPlain, 0, lastLen);
-        wbBlockNo = lastBlock;
-        wbLen = lastLen;
-
-        return length;
+        byte[] id = ensureFileId();
+        int cipherLen = enc.encryptBlocks(plain, off, len, blockNo, id, blockCipher, 0);
+        writeCipherRange(enc.blockNoToCipherOff(blockNo), blockCipher, 0, cipherLen);
     }
 
     /**
-     * Appends {@code src.remaining()} plaintext bytes at the current end of
-     * file, atomically with respect to other operations on this file.
-     *
-     * @param src the source buffer
-     * @return the number of bytes written
-     * @throws IOException on filesystem or encryption errors
-     * @throws NullPointerException if {@code src} is {@code null}
-     */
-    public synchronized int append(ByteBuffer src) throws IOException {
-        Objects.requireNonNull(src, "src");
-        return write(src, plainSize());
-    }
-
-    /**
-     * Truncates the file to {@code newPlainSize} plaintext bytes.
+     * Truncates the file to {@code newPlainSize} plaintext bytes. Only shrinking
+     * and truncation to empty are performed here; growing is handled by the
+     * buffered channel.
      *
      * @param newPlainSize the new plaintext size in bytes
      * @throws IOException on filesystem or encryption errors
      * @throws IllegalArgumentException if {@code newPlainSize} is negative
      */
     public synchronized void truncate(long newPlainSize) throws IOException {
+        if (!writable) {
+            throw new NonWritableChannelException();
+        }
         if (newPlainSize < 0) {
             throw new IllegalArgumentException("negative size: " + newPlainSize);
         }
@@ -343,53 +194,59 @@ public final class CipherFile implements AutoCloseable {
             // early return below: a torn 1-17 byte header reports a plain size
             // of 0 even though the file still has a partial header, and this
             // must truncate the channel so the file is actually repaired.
-            wbBlockNo = -1;
-            wbLen = 0;
             channel.truncate(0);
             fileId = null;
             fileIdLoaded = true;
             return;
         }
         long oldSize = plainSize();
-        if (newPlainSize == oldSize) {
+        if (newPlainSize >= oldSize) {
             return;
         }
-        flushWriteBack();
-        byte[] fileId = ensureFileId();
+        byte[] id = fileId();
+        if (id == null) {
+            return;
+        }
+        long blockNo = (newPlainSize - 1) / enc.plainBS;
+        long blockStart = blockNo * enc.plainBS;
+        int keep = (int) (newPlainSize - blockStart);
+        int len = readBlock(blockNo, blockPlain, 0);
+        byte[] truncated = Arrays.copyOf(blockPlain, Math.min(keep, len));
+        byte[] cipherBlock = enc.encryptBlock(truncated, blockNo, id);
+        // Truncate the whole last block away before writing the re-encrypted
+        // partial block. Writing first and truncating afterwards leaves, on a
+        // crash in between, the new partial block followed by the stale tail
+        // of the old last block, which no longer authenticates. Truncating
+        // first leaves a clean (only slightly shorter) file at the block
+        // boundary, which then grows by the single re-encrypted block.
+        channel.truncate(enc.blockNoToCipherOff(blockNo));
+        writeCipherRange(enc.blockNoToCipherOff(blockNo), cipherBlock);
+    }
 
-        if (newPlainSize > oldSize) {
-            long oldBlockEnd = ((oldSize + enc.plainBS - 1) / enc.plainBS) * enc.plainBS;
-            if (newPlainSize <= oldBlockEnd) {
-                // The growth stays within the final partial block: extend it in
-                // place instead of rewriting the whole block.
-                writeZeros(oldSize, newPlainSize - oldSize);
-            } else {
-                // Complete the final partial block to a whole block, then write
-                // only the new final block. The full blocks in between remain
-                // holes and read back as zeros.
-                if (oldSize != oldBlockEnd) {
-                    writeZeros(oldSize, oldBlockEnd - oldSize);
-                }
-                long lastBlockNo = (newPlainSize - 1) / enc.plainBS;
-                long lastBlockStart = lastBlockNo * enc.plainBS;
-                int keep = (int) (newPlainSize - lastBlockStart);
-                write(ByteBuffer.allocate(keep), lastBlockStart);
-            }
-        } else {
-            long blockNo = (newPlainSize - 1) / enc.plainBS;
-            long blockStart = blockNo * enc.plainBS;
-            int keep = (int) (newPlainSize - blockStart);
-            byte[] blockPlain = readPlainBlock(blockNo);
-            byte[] truncated = Arrays.copyOf(blockPlain, keep);
-            byte[] cipherBlock = enc.encryptBlock(truncated, blockNo, fileId);
-            // Truncate the whole last block away before writing the re-encrypted
-            // partial block. Writing first and truncating afterwards leaves, on a
-            // crash in between, the new partial block followed by the stale tail
-            // of the old last block, which no longer authenticates. Truncating
-            // first leaves a clean (only slightly shorter) file at the block
-            // boundary, which then grows by the single re-encrypted block.
-            channel.truncate(enc.blockNoToCipherOff(blockNo));
-            writeCipherRange(enc.blockNoToCipherOff(blockNo), cipherBlock);
+    /**
+     * Forces any updates to this file to be written to the storage device.
+     *
+     * @param metaData whether metadata updates should be forced as well
+     * @throws IOException on filesystem errors
+     */
+    public synchronized void force(boolean metaData) throws IOException {
+        channel.force(metaData);
+    }
+
+    /**
+     * Closes the underlying channel and wipes the scratch buffers, which may
+     * hold plaintext or ciphertext of the last operation. Calling this method
+     * more than once has no effect.
+     *
+     * @throws IOException on filesystem errors
+     */
+    @Override
+    public synchronized void close() throws IOException {
+        try {
+            channel.close();
+        } finally {
+            Arrays.fill(blockCipher, (byte) 0);
+            Arrays.fill(blockPlain, (byte) 0);
         }
     }
 
@@ -452,72 +309,11 @@ public final class CipherFile implements AutoCloseable {
     }
 
     /**
-     * Encrypts and writes the buffered write-back block, if any.
-     *
-     * @throws IOException on filesystem or encryption errors
-     */
-    private void flushWriteBack() throws IOException {
-        if (wbBlockNo < 0) {
-            return;
-        }
-        byte[] id = fileId;
-        int cipherLen = enc.encryptBlocks(wbPlain, 0, wbLen, wbBlockNo, id, blockCipher, 0);
-        writeCipherRange(enc.blockNoToCipherOff(wbBlockNo), blockCipher, 0, cipherLen);
-        wbBlockNo = -1;
-        wbLen = 0;
-    }
-
-    /**
-     * Reads and decrypts a whole plaintext block. Empty beyond EOF (gocryptfs
-     * semantics).
-     *
-     * @param blockNo the block number
-     * @return the decrypted block, or an empty array past the end of the file
-     * @throws IOException on filesystem or decryption errors
-     */
-    private byte[] readPlainBlock(long blockNo) throws IOException {
-        byte[] fileId = fileId();
-        long cipherOffset = enc.blockNoToCipherOff(blockNo);
-        long cipherSize = channel.size();
-        if (cipherOffset >= cipherSize) {
-            return EMPTY;
-        }
-        int len = (int) Math.min(enc.cipherBS, cipherSize - cipherOffset);
-        int read = readCipherRange(cipherOffset, blockCipher, len);
-        try {
-            int n = enc.decryptBlocks(blockCipher, 0, read, blockNo, fileId, blockPlain, 0);
-            return Arrays.copyOf(blockPlain, n);
-        } catch (GeneralSecurityException | IllegalArgumentException e) {
-            throw new IOException("corrupt block in file", e);
-        }
-    }
-
-    /**
-     * Zero-fills the plaintext range {@code [offset, offset+length)}.
-     *
-     * @param offset the plaintext start offset
-     * @param length the number of bytes to zero
-     * @throws IOException on filesystem or encryption errors
-     */
-    private void writeZeros(long offset, long length) throws IOException {
-        byte[] zeros = new byte[(int) enc.plainBS];
-        long remaining = length;
-        long pos = offset;
-        while (remaining > 0) {
-            int n = (int) Math.min(zeros.length, remaining);
-            ByteBuffer buf = ByteBuffer.wrap(zeros, 0, n);
-            write(buf, pos);
-            pos += n;
-            remaining -= n;
-        }
-    }
-
-    /**
      * Reads up to {@code length} ciphertext bytes into a new array.
      *
      * @param offset the ciphertext start offset
      * @param length the maximum number of bytes to read
-     * @return the bytes read, possibly fewer than requested or empty at EOF
+     * @return the bytes read, possibly fewer than requested
      * @throws IOException on filesystem errors
      */
     private byte[] readCipherRange(long offset, int length) throws IOException {
@@ -531,7 +327,7 @@ public final class CipherFile implements AutoCloseable {
             }
         }
         if (bb.position() == 0) {
-            return EMPTY;
+            return new byte[0];
         }
         return Arrays.copyOf(buf, bb.position());
     }
@@ -559,17 +355,6 @@ public final class CipherFile implements AutoCloseable {
     }
 
     /**
-     * Writes all of {@code data} at the ciphertext {@code offset}.
-     *
-     * @param offset the ciphertext start offset
-     * @param data   the data to write
-     * @throws IOException on filesystem errors
-     */
-    private void writeCipherRange(long offset, byte[] data) throws IOException {
-        writeCipherRange(offset, data, 0, data.length);
-    }
-
-    /**
      * Writes a range of {@code data} at the ciphertext {@code offset}.
      *
      * @param offset  the ciphertext start offset
@@ -587,142 +372,13 @@ public final class CipherFile implements AutoCloseable {
     }
 
     /**
-     * Opens a streaming, encrypting {@link WritableByteChannel} positioned at
-     * the given plaintext offset.
+     * Writes all of {@code data} at the ciphertext {@code offset}.
      *
-     * <p>Writes are performed block-wise and, for partial blocks, use
-     * read-modify-write exactly like {@link #write(ByteBuffer, long)}. Closing
-     * the returned channel closes this {@link CipherFile}.</p>
-     *
-     * @param plainOffset the plaintext offset to start writing at
-     * @return the encrypting writable channel
-     * @throws IOException on filesystem errors
-     * @throws IllegalArgumentException if {@code plainOffset} is negative
-     */
-    public WritableByteChannel writeChannel(long plainOffset) throws IOException {
-        if (plainOffset < 0) {
-            throw new IllegalArgumentException("negative offset: " + plainOffset);
-        }
-        return new WriteChannel(plainOffset);
-    }
-
-    /**
-     * A streaming, encrypting {@link WritableByteChannel} positioned at a
-     * plaintext offset. Closing it closes the enclosing cipher file.
-     */
-    private final class WriteChannel implements WritableByteChannel {
-
-        /** The current plaintext position. */
-        private long position;
-
-        /** Whether the channel is open. */
-        private boolean open = true;
-
-        /**
-         * Creates a channel starting at the given plaintext position.
-         *
-         * @param position the initial plaintext position
-         */
-        WriteChannel(long position) {
-            this.position = position;
-        }
-
-        /**
-         * Writes plaintext bytes at the current position.
-         *
-         * @param src the source buffer
-         * @return the number of bytes written
-         * @throws IOException on filesystem or encryption errors
-         * @throws ClosedChannelException if the channel is closed
-         */
-        @Override
-        public int write(ByteBuffer src) throws IOException {
-            if (!open) {
-                throw new ClosedChannelException();
-            }
-            int n = CipherFile.this.write(src, position);
-            position += n;
-            return n;
-        }
-
-        /**
-         * Returns whether the channel is open.
-         *
-         * @return {@code true} if the channel is open
-         */
-        @Override
-        public boolean isOpen() {
-            return open;
-        }
-
-        /**
-         * Closes the channel and the enclosing cipher file.
-         *
-         * @throws IOException on filesystem errors
-         */
-        @Override
-        public void close() throws IOException {
-            if (open) {
-                open = false;
-                CipherFile.this.close();
-            }
-        }
-    }
-
-    /**
-     * Forces any updates to this file to be written to the storage device.
-     *
-     * @param metaData whether metadata updates should be forced as well
+     * @param offset the ciphertext start offset
+     * @param data   the data to write
      * @throws IOException on filesystem errors
      */
-    public synchronized void force(boolean metaData) throws IOException {
-        flushWriteBack();
-        channel.force(metaData);
-    }
-
-    /**
-     * Flushes the buffered write-back block to the channel without forcing it
-     * to stable storage. Package-private for the shared, reference-counted
-     * handle, which flushes a writable handle's pending block on close even
-     * when other handles keep the file open.
-     *
-     * @throws IOException on filesystem or encryption errors
-     */
-    synchronized void flush() throws IOException {
-        flushWriteBack();
-    }
-
-    /**
-     * Closes the underlying channel and wipes the scratch buffers, which may
-     * hold plaintext or ciphertext of the last operation. Calling this method
-     * more than once has no effect.
-     *
-     * @throws IOException on filesystem errors
-     */
-    @Override
-    public synchronized void close() throws IOException {
-        try {
-            flushWriteBack();
-        } finally {
-            try {
-                channel.close();
-            } finally {
-                Arrays.fill(blockCipher, (byte) 0);
-                Arrays.fill(blockPlain, (byte) 0);
-                Arrays.fill(wbPlain, (byte) 0);
-                wbBlockNo = -1;
-                wbLen = 0;
-                byte[] bulk = bulkCipher;
-                if (bulk != null) {
-                    Arrays.fill(bulk, (byte) 0);
-                    bulkCipher = null;
-                }
-                bulk = bulkPlain;
-                if (bulk != null) {
-                    Arrays.fill(bulk, (byte) 0);
-                    bulkPlain = null;
-                }
-            }
-        }
+    private void writeCipherRange(long offset, byte[] data) throws IOException {
+        writeCipherRange(offset, data, 0, data.length);
     }
 }

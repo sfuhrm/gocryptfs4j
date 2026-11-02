@@ -12,6 +12,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
+import java.nio.channels.SeekableByteChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AccessMode;
 import java.nio.file.DirectoryNotEmptyException;
@@ -76,9 +77,9 @@ final class FileManager {
     /**
      * Per-cipher-path shared {@link CipherFile} entries, so that concurrently
      * open channels and streams on the same file share a single backing
-     * {@link CipherFile} (with its single file-id cache and write-back buffer)
-     * instead of each holding stale state that could overwrite another handle's
-     * data. Entries are retained for the lifetime of the manager.
+     * {@link CipherFile} (with its single file-id cache) instead of each
+     * holding stale state that could overwrite another handle's data. Entries
+     * are retained for the lifetime of the manager.
      */
     private final Map<String, SharedCipherFile.Entry> sharedFiles = new ConcurrentHashMap<>();
 
@@ -204,7 +205,28 @@ final class FileManager {
             }
             entry.refs++;
         }
-        return new SharedCipherFile(entry, writable);
+        return new SharedCipherFile(entry);
+    }
+
+    /**
+     * Opens a buffered channel at the given plaintext position. The returned
+     * channel owns the opened handle, so the caller closes only the channel.
+     *
+     * @param cipherFile the ciphertext file name
+     * @param position   the initial plaintext position
+     * @param writable   whether the channel permits writes
+     * @return the buffered channel
+     * @throws IOException on filesystem errors
+     */
+    private SeekableByteChannel openChannel(String cipherFile, long position, boolean writable)
+            throws IOException {
+        SharedCipherFile cf = openCipherFileByName(cipherFile, writable);
+        try {
+            return cf.newChannel(position, writable);
+        } catch (IOException | RuntimeException e) {
+            cf.close();
+            throw e;
+        }
     }
 
     /**
@@ -304,7 +326,7 @@ final class FileManager {
     }
 
     /**
-     * Flushes any pending write-back block of every shared cipher file. Called
+     * Flushes any pending buffered block of every shared cipher file. Called
      * before the content-encryption keys are wiped on close, so that buffered
      * plaintext is still encrypted and written while the keys are valid.
      *
@@ -312,35 +334,27 @@ final class FileManager {
      */
     void flushSharedFiles() throws IOException {
         for (SharedCipherFile.Entry entry : sharedFiles.values()) {
-            synchronized (entry.lock) {
-                CipherFile file = entry.file;
-                if (file != null) {
-                    file.flush();
-                }
-            }
+            SharedCipherFile.flushEntry(entry);
         }
     }
 
     /**
      * Returns the plaintext size of a cipher file, accounting for any unflushed
-     * write-back block of its shared backing {@link CipherFile}. The store's
-     * ciphertext size alone misses a block that has been buffered by an open
-     * handle but not yet written through.
+     * buffered block of an open channel on that file. The store's ciphertext
+     * size alone misses a block that has been buffered by an open channel but
+     * not yet written through.
      *
      * @param cipherFile the ciphertext file path
      * @param cipherSize the ciphertext size reported by the store
-     * @return the plaintext size including buffered write-back data
+     * @return the plaintext size including buffered channel data
      * @throws IOException on filesystem errors
      */
     long plainSizeIncludingWriteBack(String cipherFile, long cipherSize) throws IOException {
         long size = contentEnc.cipherSizeToPlainSize(cipherSize);
         SharedCipherFile.Entry entry = sharedFiles.get(cipherFile);
         if (entry != null) {
-            synchronized (entry.lock) {
-                CipherFile file = entry.file;
-                if (file != null) {
-                    size = Math.max(size, file.plainSize());
-                }
+            for (BlockBufferedChannel ch : entry.channels) {
+                size = Math.max(size, ch.size());
             }
         }
         return size;
@@ -376,15 +390,15 @@ final class FileManager {
         Objects.requireNonNull(plainFile, "plainFile");
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
         synchronized (fileLock(r.cipherPath)) {
-            try (SharedCipherFile cf = openCipherFileByName(r.cipherPath, false)) {
-                long size = cf.plainSize();
+            try (SeekableByteChannel ch = openChannel(r.cipherPath, 0, false)) {
+                long size = ch.size();
                 if (size > Integer.MAX_VALUE) {
                     throw new IOException("file too large to read into memory: " + size);
                 }
                 byte[] out = new byte[(int) size];
                 int pos = 0;
                 while (pos < size) {
-                    int n = cf.read(ByteBuffer.wrap(out, pos, (int) (size - pos)), pos);
+                    int n = ch.read(ByteBuffer.wrap(out, pos, (int) (size - pos)));
                     if (n < 0) {
                         break;
                     }
@@ -406,11 +420,11 @@ final class FileManager {
     InputStream openRead(String plainFile) throws IOException {
         Objects.requireNonNull(plainFile, "plainFile");
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
-        SharedCipherFile cf = openCipherFileByName(r.cipherPath, false);
+        SeekableByteChannel ch = openChannel(r.cipherPath, 0, false);
         try {
-            return new CipherInputStream(cf);
+            return new CipherInputStream(ch);
         } catch (RuntimeException e) {
-            cf.close();
+            ch.close();
             throw e;
         }
     }
@@ -433,7 +447,7 @@ final class FileManager {
         SharedCipherFile cf = openCipherFileByName(r.cipherPath, true);
         try {
             cf.truncate(0);
-            return Channels.newOutputStream(cf.writeChannel(0));
+            return Channels.newOutputStream(cf.newChannel(0, true));
         } catch (IOException | RuntimeException e) {
             cf.close();
             throw e;
@@ -458,15 +472,13 @@ final class FileManager {
         }
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
         synchronized (fileLock(r.cipherPath)) {
-            try (SharedCipherFile cf = openCipherFileByName(r.cipherPath, true)) {
+            try (SeekableByteChannel ch = openChannel(r.cipherPath, offset, true)) {
                 ByteBuffer buf = ByteBuffer.wrap(data);
-                long pos = offset;
                 while (buf.hasRemaining()) {
-                    int n = cf.write(buf, pos);
+                    int n = ch.write(buf);
                     if (n <= 0) {
                         throw new IOException("no progress writing to " + plainFile);
                     }
-                    pos += n;
                 }
             }
         }
@@ -997,38 +1009,25 @@ final class FileManager {
     }
 
     /**
-     * A streaming, decrypting {@link InputStream} over a {@link SharedCipherFile}.
+     * A streaming, decrypting {@link InputStream} over a buffered channel.
      *
-     * <p>Buffers decrypted data so that {@link java.io.InputStream#read()}
-     * works efficiently. Closing the stream closes the underlying cipher file.</p>
+     * <p>The underlying {@link BlockBufferedChannel} buffers one plaintext block,
+     * so single-byte reads stay efficient. Closing the stream closes the
+     * channel, which flushes and wipes its plaintext buffer and releases the
+     * shared file.</p>
      */
     private static final class CipherInputStream extends InputStream {
 
-        /** The size of the decrypted read-ahead buffer. */
-        private static final int BUFFER_SIZE = 8192;
-
-        /** The cipher file being read. */
-        private final SharedCipherFile cf;
-
-        /** The current plaintext position. */
-        private long pos;
-
-        /** The read-ahead buffer. */
-        private final byte[] buf = new byte[BUFFER_SIZE];
-
-        /** The current position within the read-ahead buffer. */
-        private int bufPos;
-
-        /** The number of valid bytes in the read-ahead buffer. */
-        private int bufLen;
+        /** The buffered channel being read. */
+        private final SeekableByteChannel ch;
 
         /**
-         * Creates a stream over the given cipher file.
+         * Creates a stream over the given channel.
          *
-         * @param cf the cipher file to read from
+         * @param ch the channel to read from
          */
-        CipherInputStream(SharedCipherFile cf) {
-            this.cf = cf;
+        CipherInputStream(SeekableByteChannel ch) {
+            this.ch = ch;
         }
 
         /**
@@ -1039,11 +1038,9 @@ final class FileManager {
          */
         @Override
         public int read() throws IOException {
-            if (bufPos >= bufLen && !fill()) {
-                return -1;
-            }
-            pos++;
-            return buf[bufPos++] & 0xFF;
+            ByteBuffer one = ByteBuffer.allocate(1);
+            int n = ch.read(one);
+            return n < 0 ? -1 : (one.get(0) & 0xFF);
         }
 
         /**
@@ -1060,58 +1057,18 @@ final class FileManager {
             if (len == 0) {
                 return 0;
             }
-            int copied = 0;
-            if (bufPos < bufLen) {
-                int n = Math.min(len, bufLen - bufPos);
-                System.arraycopy(buf, bufPos, b, off, n);
-                bufPos += n;
-                pos += n;
-                copied = n;
-                if (copied == len) {
-                    return copied;
-                }
-            }
-            int n = cf.read(ByteBuffer.wrap(b, off + copied, len - copied), pos);
-            if (n < 0) {
-                return copied == 0 ? -1 : copied;
-            }
-            pos += n;
-            return copied + n;
+            return ch.read(ByteBuffer.wrap(b, off, len));
         }
 
         /**
-         * Refills the read-ahead buffer.
-         *
-         * @return {@code true} if more data was read
-         * @throws IOException on filesystem errors
-         */
-        private boolean fill() throws IOException {
-            int n = cf.read(ByteBuffer.wrap(buf), pos);
-            if (n <= 0) {
-                bufLen = 0;
-                return false;
-            }
-            bufLen = n;
-            bufPos = 0;
-            return true;
-        }
-
-        /**
-         * Closes the underlying cipher file and wipes the read-ahead buffer,
-         * which holds up to 8 KiB of decrypted plaintext. Calling this method
-         * more than once has no effect.
+         * Closes the underlying channel. Calling this method more than once has
+         * no effect.
          *
          * @throws IOException on filesystem errors
          */
         @Override
         public void close() throws IOException {
-            try {
-                cf.close();
-            } finally {
-                Arrays.fill(buf, (byte) 0);
-                bufPos = 0;
-                bufLen = 0;
-            }
+            ch.close();
         }
     }
 }
