@@ -14,6 +14,7 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.SecureDirectoryStream;
@@ -380,5 +381,24 @@ class PathCipherStoreTest {
         verify(root).newDirectoryStream(Paths.get("."), LinkOption.NOFOLLOW_LINKS);
         verify(root, never()).iterator();
         verify(fresh).close();
+    }
+
+    @Test
+    void secureListSkipsEntryThatDisappears() throws Exception {
+        SecureDirectoryStream<Path> root = mockSecureDirectory();
+        SecureDirectoryStream<Path> fresh = mockSecureDirectory();
+        when(root.newDirectoryStream(Paths.get("."), LinkOption.NOFOLLOW_LINKS)).thenReturn(fresh);
+
+        Path ghost = Paths.get("ghost");
+        when(fresh.iterator()).thenReturn(Collections.singletonList(ghost).iterator());
+
+        BasicFileAttributeView view = mock(BasicFileAttributeView.class);
+        when(view.readAttributes()).thenThrow(new NoSuchFileException("ghost"));
+        when(fresh.getFileAttributeView(ghost, BasicFileAttributeView.class,
+                LinkOption.NOFOLLOW_LINKS)).thenReturn(view);
+
+        PathCipherStore store = new PathCipherStore(tmp.resolve("cipher"), root);
+        assertTrue(store.list(store.root()).isEmpty(),
+                "a disappearing entry must be skipped, not abort the listing");
     }
 }

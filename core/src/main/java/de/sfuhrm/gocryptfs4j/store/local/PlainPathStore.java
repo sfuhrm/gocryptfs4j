@@ -210,8 +210,16 @@ final class PlainPathStore implements CipherStore {
         List<CipherNode> out = new ArrayList<>();
         try (DirectoryStream<Path> ds = Files.newDirectoryStream(d)) {
             for (Path p : ds) {
-                BasicFileAttributes attrs = Files.readAttributes(p, BasicFileAttributes.class,
-                        LinkOption.NOFOLLOW_LINKS);
+                BasicFileAttributes attrs;
+                try {
+                    attrs = Files.readAttributes(p, BasicFileAttributes.class,
+                            LinkOption.NOFOLLOW_LINKS);
+                } catch (NoSuchFileException e) {
+                    // The entry disappeared between the directory listing and
+                    // reading its attributes (a concurrent delete or rename):
+                    // skip it rather than aborting the whole listing.
+                    continue;
+                }
                 out.add(node(basename(p), attrs));
             }
         }

@@ -200,7 +200,15 @@ final class SecurePathStore implements CipherStore {
         List<CipherNode> out = new ArrayList<>();
         try (SecurePath directory = resolveDirectory(dir)) {
             for (Path p : directory.dir()) {
-                BasicFileAttributes attrs = basicAttributes(directory.dir(), p);
+                BasicFileAttributes attrs;
+                try {
+                    attrs = basicAttributes(directory.dir(), p);
+                } catch (NoSuchFileException e) {
+                    // The entry disappeared between the directory listing and
+                    // reading its attributes (a concurrent delete or rename):
+                    // skip it rather than aborting the whole listing.
+                    continue;
+                }
                 out.add(PlainPathStore.node(PlainPathStore.basename(p), attrs));
             }
         }
@@ -218,7 +226,15 @@ final class SecurePathStore implements CipherStore {
         try (SecureDirectoryStream<Path> root = secureRoot.newDirectoryStream(
                 Paths.get("."), LinkOption.NOFOLLOW_LINKS)) {
             for (Path p : root) {
-                BasicFileAttributes attrs = basicAttributes(root, p);
+                BasicFileAttributes attrs;
+                try {
+                    attrs = basicAttributes(root, p);
+                } catch (NoSuchFileException e) {
+                    // The entry disappeared between the directory listing and
+                    // reading its attributes (a concurrent delete or rename):
+                    // skip it rather than aborting the whole listing.
+                    continue;
+                }
                 out.add(PlainPathStore.node(PlainPathStore.basename(p), attrs));
             }
         }
