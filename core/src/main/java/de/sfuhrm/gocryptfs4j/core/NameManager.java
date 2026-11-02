@@ -131,12 +131,14 @@ final class NameManager {
 
     /**
      * Reads the full cipher name stored in the long-name support file of
-     * {@code cipherName}.
+     * {@code cipherName}, verifying that it still hashes back to the hash
+     * embedded in {@code cipherName}.
      *
      * @param cipherDir  the ciphertext directory holding the entry
      * @param cipherName the hashed long-name content store
      * @return the full cipher name stored in the {@code .name} support file
-     * @throws IOException on filesystem errors
+     * @throws IOException on filesystem errors or if the content does not match
+     *                     the hash in {@code cipherName}
      * @throws NullPointerException if {@code cipherDir} or {@code cipherName} is {@code null}
      */
     String resolveLongName(String cipherDir, String cipherName) throws IOException {
@@ -144,7 +146,11 @@ final class NameManager {
         Objects.requireNonNull(cipherName, "cipherName");
         String nameFile = PathResolver.join(cipherDir, cipherName + Constants.LONG_NAME_SUFFIX);
         byte[] nameBytes = store.readSmall(nameFile, Constants.LONG_NAME_CONTENT_MAX_SIZE);
-        return new String(nameBytes, StandardCharsets.UTF_8);
+        String fullCipher = new String(nameBytes, StandardCharsets.UTF_8);
+        if (!nameTransform.hashLongName(fullCipher).equals(cipherName)) {
+            throw new IOException("long-name content does not match its hash: " + cipherName);
+        }
+        return fullCipher;
     }
 
     /**

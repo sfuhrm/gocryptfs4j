@@ -150,4 +150,28 @@ class DirectoryManagerTest {
         assertEquals(1, entries.size());
         assertEquals("a\\b", entries.get(0).plainName());
     }
+
+    @Test
+    void listCipherDirSkipsLongNameWhoseContentDoesNotMatchItsHash() throws IOException {
+        ManagerHarness h = ManagerHarness.encrypted();
+        String nameA = repeat('a', 200);
+        String nameB = repeat('b', 200);
+        h.fileManager.createFile("/" + nameA);
+        h.fileManager.createFile("/" + nameB);
+
+        String cipherA = h.pathResolver.resolve("/" + nameA).cipherName;
+        String cipherB = h.pathResolver.resolve("/" + nameB).cipherName;
+        String fileA = PathResolver.join(h.store.root(), cipherA + Constants.LONG_NAME_SUFFIX);
+        String fileB = PathResolver.join(h.store.root(), cipherB + Constants.LONG_NAME_SUFFIX);
+
+        // Swap the two .name support files, so each content no longer hashes to
+        // the hash embedded in its own file name.
+        byte[] contentA = h.store.readSmall(fileA, Constants.LONG_NAME_CONTENT_MAX_SIZE);
+        byte[] contentB = h.store.readSmall(fileB, Constants.LONG_NAME_CONTENT_MAX_SIZE);
+        h.store.writeSmall(fileA, contentB, true);
+        h.store.writeSmall(fileB, contentA, true);
+
+        byte[] iv = h.directoryManager.readDirIV(h.store.root());
+        assertTrue(h.directoryManager.listCipherDir(h.store.root(), iv).isEmpty());
+    }
 }

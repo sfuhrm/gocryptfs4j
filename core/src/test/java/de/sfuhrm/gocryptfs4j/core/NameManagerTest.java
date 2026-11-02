@@ -1,9 +1,11 @@
 package de.sfuhrm.gocryptfs4j.core;
 
 import de.sfuhrm.gocryptfs4j.names.NameTransform;
+import de.sfuhrm.gocryptfs4j.crypto.Constants;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.FileSystemException;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -153,5 +155,25 @@ class NameManagerTest {
                 PathResolver.join(h.store.root(), cipher), h.store.root(), iv, cipher, "short.txt");
         assertFalse(h.nameManager.isLongContent(cipher));
         assertFalse(h.nameManager.prepareLongName(r));
+    }
+
+    @Test
+    void resolveLongNameRejectsMismatchedHash() throws IOException {
+        ManagerHarness h = ManagerHarness.encrypted();
+        byte[] iv = h.directoryManager.readDirIV(h.store.root());
+        String plain = repeat('a', 200);
+        String cipher = h.nameManager.cipherNameFor(plain, iv);
+
+        PathResolver.Resolved r = new PathResolver.Resolved(
+                PathResolver.join(h.store.root(), cipher), h.store.root(), iv, cipher, plain);
+        assertTrue(h.nameManager.prepareLongName(r));
+
+        // Overwrite the .name file with content that does not hash back to the
+        // hash embedded in the long-name file name.
+        String nameFile = PathResolver.join(h.store.root(), cipher + Constants.LONG_NAME_SUFFIX);
+        h.store.writeSmall(nameFile, "different".getBytes(StandardCharsets.UTF_8), true);
+
+        assertThrows(IOException.class,
+                () -> h.nameManager.resolveLongName(h.store.root(), cipher));
     }
 }
