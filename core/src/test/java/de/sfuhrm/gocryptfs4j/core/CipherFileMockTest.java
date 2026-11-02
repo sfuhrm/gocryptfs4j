@@ -9,7 +9,9 @@ import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Constructor;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -158,5 +160,38 @@ class CipherFileMockTest {
         // The first write read-modify-writes block 0; the next two merge into
         // the one-block write-back buffer without re-reading it.
         assertEquals(1, readsAtHeaderLen[0]);
+    }
+
+    @Test
+    void writeBeyondEofLeavesHoleBlocks() throws Exception {
+        ContentEnc enc = enc();
+        CipherChannel channel = mock(CipherChannel.class);
+        when(channel.size()).thenReturn(0L);
+        long[] pos = {0};
+        List<Long> writeOffsets = new ArrayList<>();
+        when(channel.position(anyLong())).thenAnswer(inv -> {
+            pos[0] = inv.getArgument(0);
+            return channel;
+        });
+        when(channel.write(any(ByteBuffer.class))).thenAnswer(inv -> {
+            ByteBuffer bb = inv.getArgument(0);
+            writeOffsets.add(pos[0]);
+            int n = bb.remaining();
+            bb.position(bb.position() + n);
+            pos[0] += n;
+            return n;
+        });
+
+        CipherFile cf = newCipherFile(channel, enc);
+
+        long blockNo = 1000;
+        cf.write(ByteBuffer.wrap(new byte[]{0x11}), blockNo * enc.plainBS);
+        cf.force(false);
+
+        // Only the header and the final block are written; the blocks in
+        // between stay holes rather than being materialized as zero blocks.
+        assertEquals(2, writeOffsets.size());
+        assertEquals(0L, writeOffsets.get(0));
+        assertEquals(enc.blockNoToCipherOff(blockNo), writeOffsets.get(1));
     }
 }

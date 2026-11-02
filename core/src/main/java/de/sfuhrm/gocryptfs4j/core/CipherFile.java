@@ -236,13 +236,15 @@ public final class CipherFile implements AutoCloseable {
         }
         length = Math.min(length, MAX_BULK_BYTES);
 
-        // Zero-pad any hole up to a block boundary so that the ciphertext file
-        // always consists of whole blocks except possibly the last one.
+        // A write beyond EOF leaves a hole. Only the final partial block of the
+        // old content must be completed to a whole block so that the fixed
+        // per-block layout still holds for the hole blocks that follow; the
+        // full blocks in between remain holes and read back as zeros.
         long oldSize = plainSize();
         if (plainOffset > oldSize) {
-            long blockStart = (plainOffset / enc.plainBS) * enc.plainBS;
-            if (blockStart > oldSize) {
-                writeZeros(oldSize, blockStart - oldSize);
+            long oldBlockEnd = ((oldSize + enc.plainBS - 1) / enc.plainBS) * enc.plainBS;
+            if (plainOffset >= oldBlockEnd && oldSize != oldBlockEnd) {
+                writeZeros(oldSize, oldBlockEnd - oldSize);
             }
         }
 
@@ -352,15 +354,22 @@ public final class CipherFile implements AutoCloseable {
         byte[] fileId = ensureFileId();
 
         if (newPlainSize > oldSize) {
-            byte[] zeros = new byte[(int) enc.plainBS];
-            long remaining = newPlainSize - oldSize;
-            long pos = oldSize;
-            while (remaining > 0) {
-                int n = (int) Math.min(zeros.length, remaining);
-                ByteBuffer buf = ByteBuffer.wrap(zeros, 0, n);
-                write(buf, pos);
-                pos += n;
-                remaining -= n;
+            long oldBlockEnd = ((oldSize + enc.plainBS - 1) / enc.plainBS) * enc.plainBS;
+            if (newPlainSize <= oldBlockEnd) {
+                // The growth stays within the final partial block: extend it in
+                // place instead of rewriting the whole block.
+                writeZeros(oldSize, newPlainSize - oldSize);
+            } else {
+                // Complete the final partial block to a whole block, then write
+                // only the new final block. The full blocks in between remain
+                // holes and read back as zeros.
+                if (oldSize != oldBlockEnd) {
+                    writeZeros(oldSize, oldBlockEnd - oldSize);
+                }
+                long lastBlockNo = (newPlainSize - 1) / enc.plainBS;
+                long lastBlockStart = lastBlockNo * enc.plainBS;
+                int keep = (int) (newPlainSize - lastBlockStart);
+                write(ByteBuffer.allocate(keep), lastBlockStart);
             }
         } else {
             long blockNo = (newPlainSize - 1) / enc.plainBS;
