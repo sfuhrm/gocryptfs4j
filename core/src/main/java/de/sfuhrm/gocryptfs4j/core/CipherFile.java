@@ -338,16 +338,20 @@ public final class CipherFile implements AutoCloseable {
         if (newPlainSize < 0) {
             throw new IllegalArgumentException("negative size: " + newPlainSize);
         }
-        long oldSize = plainSize();
-        if (newPlainSize == oldSize) {
-            return;
-        }
         if (newPlainSize == 0) {
+            // Truncating to empty is handled up front, before the same-size
+            // early return below: a torn 1-17 byte header reports a plain size
+            // of 0 even though the file still has a partial header, and this
+            // must truncate the channel so the file is actually repaired.
             wbBlockNo = -1;
             wbLen = 0;
             channel.truncate(0);
             fileId = null;
             fileIdLoaded = true;
+            return;
+        }
+        long oldSize = plainSize();
+        if (newPlainSize == oldSize) {
             return;
         }
         flushWriteBack();

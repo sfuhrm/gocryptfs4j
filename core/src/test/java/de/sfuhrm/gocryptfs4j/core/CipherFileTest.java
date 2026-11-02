@@ -242,6 +242,26 @@ class CipherFileTest {
     }
 
     @Test
+    void truncateToZeroRepairsTornHeader() throws IOException {
+        ContentEnc enc = enc();
+        Path p = newFile();
+        // A torn write leaves a partial header: fewer bytes than HEADER_LEN,
+        // which reports a plain size of 0 even though the file is not empty.
+        Files.write(p, new byte[Constants.HEADER_LEN - 1]);
+
+        try (CipherFile cf = open(p, enc, true)) {
+            assertEquals(0, cf.plainSize(), "a torn header must report a zero plain size");
+
+            cf.truncate(0);
+
+            assertEquals(0, cf.plainSize());
+            assertNull(cf.fileId());
+        }
+
+        assertEquals(0, Files.size(p), "truncate(0) must actually remove the torn header");
+    }
+
+    @Test
     void tornTailThrowsIoExceptionNotUnchecked() throws IOException {
         ContentEnc enc = enc();
         Path p = newFile();
