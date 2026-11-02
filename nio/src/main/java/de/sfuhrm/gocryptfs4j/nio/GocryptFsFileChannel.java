@@ -1,6 +1,6 @@
 package de.sfuhrm.gocryptfs4j.nio;
 
-import de.sfuhrm.gocryptfs4j.core.CipherFile;
+import de.sfuhrm.gocryptfs4j.core.SharedCipherFile;
 import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
@@ -14,7 +14,7 @@ import java.nio.channels.SeekableByteChannel;
  * decrypted (plaintext) content.
  *
  * <p>The channel keeps a plaintext position and delegates all reads and writes
- * to a {@link CipherFile}. Read and write access are controlled independently by
+ * to a {@link SharedCipherFile}. Read and write access are controlled independently by
  * the {@code readable} and {@code writable} flags. Updates may optionally be
  * forced to storage, according to the {@link Sync} mode, and an optional
  * {@link CloseAction} runs after the underlying file has been closed (used for
@@ -47,7 +47,7 @@ final class GocryptFsFileChannel implements SeekableByteChannel {
     }
 
     /** The encrypted file backing this channel. */
-    private final CipherFile file;
+    private final SharedCipherFile file;
 
     /** Whether the channel permits reads. */
     private final boolean readable;
@@ -77,7 +77,7 @@ final class GocryptFsFileChannel implements SeekableByteChannel {
      * @param sync            how updates are forced to storage
      * @param closeAction     an action to run on close, or {@code null} for none
      */
-    GocryptFsFileChannel(CipherFile file, boolean readable, boolean writable,
+    GocryptFsFileChannel(SharedCipherFile file, boolean readable, boolean writable,
                          long initialPosition, Sync sync, @Nullable CloseAction closeAction) {
         this.file = file;
         this.readable = readable;

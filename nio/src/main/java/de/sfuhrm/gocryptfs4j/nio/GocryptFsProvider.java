@@ -2,7 +2,7 @@ package de.sfuhrm.gocryptfs4j.nio;
 
 import de.sfuhrm.gocryptfs4j.core.DirEntry;
 import de.sfuhrm.gocryptfs4j.core.GocryptFs;
-import de.sfuhrm.gocryptfs4j.core.CipherFile;
+import de.sfuhrm.gocryptfs4j.core.SharedCipherFile;
 import de.sfuhrm.gocryptfs4j.fido2.Fido2Token;
 import de.sfuhrm.gocryptfs4j.store.CipherStore;
 import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
@@ -440,7 +440,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
             throw new NoSuchFileException(plain);
         }
 
-        CipherFile cf = fs.openCipherFile(plain, write);
+        SharedCipherFile cf = fs.openCipherFile(plain, write);
         long position = 0;
         if (truncate && write) {
             cf.truncate(0);

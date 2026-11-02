@@ -722,15 +722,17 @@ public final class GocryptFs implements AutoCloseable {
     }
 
     /**
-     * Opens a plaintext file for random access.
+     * Opens a plaintext file for random access, sharing one backing cipher file
+     * (with reference counting) across concurrently open handles on the same
+     * file.
      *
      * @param plainFile the plaintext file path
      * @param writable  whether to open for writing
-     * @return the opened cipher file
+     * @return the opened cipher file handle
      * @throws IOException on filesystem errors
      * @throws NullPointerException if {@code plainFile} is {@code null}
      */
-    public CipherFile openCipherFile(String plainFile, boolean writable) throws IOException {
+    public SharedCipherFile openCipherFile(String plainFile, boolean writable) throws IOException {
         return fileManager.openCipherFile(plainFile, writable);
     }
 

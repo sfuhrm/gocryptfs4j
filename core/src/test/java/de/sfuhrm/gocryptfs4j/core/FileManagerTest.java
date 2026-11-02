@@ -3,6 +3,7 @@ package de.sfuhrm.gocryptfs4j.core;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.NoSuchFileException;
@@ -205,5 +206,34 @@ class FileManagerTest {
         for (byte b : read) {
             assertEquals(0x5a, b, "concurrent writers must not corrupt the file");
         }
+    }
+
+    @Test
+    void openHandlesShareOneCipherFile() throws IOException {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.fileManager.createFile("/f.txt");
+        int block = (int) h.contentEnc.plainBS;
+
+        byte[] first = new byte[block];
+        Arrays.fill(first, (byte) 0x41);
+        byte[] second = new byte[block];
+        Arrays.fill(second, (byte) 0x42);
+
+        SharedCipherFile h1 = h.fileManager.openCipherFile("/f.txt", true);
+        try {
+            // Buffer a write to block 0 without closing the handle.
+            h1.write(ByteBuffer.wrap(first), 0);
+
+            // A second handle writes the same block and closes, flushing it.
+            try (SharedCipherFile h2 = h.fileManager.openCipherFile("/f.txt", true)) {
+                h2.write(ByteBuffer.wrap(second), 0);
+            }
+        } finally {
+            h1.close();
+        }
+
+        // The second handle's write must win; the first handle must not flush its
+        // stale block over it when it closes.
+        assertArrayEquals(second, h.fileManager.readAll("/f.txt"));
     }
 }

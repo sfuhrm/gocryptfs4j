@@ -3,7 +3,6 @@ package de.sfuhrm.gocryptfs4j.core;
 import de.sfuhrm.gocryptfs4j.crypto.Constants;
 import de.sfuhrm.gocryptfs4j.crypto.ContentEnc;
 import de.sfuhrm.gocryptfs4j.names.NameTransform;
-import de.sfuhrm.gocryptfs4j.store.CipherChannel;
 import de.sfuhrm.gocryptfs4j.store.CipherNode;
 import de.sfuhrm.gocryptfs4j.store.CipherStore;
 import org.jspecify.annotations.Nullable;
@@ -69,6 +68,16 @@ final class FileManager {
      * and corrupt each other.
      */
     private final Map<String, Object> fileLocks = new ConcurrentHashMap<>();
+
+    /**
+     * Per-cipher-path shared {@link CipherFile} entries, so that concurrently
+     * open channels and streams on the same file share a single backing
+     * {@link CipherFile} (with its single file-id cache and write-back buffer)
+     * instead of each holding stale state that could overwrite another handle's
+     * data. Entries are retained for the lifetime of the manager, like
+     * {@link #fileLocks}.
+     */
+    private final Map<String, SharedCipherFile.Entry> sharedFiles = new ConcurrentHashMap<>();
 
     /**
      * Creates a file manager.
@@ -151,29 +160,48 @@ final class FileManager {
      *
      * @param plainFile the plaintext file path
      * @param writable  whether to open for writing
-     * @return the opened cipher file
+     * @return the opened cipher file handle
      * @throws IOException on filesystem errors
      * @throws NullPointerException if {@code plainFile} is {@code null}
      */
-    CipherFile openCipherFile(String plainFile, boolean writable) throws IOException {
+    SharedCipherFile openCipherFile(String plainFile, boolean writable) throws IOException {
         Objects.requireNonNull(plainFile, "plainFile");
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
         return openCipherFileByName(r.cipherPath, writable);
     }
 
     /**
-     * Opens a cipher-side file for random access.
+     * Opens a cipher-side file for random access, sharing one backing
+     * {@link CipherFile} (with reference counting) across all concurrently open
+     * handles on the same ciphertext path.
      *
      * @param cipherFile the ciphertext file name
      * @param writable   whether to open for writing
-     * @return the opened cipher file
+     * @return the opened cipher file handle
      * @throws IOException on filesystem errors
      * @throws NullPointerException if {@code cipherFile} is {@code null}
      */
-    CipherFile openCipherFileByName(String cipherFile, boolean writable) throws IOException {
+    SharedCipherFile openCipherFileByName(String cipherFile, boolean writable) throws IOException {
         Objects.requireNonNull(cipherFile, "cipherFile");
-        CipherChannel channel = store.open(cipherFile, writable);
-        return CipherFile.open(channel, contentEnc, writable);
+        SharedCipherFile.Entry entry =
+                sharedFiles.computeIfAbsent(cipherFile, key -> new SharedCipherFile.Entry());
+        synchronized (entry.lock) {
+            if (entry.file == null) {
+                entry.file = CipherFile.open(store.open(cipherFile, writable), contentEnc, writable);
+                entry.writable = writable;
+            } else if (writable && !entry.writable) {
+                // A read-only shared file is already open (other read-only
+                // handles hold it). Upgrade to a writable channel; the old one
+                // never buffered a write, so it can be closed safely.
+                CipherFile upgraded = CipherFile.open(store.open(cipherFile, true), contentEnc, true);
+                CipherFile old = entry.file;
+                entry.file = upgraded;
+                entry.writable = true;
+                old.close();
+            }
+            entry.refs++;
+        }
+        return new SharedCipherFile(entry, writable);
     }
 
     /**
@@ -199,7 +227,7 @@ final class FileManager {
         Objects.requireNonNull(plainFile, "plainFile");
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
         synchronized (fileLock(r.cipherPath)) {
-            try (CipherFile cf = openCipherFileByName(r.cipherPath, false)) {
+            try (SharedCipherFile cf = openCipherFileByName(r.cipherPath, false)) {
                 return cf.plainSize();
             }
         }
@@ -217,7 +245,7 @@ final class FileManager {
         Objects.requireNonNull(plainFile, "plainFile");
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
         synchronized (fileLock(r.cipherPath)) {
-            try (CipherFile cf = openCipherFileByName(r.cipherPath, false)) {
+            try (SharedCipherFile cf = openCipherFileByName(r.cipherPath, false)) {
                 long size = cf.plainSize();
                 if (size > Integer.MAX_VALUE) {
                     throw new IOException("file too large to read into memory: " + size);
@@ -247,7 +275,7 @@ final class FileManager {
     InputStream openRead(String plainFile) throws IOException {
         Objects.requireNonNull(plainFile, "plainFile");
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
-        CipherFile cf = openCipherFileByName(r.cipherPath, false);
+        SharedCipherFile cf = openCipherFileByName(r.cipherPath, false);
         try {
             return new CipherInputStream(cf);
         } catch (RuntimeException e) {
@@ -271,7 +299,7 @@ final class FileManager {
     OutputStream openWrite(String plainFile) throws IOException {
         Objects.requireNonNull(plainFile, "plainFile");
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
-        CipherFile cf = openCipherFileByName(r.cipherPath, true);
+        SharedCipherFile cf = openCipherFileByName(r.cipherPath, true);
         try {
             cf.truncate(0);
             return Channels.newOutputStream(cf.writeChannel(0));
@@ -299,7 +327,7 @@ final class FileManager {
         }
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
         synchronized (fileLock(r.cipherPath)) {
-            try (CipherFile cf = openCipherFileByName(r.cipherPath, true)) {
+            try (SharedCipherFile cf = openCipherFileByName(r.cipherPath, true)) {
                 ByteBuffer buf = ByteBuffer.wrap(data);
                 long pos = offset;
                 while (buf.hasRemaining()) {
@@ -329,7 +357,7 @@ final class FileManager {
         }
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
         synchronized (fileLock(r.cipherPath)) {
-            try (CipherFile cf = openCipherFileByName(r.cipherPath, true)) {
+            try (SharedCipherFile cf = openCipherFileByName(r.cipherPath, true)) {
                 cf.truncate(newSize);
             }
         }
@@ -791,7 +819,7 @@ final class FileManager {
     }
 
     /**
-     * A streaming, decrypting {@link InputStream} over a {@link CipherFile}.
+     * A streaming, decrypting {@link InputStream} over a {@link SharedCipherFile}.
      *
      * <p>Buffers decrypted data so that {@link java.io.InputStream#read()}
      * works efficiently. Closing the stream closes the underlying cipher file.</p>
@@ -802,7 +830,7 @@ final class FileManager {
         private static final int BUFFER_SIZE = 8192;
 
         /** The cipher file being read. */
-        private final CipherFile cf;
+        private final SharedCipherFile cf;
 
         /** The current plaintext position. */
         private long pos;
@@ -821,7 +849,7 @@ final class FileManager {
          *
          * @param cf the cipher file to read from
          */
-        CipherInputStream(CipherFile cf) {
+        CipherInputStream(SharedCipherFile cf) {
             this.cf = cf;
         }
 

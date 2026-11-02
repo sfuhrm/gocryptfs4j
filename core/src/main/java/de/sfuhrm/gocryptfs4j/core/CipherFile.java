@@ -654,6 +654,18 @@ public final class CipherFile implements AutoCloseable {
     }
 
     /**
+     * Flushes the buffered write-back block to the channel without forcing it
+     * to stable storage. Package-private for the shared, reference-counted
+     * handle, which flushes a writable handle's pending block on close even
+     * when other handles keep the file open.
+     *
+     * @throws IOException on filesystem or encryption errors
+     */
+    synchronized void flush() throws IOException {
+        flushWriteBack();
+    }
+
+    /**
      * Closes the underlying channel and wipes the scratch buffers, which may
      * hold plaintext or ciphertext of the last operation. Calling this method
      * more than once has no effect.
