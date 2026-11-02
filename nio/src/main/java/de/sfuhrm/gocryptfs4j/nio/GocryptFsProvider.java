@@ -466,7 +466,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
         GocryptFsFileChannel.CloseAction onClose = deleteOnClose
                 ? () -> deleteOnClose(fs, p)
                 : null;
-        return new GocryptFsFileChannel(cf, read, write, position, sync, onClose);
+        return new GocryptFsFileChannel(cf, read, write, append, position, sync, onClose);
     }
 
     /**

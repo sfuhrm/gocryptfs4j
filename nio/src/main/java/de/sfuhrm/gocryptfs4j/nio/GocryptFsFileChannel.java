@@ -55,6 +55,9 @@ final class GocryptFsFileChannel implements SeekableByteChannel {
     /** Whether the channel permits writes and truncation. */
     private final boolean writable;
 
+    /** Whether writes are appended to the end of the file. */
+    private final boolean append;
+
     /** How updates are forced to storage. */
     private final Sync sync;
 
@@ -73,15 +76,18 @@ final class GocryptFsFileChannel implements SeekableByteChannel {
      * @param file            the encrypted file to read from and write to
      * @param readable        whether the channel permits reads
      * @param writable        whether the channel permits writes and truncation
+     * @param append          whether writes are appended to the end of the file
      * @param initialPosition the initial plaintext position
      * @param sync            how updates are forced to storage
      * @param closeAction     an action to run on close, or {@code null} for none
      */
     GocryptFsFileChannel(SharedCipherFile file, boolean readable, boolean writable,
-                         long initialPosition, Sync sync, @Nullable CloseAction closeAction) {
+                         boolean append, long initialPosition, Sync sync,
+                         @Nullable CloseAction closeAction) {
         this.file = file;
         this.readable = readable;
         this.writable = writable;
+        this.append = append;
         this.position = initialPosition;
         this.sync = sync;
         this.closeAction = closeAction;
@@ -109,9 +115,10 @@ final class GocryptFsFileChannel implements SeekableByteChannel {
     }
 
     /**
-     * Writes a sequence of plaintext bytes from {@code src} starting at the
-     * current position, advancing the position by the number of bytes written
-     * and forcing the update if a sync mode is active.
+     * Writes a sequence of plaintext bytes from {@code src}. In append mode the
+     * bytes are written at the current end of the file, otherwise at the
+     * current position, advancing the position and forcing the update if a sync
+     * mode is active.
      *
      * @param src the source buffer
      * @return the number of bytes written, possibly zero
@@ -123,8 +130,14 @@ final class GocryptFsFileChannel implements SeekableByteChannel {
         if (!writable) {
             throw new NonWritableChannelException();
         }
-        int n = file.write(src, position);
-        position += n;
+        int n;
+        if (append) {
+            n = file.append(src);
+            position = file.plainSize();
+        } else {
+            n = file.write(src, position);
+            position += n;
+        }
         force();
         return n;
     }

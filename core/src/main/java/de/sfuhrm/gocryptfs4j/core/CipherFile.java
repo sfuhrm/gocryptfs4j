@@ -312,6 +312,20 @@ public final class CipherFile implements AutoCloseable {
     }
 
     /**
+     * Appends {@code src.remaining()} plaintext bytes at the current end of
+     * file, atomically with respect to other operations on this file.
+     *
+     * @param src the source buffer
+     * @return the number of bytes written
+     * @throws IOException on filesystem or encryption errors
+     * @throws NullPointerException if {@code src} is {@code null}
+     */
+    public synchronized int append(ByteBuffer src) throws IOException {
+        Objects.requireNonNull(src, "src");
+        return write(src, plainSize());
+    }
+
+    /**
      * Truncates the file to {@code newPlainSize} plaintext bytes.
      *
      * @param newPlainSize the new plaintext size in bytes

@@ -176,6 +176,36 @@ class GocryptFsFileChannelTest {
         assertArrayEquals("x".getBytes(StandardCharsets.UTF_8), Files.readAllBytes(file));
     }
 
+    @Test
+    void appendWritesAtEndRegardlessOfPosition() throws IOException {
+        Path file = nio.getPath("/append.txt");
+        Files.write(file, "0123".getBytes(StandardCharsets.UTF_8));
+
+        try (SeekableByteChannel ch = Files.newByteChannel(file,
+                EnumSet.of(StandardOpenOption.WRITE, StandardOpenOption.APPEND))) {
+            ch.position(0);
+            assertEquals(2, ch.write(ByteBuffer.wrap("45".getBytes(StandardCharsets.UTF_8))));
+            assertEquals(6, ch.size());
+        }
+        assertArrayEquals("012345".getBytes(StandardCharsets.UTF_8), Files.readAllBytes(file));
+    }
+
+    @Test
+    void multipleAppendersAppendInOrder() throws IOException {
+        Path file = nio.getPath("/append-two.txt");
+        Files.write(file, "".getBytes(StandardCharsets.UTF_8));
+
+        try (SeekableByteChannel a = Files.newByteChannel(file,
+                EnumSet.of(StandardOpenOption.WRITE, StandardOpenOption.APPEND));
+             SeekableByteChannel b = Files.newByteChannel(file,
+                     EnumSet.of(StandardOpenOption.WRITE, StandardOpenOption.APPEND))) {
+            a.write(ByteBuffer.wrap("AAA".getBytes(StandardCharsets.UTF_8)));
+            b.write(ByteBuffer.wrap("BBB".getBytes(StandardCharsets.UTF_8)));
+            a.write(ByteBuffer.wrap("CCC".getBytes(StandardCharsets.UTF_8)));
+        }
+        assertArrayEquals("AAABBBCCC".getBytes(StandardCharsets.UTF_8), Files.readAllBytes(file));
+    }
+
     private static void deleteRecursively(Path path) throws IOException {
         if (path == null || !Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
             return;

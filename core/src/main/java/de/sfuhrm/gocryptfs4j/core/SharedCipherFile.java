@@ -120,6 +120,21 @@ public final class SharedCipherFile implements AutoCloseable {
     }
 
     /**
+     * Appends plaintext bytes at the current end of the shared file, atomically
+     * with respect to other operations on the same file.
+     *
+     * @param src the source buffer
+     * @return the number of bytes written
+     * @throws IOException on filesystem or encryption errors
+     */
+    public int append(ByteBuffer src) throws IOException {
+        Objects.requireNonNull(src, "src");
+        synchronized (entry.lock) {
+            return file().append(src);
+        }
+    }
+
+    /**
      * Truncates the shared file to the given plaintext size.
      *
      * @param newPlainSize the new plaintext size in bytes
