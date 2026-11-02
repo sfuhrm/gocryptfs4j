@@ -227,6 +227,18 @@ final class FileManager {
     }
 
     /**
+     * Drops the shared {@link CipherFile} entry for a ciphertext file that no
+     * longer exists. Handles already open keep their reference to the removed
+     * entry and so continue to work on the unlinked file, as POSIX dictates;
+     * a later open creates a fresh entry.
+     *
+     * @param cipherFile the ciphertext file name
+     */
+    private void releaseSharedFile(String cipherFile) {
+        sharedFiles.remove(cipherFile);
+    }
+
+    /**
      * Moves the per-file lock for a ciphertext file from one path to another, so
      * a rename neither leaves a stale lock behind nor lets the lock drift away
      * from the file it protects. A lock that already exists at the target (from
@@ -254,6 +266,56 @@ final class FileManager {
             Object descendant = fileLocks.remove(key);
             if (descendant != null) {
                 fileLocks.put(to + key.substring(from.length()), descendant);
+            }
+        }
+    }
+
+    /**
+     * Moves the shared {@link CipherFile} entry for a ciphertext file from one
+     * path to another, so a rename keeps the shared backing file attached to the
+     * file it serves. A directory rename also relocates the entries of every
+     * file below it. A stale entry at the target (from a replaced entry) is
+     * dropped; handles already open keep their reference to the old entry.
+     *
+     * @param from the source ciphertext path
+     * @param to   the target ciphertext path
+     */
+    private void moveSharedFile(String from, String to) {
+        SharedCipherFile.Entry entry = sharedFiles.remove(from);
+        if (entry != null) {
+            sharedFiles.put(to, entry);
+        } else {
+            sharedFiles.remove(to);
+        }
+        String prefix = from + "/";
+        List<String> keys = new ArrayList<>();
+        for (String key : sharedFiles.keySet()) {
+            if (key.startsWith(prefix)) {
+                keys.add(key);
+            }
+        }
+        for (String key : keys) {
+            SharedCipherFile.Entry descendant = sharedFiles.remove(key);
+            if (descendant != null) {
+                sharedFiles.put(to + key.substring(from.length()), descendant);
+            }
+        }
+    }
+
+    /**
+     * Flushes any pending write-back block of every shared cipher file. Called
+     * before the content-encryption keys are wiped on close, so that buffered
+     * plaintext is still encrypted and written while the keys are valid.
+     *
+     * @throws IOException on filesystem or encryption errors
+     */
+    void flushSharedFiles() throws IOException {
+        for (SharedCipherFile.Entry entry : sharedFiles.values()) {
+            synchronized (entry.lock) {
+                CipherFile file = entry.file;
+                if (file != null) {
+                    file.flush();
+                }
             }
         }
     }
@@ -579,6 +641,7 @@ final class FileManager {
             store.delete(r.cipherPath);
         }
         releaseFileLock(r.cipherPath);
+        releaseSharedFile(r.cipherPath);
         nameManager.removeLongName(r);
         directoryManager.invalidateDirIvCache(r.cipherPath);
     }
@@ -656,6 +719,7 @@ final class FileManager {
         }
         nameManager.removeLongName(from);
         moveFileLock(from.cipherPath, to.cipherPath);
+        moveSharedFile(from.cipherPath, to.cipherPath);
         directoryManager.invalidateDirIvCache(from.cipherPath);
         directoryManager.invalidateDirIvCache(to.cipherPath);
     }

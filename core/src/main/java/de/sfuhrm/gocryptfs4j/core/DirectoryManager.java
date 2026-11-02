@@ -110,23 +110,30 @@ final class DirectoryManager {
 
     /**
      * Reads the {@code gocryptfs.diriv} of {@code cipherDir}, minting and
-     * persisting a fresh one if the file is missing.
+     * persisting a fresh one if the file is missing and the directory is empty.
      *
      * <p>A crash between {@code mkdir} and {@code writeDirIV} (or a directory
      * created by an older gocryptfs) can leave a directory without a
      * {@code gocryptfs.diriv}. Such a directory is empty &mdash; no entry can be
      * created under it while its diriv is missing &mdash; so minting a fresh
-     * random IV here is safe and makes the directory usable again.</p>
+     * random IV here is safe and makes the directory usable again. A directory
+     * that already has entries but no diriv was encrypted under an IV that is no
+     * longer available, so minting a fresh IV would make those names
+     * undecryptable; it is rejected instead.</p>
      *
      * @param cipherDir the ciphertext directory name
      * @return the 16-byte directory IV
-     * @throws IOException on filesystem errors or a corrupt diriv
+     * @throws IOException on filesystem errors, a corrupt diriv, or a missing
+     *                     diriv in a non-empty directory
      */
     private byte[] readOrCreateDirIV(String cipherDir) throws IOException {
         String path = PathResolver.join(cipherDir, Constants.DIR_IV_FILENAME);
         try {
             return store.readSmall(path, Constants.DIR_IV_LEN);
         } catch (NoSuchFileException e) {
+            if (!store.list(cipherDir).isEmpty()) {
+                throw new IOException("directory has entries but no gocryptfs.diriv: " + cipherDir);
+            }
             byte[] iv = Keys.randomBytes(Constants.DIR_IV_LEN);
             try {
                 store.writeSmall(path, iv, false);

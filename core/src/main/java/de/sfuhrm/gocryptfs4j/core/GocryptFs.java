@@ -1170,18 +1170,24 @@ public final class GocryptFs implements AutoCloseable {
     }
 
     /**
-     * Closes this filesystem, wiping the master key and every key derived from
-     * it and, when this instance created the store itself (via the URI-based
-     * factories), closing the store.
+     * Closes this filesystem, flushing any pending cipher file writes, wiping
+     * the master key and every key derived from it and, when this instance
+     * created the store itself (via the URI-based factories), closing the store.
      *
      * <p>Closing is idempotent. A store supplied directly to
      * {@code open}/{@code create} is owned by the caller and is left open.</p>
      *
-     * @throws IOException if the store cannot be closed
+     * @throws IOException if a pending write cannot be flushed or the store cannot be closed
      */
     @Override
     public void close() throws IOException {
-        wipeSecrets();
+        try {
+            // Flush before the keys are wiped so buffered plaintext can still
+            // be encrypted; the keys are always wiped, even if flushing fails.
+            fileManager.flushSharedFiles();
+        } finally {
+            wipeSecrets();
+        }
         if (ownsStore) {
             store.close();
         }

@@ -15,6 +15,7 @@ import java.io.OutputStream;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.FileAlreadyExistsException;
@@ -77,6 +78,28 @@ class GocryptFsTest {
                 writeLock.unlock();
             }
             assertEquals(DirEntry.Kind.FILE, fs.stat("/a.txt").kind());
+        }
+    }
+
+    @Test
+    void closeFlushesOpenFileBeforeWipingKeys() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        byte[] data = "pending write-back".getBytes(StandardCharsets.UTF_8);
+
+        try (PathCipherStore store = new PathCipherStore(cipherDir);
+             GocryptFs fs = GocryptFs.create(store, "pw".toCharArray())) {
+            fs.createFile("/f.txt");
+            SharedCipherFile cf = fs.openCipherFile("/f.txt", true);
+            // A single short block stays in the write-back buffer; it must be
+            // flushed by close() before the content-encryption keys are wiped.
+            cf.write(ByteBuffer.wrap(data), 0);
+            // cf is deliberately left open.
+        }
+
+        try (PathCipherStore store = new PathCipherStore(cipherDir);
+             GocryptFs fs = GocryptFs.open(store, "pw".toCharArray())) {
+            assertArrayEquals(data, fs.readAll("/f.txt"));
         }
     }
 

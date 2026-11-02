@@ -292,6 +292,39 @@ class FileManagerTest {
         assertSame(lock, fileLocks(h).get(to));
     }
 
+    @Test
+    void sharedFilesEntryRemovedOnDelete() throws Exception {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.fileManager.createFile("/f.txt");
+        String cipherPath = h.pathResolver.resolve("/f.txt").cipherPath;
+
+        try (SharedCipherFile cf = h.fileManager.openCipherFile("/f.txt", true)) {
+            assertTrue(sharedFiles(h).containsKey(cipherPath));
+        }
+        assertTrue(sharedFiles(h).containsKey(cipherPath),
+                "the shared entry is retained while idle");
+
+        h.fileManager.delete("/f.txt");
+        assertFalse(sharedFiles(h).containsKey(cipherPath));
+    }
+
+    @Test
+    void sharedFilesEntryMovedOnRename() throws Exception {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.fileManager.createFile("/a.txt");
+        String from = h.pathResolver.resolve("/a.txt").cipherPath;
+        String to = h.pathResolver.resolve("/b.txt").cipherPath;
+
+        try (SharedCipherFile cf = h.fileManager.openCipherFile("/a.txt", true)) {
+            assertTrue(sharedFiles(h).containsKey(from));
+        }
+
+        h.fileManager.rename("/a.txt", "/b.txt", false);
+
+        assertFalse(sharedFiles(h).containsKey(from));
+        assertTrue(sharedFiles(h).containsKey(to));
+    }
+
     /**
      * Returns the private per-file lock map of a harness's file manager.
      *
@@ -301,6 +334,19 @@ class FileManagerTest {
     @SuppressWarnings("unchecked")
     private static Map<String, Object> fileLocks(ManagerHarness h) throws Exception {
         Field field = FileManager.class.getDeclaredField("fileLocks");
+        field.setAccessible(true);
+        return (Map<String, Object>) field.get(h.fileManager);
+    }
+
+    /**
+     * Returns the private shared-file map of a harness's file manager.
+     *
+     * @param h the harness
+     * @return the shared-file map keyed by cipher path
+     */
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> sharedFiles(ManagerHarness h) throws Exception {
+        Field field = FileManager.class.getDeclaredField("sharedFiles");
         field.setAccessible(true);
         return (Map<String, Object>) field.get(h.fileManager);
     }
