@@ -162,6 +162,36 @@ class DirectoryManagerTest {
     }
 
     @Test
+    void listCipherDirIncludesDirivInPlaintextMode() throws IOException {
+        ManagerHarness h = ManagerHarness.plaintext();
+        h.fileManager.mkdir("/dir");
+        h.fileManager.createFile("/dir/gocryptfs.diriv");
+
+        String cipherPath = h.pathResolver.resolve("/dir").cipherPath;
+        byte[] iv = h.directoryManager.readDirIV(cipherPath);
+        List<DirEntry> entries = h.directoryManager.listCipherDir(cipherPath, iv);
+
+        assertEquals(1, entries.size());
+        assertEquals("gocryptfs.diriv", entries.get(0).plainName());
+        assertEquals(DirEntry.Kind.FILE, entries.get(0).kind());
+    }
+
+    @Test
+    void listCipherDirIncludesDirivInDeterministicMode() throws IOException {
+        ManagerHarness h = ManagerHarness.deterministic();
+        h.fileManager.mkdir("/dir");
+        h.fileManager.createFile("/dir/gocryptfs.diriv");
+
+        String cipherPath = h.pathResolver.resolve("/dir").cipherPath;
+        byte[] iv = h.directoryManager.readDirIV(cipherPath);
+        List<DirEntry> entries = h.directoryManager.listCipherDir(cipherPath, iv);
+
+        assertEquals(1, entries.size());
+        assertEquals("gocryptfs.diriv", entries.get(0).plainName());
+        assertEquals(DirEntry.Kind.FILE, entries.get(0).kind());
+    }
+
+    @Test
     void listCipherDirSkipsLongNameWhoseContentDoesNotMatchItsHash() throws IOException {
         ManagerHarness h = ManagerHarness.encrypted();
         String nameA = repeat('a', 200);

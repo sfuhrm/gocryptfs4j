@@ -233,7 +233,7 @@ final class DirectoryManager {
         boolean isRoot = cipherDir.equals(rootName);
         for (CipherNode node : store.list(cipherDir)) {
             String cName = node.name();
-            if (cName.equals(Constants.DIR_IV_FILENAME)) {
+            if (usesDirIV() && cName.equals(Constants.DIR_IV_FILENAME)) {
                 continue;
             }
             if (isRoot && cName.equals(Constants.CONF_DEFAULT_NAME)) {
