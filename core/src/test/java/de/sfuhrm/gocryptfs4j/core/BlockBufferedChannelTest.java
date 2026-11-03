@@ -217,6 +217,38 @@ class BlockBufferedChannelTest {
     }
 
     @Test
+    void writeIntoHoleWithinBufferedBlockZeroesGap() throws IOException {
+        ContentEnc enc = enc();
+        byte[] data = new byte[4196];
+        for (int i = 0; i < data.length; i++) {
+            data[i] = (byte) (i * 31);
+        }
+
+        try (BlockBufferedChannel ch = openChannel(newFile(), enc, true)) {
+            ByteBuffer buf = ByteBuffer.wrap(data);
+            while (buf.hasRemaining()) {
+                assertTrue(ch.write(buf) > 0);
+            }
+
+            // Block 1 holds 100 valid bytes (offsets 0..99). Writing a single
+            // byte at block offset 2000 must zero the gap 100..1999 instead of
+            // leaking the previous block's plaintext.
+            ch.position(6096);
+            ch.write(ByteBuffer.wrap(new byte[]{0x42}));
+
+            byte[] read = readAll(ch);
+            assertEquals(6097, read.length);
+            for (int i = 0; i < data.length; i++) {
+                assertEquals(data[i], read[i], "data byte " + i);
+            }
+            for (int i = 4196; i < 6096; i++) {
+                assertEquals(0, read[i], "hole byte " + i);
+            }
+            assertEquals(0x42, read[6096]);
+        }
+    }
+
+    @Test
     void truncateGrowPadsWithZeros() throws IOException {
         ManagerHarness h = ManagerHarness.encrypted();
         h.fileManager.createFile("/f.txt");
