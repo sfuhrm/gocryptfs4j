@@ -265,19 +265,28 @@ public final class CipherFile implements AutoCloseable {
     }
 
     /**
-     * Closes the underlying channel and wipes the scratch buffers, which may
-     * hold plaintext or ciphertext of the last operation. Calling this method
-     * more than once has no effect.
+     * Closes the underlying channel, first forcing any pending content updates
+     * to stable storage if the file was opened for writing, and wipes the
+     * scratch buffers, which may hold plaintext or ciphertext of the last
+     * operation. Calling this method more than once has no effect.
      *
      * @throws IOException on filesystem errors
      */
     @Override
     public synchronized void close() throws IOException {
         try {
-            channel.close();
+            // fsync writable files so a power loss after close() cannot lose
+            // the just-written content. Read-only files have nothing to force.
+            if (writable && channel.isOpen()) {
+                channel.force(true);
+            }
         } finally {
-            Arrays.fill(blockCipher, (byte) 0);
-            Arrays.fill(blockPlain, (byte) 0);
+            try {
+                channel.close();
+            } finally {
+                Arrays.fill(blockCipher, (byte) 0);
+                Arrays.fill(blockPlain, (byte) 0);
+            }
         }
     }
 

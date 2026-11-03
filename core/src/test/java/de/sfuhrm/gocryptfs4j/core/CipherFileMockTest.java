@@ -16,6 +16,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.mock;
@@ -115,6 +116,29 @@ class CipherFileMockTest {
 
         assertEquals(enc.plainBS, cf.plainSize());
         verify(channel).size();
+    }
+
+    @Test
+    void closeForcesWritableChannelBeforeClosing() throws Exception {
+        CipherChannel channel = mock(CipherChannel.class);
+        when(channel.isOpen()).thenReturn(true);
+        CipherFile cf = CipherFile.open(channel, enc(), true);
+
+        cf.close();
+
+        verify(channel).force(true);
+        verify(channel).close();
+    }
+
+    @Test
+    void closeReadOnlyDoesNotForce() throws Exception {
+        CipherChannel channel = mock(CipherChannel.class);
+        CipherFile cf = CipherFile.open(channel, enc(), false);
+
+        cf.close();
+
+        verify(channel, never()).force(anyBoolean());
+        verify(channel).close();
     }
 
     @Test
