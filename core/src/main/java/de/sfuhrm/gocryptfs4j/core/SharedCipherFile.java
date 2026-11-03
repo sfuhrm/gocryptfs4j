@@ -34,7 +34,7 @@ public final class SharedCipherFile implements AutoCloseable {
         final Object lock = new Object();
 
         /** The shared file, or {@code null} when no handle is open. */
-        @Nullable CipherFile file;
+        @Nullable volatile CipherFile file;
 
         /** The number of live handles referencing this entry. */
         int refs;
@@ -46,7 +46,7 @@ public final class SharedCipherFile implements AutoCloseable {
          * The single shared block cache, created lazily by {@link #newChannel}.
          * All channels on this entry share it so their writes are coherent.
          */
-        @Nullable BlockCache cache;
+        @Nullable volatile BlockCache cache;
     }
 
     /** The shared entry this handle references. */
