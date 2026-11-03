@@ -285,6 +285,7 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
     private void loadBlock(long no) throws IOException {
         blockNo = no;
         blockLen = file.readBlock(no, block, 0);
+        Arrays.fill(block, blockLen, blockSize, (byte) 0);
         dirty = false;
     }
 
