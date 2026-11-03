@@ -297,6 +297,68 @@ class FileManagerTest {
     }
 
     @Test
+    void concurrentChannelsOnSameBlockDoNotLoseUpdates() throws IOException {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.fileManager.createFile("/f.txt");
+        int block = (int) h.contentEnc.plainBS;
+
+        byte[] initial = new byte[block];
+        Arrays.fill(initial, (byte) 0x11);
+        h.fileManager.write("/f.txt", 0, initial);
+
+        try (SharedCipherFile h1 = h.fileManager.openCipherFile("/f.txt", true);
+             BlockBufferedChannel a = h1.newChannel(0, true);
+             SharedCipherFile h2 = h.fileManager.openCipherFile("/f.txt", true);
+             BlockBufferedChannel b = h2.newChannel(0, true)) {
+
+            // A loads block 0 into its buffer.
+            ByteBuffer one = ByteBuffer.allocate(1);
+            assertEquals(1, a.read(one));
+            assertEquals(0x11, one.get(0));
+
+            // B writes into block 0 and flushes it through.
+            b.position(100);
+            assertEquals(1, b.write(ByteBuffer.wrap(new byte[]{0x22})));
+            b.flush();
+
+            // A writes into block 0 through its stale buffer; B's byte must
+            // survive, not be overwritten by A's stale copy.
+            a.position(200);
+            assertEquals(1, a.write(ByteBuffer.wrap(new byte[]{0x33})));
+        }
+
+        byte[] read = h.fileManager.readAll("/f.txt");
+        assertEquals(block, read.length);
+        assertEquals(0x11, read[0]);
+        assertEquals(0x22, read[100]);
+        assertEquals(0x33, read[200]);
+    }
+
+    @Test
+    void newReadChannelSeesForeignUnflushedWrite() throws IOException {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.fileManager.createFile("/f.txt");
+        byte[] data = new byte[100];
+        Arrays.fill(data, (byte) 0x5a);
+
+        try (SharedCipherFile writer = h.fileManager.openCipherFile("/f.txt", true);
+             BlockBufferedChannel w = writer.newChannel(0, true)) {
+            w.write(ByteBuffer.wrap(data));
+
+            // size() reports the unflushed write-back...
+            assertEquals(100, h.fileManager.size("/f.txt"));
+
+            // ...so a fresh read channel on the same file must see it too.
+            try (SharedCipherFile reader = h.fileManager.openCipherFile("/f.txt", false);
+                 BlockBufferedChannel r = reader.newChannel(0, false)) {
+                ByteBuffer buf = ByteBuffer.allocate(data.length);
+                assertEquals(data.length, r.read(buf));
+                assertArrayEquals(data, buf.array());
+            }
+        }
+    }
+
+    @Test
     void fileLocksShrinkOnDelete() throws Exception {
         ManagerHarness h = ManagerHarness.encrypted();
         h.fileManager.createFile("/f.txt");

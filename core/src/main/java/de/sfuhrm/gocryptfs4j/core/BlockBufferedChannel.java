@@ -5,18 +5,18 @@ import java.nio.ByteBuffer;
 import java.nio.channels.ClosedChannelException;
 import java.nio.channels.NonWritableChannelException;
 import java.nio.channels.SeekableByteChannel;
-import java.util.Arrays;
 
 /**
  * A {@link SeekableByteChannel} over the plaintext of a single encrypted file,
- * buffering one plaintext block at a time.
+ * backed by the shared {@link BlockCache} of its {@link SharedCipherFile}.
  *
- * <p>Bytes and ranges are read and written through a single in-memory block;
- * the block is only (de/en)crypted when the position crosses a block boundary
- * or when the channel is closed or forced. Partial-block writes are merged by
- * loading the whole block, patching it and writing it back, so arbitrary
- * plaintext positions and lengths are supported without a per-byte
- * encryption cost.</p>
+ * <p>All channels on the same shared file use the same block cache, so a block
+ * written by one channel is visible to the others and no channel can overwrite
+ * another's data with a stale copy. Bytes and ranges are read and written
+ * through that cache, which holds one plaintext block at a time and only
+ * (de/en)crypts when the position crosses a block boundary or when the channel
+ * is flushed. Partial-block writes are merged by loading the whole block,
+ * patching it and writing it back.</p>
  *
  * <p>The channel owns the {@link SharedCipherFile} it was created from; closing
  * it releases the handle's reference.</p>
@@ -26,20 +26,11 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
     /** The encrypted file backing this channel. */
     private final SharedCipherFile file;
 
+    /** The shared block cache holding the buffered block. */
+    private final BlockCache cache;
+
     /** The plaintext block size. */
     private final int blockSize;
-
-    /** The plaintext of the currently loaded block. */
-    private final byte[] block;
-
-    /** The block number currently buffered, or {@code -1} if none. */
-    private volatile long blockNo = -1;
-
-    /** The number of valid plaintext bytes in {@link #block}. */
-    private volatile int blockLen;
-
-    /** Whether {@link #block} has unflushed modifications. */
-    private volatile boolean dirty;
 
     /** The current plaintext position. */
     private long position;
@@ -53,17 +44,17 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
     /**
      * Creates a channel over the given shared file.
      *
-     * @param file       the shared file to read from and write to
-     * @param position   the initial plaintext position
-     * @param writable   whether the channel permits writes
-     * @param blockSize  the plaintext block size
+     * @param file     the shared file to read from and write to
+     * @param position the initial plaintext position
+     * @param writable whether the channel permits writes
+     * @param cache    the shared block cache
      */
-    BlockBufferedChannel(SharedCipherFile file, long position, boolean writable, int blockSize) {
+    BlockBufferedChannel(SharedCipherFile file, long position, boolean writable, BlockCache cache) {
         this.file = file;
         this.position = position;
         this.writable = writable;
-        this.blockSize = blockSize;
-        this.block = new byte[blockSize];
+        this.cache = cache;
+        this.blockSize = cache.blockSize();
     }
 
     /**
@@ -84,17 +75,11 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
             return 0;
         }
         long wanted = position / blockSize;
-        if (wanted != blockNo) {
-            flushBlock();
-            loadBlock(wanted);
-        }
         int off = (int) (position % blockSize);
-        if (off >= blockLen) {
-            return -1;
+        int n = cache.read(wanted, off, dst);
+        if (n > 0) {
+            position += n;
         }
-        int n = Math.min(dst.remaining(), blockLen - off);
-        dst.put(block, off, n);
-        position += n;
         return n;
     }
 
@@ -120,31 +105,11 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
             return 0;
         }
         long wanted = position / blockSize;
-        if (wanted != blockNo) {
-            flushBlock();
-            padFinalPartialBlock(wanted);
-            loadBlock(wanted);
-        } else if (!dirty) {
-            // The target block is already buffered (e.g. a read at a hole
-            // position loaded it), but a write into it would still leave a
-            // hole after the final partial block. Pad that block here as well.
-            padFinalPartialBlock(wanted);
-        }
         int off = (int) (position % blockSize);
-        int n = Math.min(src.remaining(), blockSize - off);
-        if (off > blockLen) {
-            // The write starts past the current valid data, leaving a hole
-            // inside the block. Zero it out instead of encrypting stale bytes
-            // left over from a previously buffered block.
-            Arrays.fill(block, blockLen, off, (byte) 0);
-        }
-        src.get(block, off, n);
-        if (off + n > blockLen) {
-            blockLen = off + n;
-        }
-        dirty = true;
-        position += n;
-        return n;
+        int len = Math.min(src.remaining(), blockSize - off);
+        int w = cache.write(wanted, off, len, src);
+        position += w;
+        return w;
     }
 
     /**
@@ -176,7 +141,7 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
 
     /**
      * Returns the plaintext size of the underlying file, including the unflushed
-     * write-back of this and every other open channel on the same shared file.
+     * write-back of the shared block cache.
      *
      * @return the plaintext size in bytes
      * @throws IOException on filesystem errors
@@ -184,16 +149,6 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
     @Override
     public long size() throws IOException {
         return file.effectiveSize();
-    }
-
-    /**
-     * Returns the plaintext size this channel's dirty block would extend the
-     * file to, or {@code -1} if the buffered block is not dirty.
-     *
-     * @return the write-back size, or {@code -1}
-     */
-    long writeBackSize() {
-        return dirty ? blockNo * blockSize + blockLen : -1;
     }
 
     /**
@@ -216,7 +171,7 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
         if (size < 0) {
             throw new IllegalArgumentException("negative size");
         }
-        flushBlock();
+        cache.flush();
         long current = file.effectiveSize();
         if (size < current) {
             file.truncate(size);
@@ -234,7 +189,7 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
      * @throws IOException on filesystem or encryption errors
      */
     public void force(boolean metaData) throws IOException {
-        flushBlock();
+        cache.flush();
         file.force(metaData);
     }
 
@@ -249,18 +204,19 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
     }
 
     /**
-     * Flushes the buffered block, if dirty, without closing the channel or
+     * Flushes the shared block cache, if dirty, without closing the channel or
      * forcing it to storage.
      *
      * @throws IOException on filesystem or encryption errors
      */
     public void flush() throws IOException {
-        flushBlock();
+        cache.flush();
     }
 
     /**
-     * Closes the channel, flushing any buffered block, wiping the plaintext
-     * buffer and releasing the underlying shared file.
+     * Closes the channel and releases the underlying shared file. The shared
+     * block cache is flushed (and wiped) when the last handle on the shared file
+     * is released.
      *
      * @throws IOException on filesystem errors
      */
@@ -270,59 +226,6 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
             return;
         }
         open = false;
-        try {
-            flushBlock();
-        } finally {
-            Arrays.fill(block, (byte) 0);
-            file.channelClosed(this);
-        }
-    }
-
-    /**
-     * Pads the final partial plaintext block of the file with zeros up to the
-     * full block size, but only when {@code wanted} targets a block beyond the
-     * last valid byte. Writing such a block would leave the partial block
-     * followed by a zero hole, which would no longer authenticate when read
-     * back.
-     *
-     * @param wanted the block number about to be written
-     * @throws IOException on filesystem or encryption errors
-     */
-    private void padFinalPartialBlock(long wanted) throws IOException {
-        long plainSize = file.plainSize();
-        if (plainSize > 0
-                && plainSize % blockSize != 0
-                && wanted > (plainSize - 1) / blockSize) {
-            file.zeroPad();
-        }
-    }
-
-    /**
-     * Loads the plaintext of block {@code no} into {@link #block}, setting
-     * {@link #blockLen} to the number of valid bytes in it (zero past EOF).
-     *
-     * @param no the block number
-     * @throws IOException on filesystem or decryption errors
-     */
-    private void loadBlock(long no) throws IOException {
-        blockNo = no;
-        blockLen = file.readBlock(no, block, 0);
-        Arrays.fill(block, blockLen, blockSize, (byte) 0);
-        dirty = false;
-    }
-
-    /**
-     * Writes the buffered block back to the file if it was modified, then
-     * invalidates it so the next access reloads the current content.
-     *
-     * @throws IOException on filesystem or encryption errors
-     */
-    private void flushBlock() throws IOException {
-        if (dirty) {
-            file.writeBlock(blockNo, block, 0, blockLen);
-        }
-        blockNo = -1;
-        blockLen = 0;
-        dirty = false;
+        file.channelClosed();
     }
 }

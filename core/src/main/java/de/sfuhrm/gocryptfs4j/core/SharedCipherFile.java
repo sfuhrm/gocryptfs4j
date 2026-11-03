@@ -3,8 +3,6 @@ package de.sfuhrm.gocryptfs4j.core;
 import java.io.IOException;
 import java.nio.channels.ClosedChannelException;
 import java.util.Objects;
-import java.util.Set;
-import java.util.concurrent.CopyOnWriteArraySet;
 
 import org.jspecify.annotations.Nullable;
 
@@ -19,8 +17,9 @@ import org.jspecify.annotations.Nullable;
  * handle encrypting blocks with the old id.</p>
  *
  * <p>{@link FileManager} keeps one shared {@link CipherFile} per ciphertext
- * path and hands out these handles. Block buffering lives in
- * {@link BlockBufferedChannel}, which is created per handle via
+ * path and hands out these handles. A single shared {@link BlockCache} (one per
+ * entry) buffers one plaintext block for all of its channels, so channels on
+ * the same file stay coherent. Channels are created per handle via
  * {@link #newChannel(long, boolean)} and tracked by the shared entry so that a
  * filesystem close can flush pending plaintext before the keys are wiped.
  * Closing a handle only releases its reference; the underlying channel is
@@ -44,13 +43,10 @@ public final class SharedCipherFile implements AutoCloseable {
         boolean writable;
 
         /**
-         * Open buffered channels, tracked so a filesystem close can flush them.
-         * The set is mutated without a lock from {@link #newChannel} and
-         * {@link #channelClosed} while {@link #flushEntry} and
-         * {@link #effectiveSize} iterate it, so it is a copy-on-write set whose
-         * iterators never throw or observe a torn collection.
+         * The single shared block cache, created lazily by {@link #newChannel}.
+         * All channels on this entry share it so their writes are coherent.
          */
-        final Set<BlockBufferedChannel> channels = new CopyOnWriteArraySet<>();
+        @Nullable BlockCache cache;
     }
 
     /** The shared entry this handle references. */
@@ -103,43 +99,6 @@ public final class SharedCipherFile implements AutoCloseable {
     }
 
     /**
-     * Reads and decrypts a whole plaintext block.
-     *
-     * @param blockNo the block number
-     * @param out     the destination buffer
-     * @param off     the destination offset
-     * @return the number of valid plaintext bytes, or zero past EOF
-     * @throws IOException on filesystem or decryption errors
-     */
-    int readBlock(long blockNo, byte[] out, int off) throws IOException {
-        return file().readBlock(blockNo, out, off);
-    }
-
-    /**
-     * Encrypts and writes a whole plaintext block.
-     *
-     * @param blockNo the block number
-     * @param plain   the plaintext buffer
-     * @param off     the plaintext offset
-     * @param len     the number of plaintext bytes
-     * @throws IOException on filesystem or encryption errors
-     */
-    void writeBlock(long blockNo, byte[] plain, int off, int len) throws IOException {
-        file().writeBlock(blockNo, plain, off, len);
-    }
-
-    /**
-     * Pads the final partial plaintext block with zeros up to the full block
-     * size, so a later sparse write past it does not leave an unreadable
-     * partial block behind.
-     *
-     * @throws IOException on filesystem or encryption errors
-     */
-    void zeroPad() throws IOException {
-        file().zeroPad();
-    }
-
-    /**
      * Truncates the shared file to the given plaintext size, growing (with
      * zero-fill) or shrinking as needed.
      *
@@ -151,11 +110,10 @@ public final class SharedCipherFile implements AutoCloseable {
         if (newPlainSize < 0) {
             throw new IllegalArgumentException("negative size: " + newPlainSize);
         }
-        // Every open channel buffers one block without seeing the writes of the
-        // others. A dirty block buffered here would otherwise survive a shrink
-        // or truncate-to-empty performed by another handle and be written back
-        // later, resurrecting the truncated data. Flush and invalidate all
-        // channels first so no stale block outlives the truncation.
+        // A dirty block in the shared cache would otherwise survive a shrink or
+        // truncate-to-empty performed by another handle and be written back
+        // later, resurrecting the truncated data. Flush the cache first so no
+        // stale block outlives the truncation.
         flushEntry(entry);
         if (newPlainSize == 0) {
             file().truncate(0);
@@ -210,46 +168,50 @@ public final class SharedCipherFile implements AutoCloseable {
         if (position < 0) {
             throw new IllegalArgumentException("negative position: " + position);
         }
-        BlockBufferedChannel ch = new BlockBufferedChannel(this, position, writable, blockSize());
-        entry.channels.add(ch);
+        BlockCache cache;
+        synchronized (entry.lock) {
+            cache = entry.cache;
+            if (cache == null) {
+                cache = new BlockCache(entry, blockSize());
+                entry.cache = cache;
+            }
+        }
+        BlockBufferedChannel ch = new BlockBufferedChannel(this, position, writable, cache);
         return ch;
     }
 
     /**
-     * Called by a channel on close: unregisters it and releases this handle's
-     * reference.
+     * Called by a channel on close: releases this handle's reference.
      *
-     * @param ch the closing channel
      * @throws IOException on filesystem errors
      */
-    void channelClosed(BlockBufferedChannel ch) throws IOException {
-        entry.channels.remove(ch);
+    void channelClosed() throws IOException {
         close();
     }
 
     /**
      * Returns the effective plaintext size of an entry, including the unflushed
-     * write-back of every open buffered channel. The on-disk plaintext size
-     * alone misses a block that a channel has buffered but not yet written
-     * through.
+     * write-back of the shared block cache. The on-disk plaintext size alone
+     * misses a block that a channel has buffered but not yet written through.
      *
      * @param entry the shared entry
-     * @return the plaintext size including buffered channel data
+     * @return the plaintext size including buffered data
      * @throws IOException on filesystem errors
      */
     static long effectiveSize(Entry entry) throws IOException {
         long size = entry.file == null ? 0 : entry.file.plainSize();
-        for (BlockBufferedChannel ch : entry.channels) {
-            size = Math.max(size, ch.writeBackSize());
+        BlockCache cache = entry.cache;
+        if (cache != null) {
+            size = Math.max(size, cache.writeBackSize());
         }
         return size;
     }
 
     /**
      * Returns the effective plaintext size of this handle's file, including the
-     * unflushed write-back of every open buffered channel.
+     * unflushed write-back of the shared block cache.
      *
-     * @return the plaintext size including buffered channel data
+     * @return the plaintext size including buffered data
      * @throws IOException on filesystem errors
      */
     long effectiveSize() throws IOException {
@@ -257,8 +219,8 @@ public final class SharedCipherFile implements AutoCloseable {
     }
 
     /**
-     * Flushes and invalidates the buffered block of every open channel of this
-     * entry, so their next access reloads the current on-disk content.
+     * Flushes and invalidates the shared block cache of this entry, so the next
+     * access reloads the current on-disk content.
      *
      * @throws IOException on filesystem or encryption errors
      */
@@ -267,14 +229,15 @@ public final class SharedCipherFile implements AutoCloseable {
     }
 
     /**
-     * Flushes the buffered block of every open channel of this entry.
+     * Flushes the shared block cache of this entry.
      *
      * @param entry the shared entry
      * @throws IOException on filesystem or encryption errors
      */
     static void flushEntry(Entry entry) throws IOException {
-        for (BlockBufferedChannel ch : entry.channels) {
-            ch.flush();
+        BlockCache cache = entry.cache;
+        if (cache != null) {
+            cache.flush();
         }
     }
 
@@ -297,9 +260,15 @@ public final class SharedCipherFile implements AutoCloseable {
                 CipherFile file = entry.file;
                 if (file != null) {
                     try {
+                        BlockCache cache = entry.cache;
+                        if (cache != null) {
+                            cache.flush();
+                            cache.wipe();
+                        }
                         file.close();
                     } finally {
                         entry.file = null;
+                        entry.cache = null;
                     }
                 }
             }

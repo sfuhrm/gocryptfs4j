@@ -206,6 +206,45 @@ class GocryptFsFileChannelTest {
     }
 
     @Test
+    void twoChannelsOnSameBlockStayCoherent() throws IOException {
+        Path file = nio.getPath("/coherent.txt");
+        int block = 4096;
+        byte[] initial = new byte[block];
+        java.util.Arrays.fill(initial, (byte) 0x11);
+        try (SeekableByteChannel ch = Files.newByteChannel(file,
+                StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
+            ByteBuffer buf = ByteBuffer.wrap(initial);
+            while (buf.hasRemaining()) {
+                ch.write(buf);
+            }
+        }
+
+        try (SeekableByteChannel a = Files.newByteChannel(file,
+                EnumSet.of(StandardOpenOption.READ, StandardOpenOption.WRITE));
+             SeekableByteChannel b = Files.newByteChannel(file,
+                     EnumSet.of(StandardOpenOption.READ, StandardOpenOption.WRITE))) {
+            // A loads block 0 into the shared cache.
+            a.position(0);
+            ByteBuffer one = ByteBuffer.allocate(1);
+            assertEquals(1, a.read(one));
+            assertEquals(0x11, one.get(0));
+
+            // B writes into block 0, then A writes into the same block; neither
+            // may overwrite the other with a stale copy.
+            b.position(100);
+            assertEquals(1, b.write(ByteBuffer.wrap(new byte[]{0x22})));
+            a.position(200);
+            assertEquals(1, a.write(ByteBuffer.wrap(new byte[]{0x33})));
+        }
+
+        byte[] all = Files.readAllBytes(file);
+        assertEquals(block, all.length);
+        assertEquals(0x11, all[0]);
+        assertEquals(0x22, all[100]);
+        assertEquals(0x33, all[200]);
+    }
+
+    @Test
     void appendWritesAtEndRegardlessOfPosition() throws IOException {
         Path file = nio.getPath("/append.txt");
         Files.write(file, "0123".getBytes(StandardCharsets.UTF_8));

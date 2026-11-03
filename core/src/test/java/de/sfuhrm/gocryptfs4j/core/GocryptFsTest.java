@@ -744,9 +744,12 @@ class GocryptFsTest {
             Field chField = in.getClass().getDeclaredField("ch");
             chField.setAccessible(true);
             BlockBufferedChannel ch = (BlockBufferedChannel) chField.get(in);
-            Field blockField = BlockBufferedChannel.class.getDeclaredField("block");
+            Field cacheField = BlockBufferedChannel.class.getDeclaredField("cache");
+            cacheField.setAccessible(true);
+            BlockCache cache = (BlockCache) cacheField.get(ch);
+            Field blockField = BlockCache.class.getDeclaredField("block");
             blockField.setAccessible(true);
-            byte[] block = (byte[]) blockField.get(ch);
+            byte[] block = (byte[]) blockField.get(cache);
             boolean nonZero = false;
             for (byte b : block) {
                 if (b != 0) {
@@ -758,7 +761,7 @@ class GocryptFsTest {
 
             in.close();
 
-            for (byte b : (byte[]) blockField.get(ch)) {
+            for (byte b : (byte[]) blockField.get(cache)) {
                 assertEquals(0, b, "the buffered plaintext must be wiped on close");
             }
         }
