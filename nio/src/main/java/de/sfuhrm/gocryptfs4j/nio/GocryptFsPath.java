@@ -27,9 +27,13 @@ import java.util.Objects;
 /**
  * A {@link Path} in the decrypted (plaintext) view of a gocryptfs filesystem.
  *
- * <p>Paths are normalized on creation, use {@code "/"} as separator and are
- * either absolute (rooted at {@code "/"}) or relative. A path is not backed by
- * an {@link java.io.File}.</p>
+ * <p>Paths are cleaned on creation (redundant separators and {@code "."}
+ * segments are removed), use {@code "/"} as separator and are either absolute
+ * (rooted at {@code "/"}) or relative. A {@code ".."} segment is <em>not</em>
+ * resolved lexically here: doing so before symbolic links are resolved would
+ * give the wrong result for a path such as {@code /link/../x}, where POSIX
+ * resolves {@code link} first and only then applies {@code ".."}. A path is not
+ * backed by an {@link java.io.File}.</p>
  */
 final class GocryptFsPath implements Path {
 
@@ -51,7 +55,7 @@ final class GocryptFsPath implements Path {
      */
     GocryptFsPath(GocryptFsFileSystem fs, String path, boolean absolute) {
         this.fs = fs;
-        this.path = normalize(path);
+        this.path = clean(path);
         this.absolute = absolute;
     }
 
@@ -67,9 +71,9 @@ final class GocryptFsPath implements Path {
     }
 
     /**
-     * Splits the normalized path into its name elements.
+     * Splits the cleaned path into its name elements.
      *
-     * @return the name elements, never containing empty, {@code "."} or {@code ".."} parts
+     * @return the name elements, never containing empty or {@code "."} parts
      */
     private String[] names() {
         if (path.equals("/") || path.isEmpty()) {
@@ -83,14 +87,46 @@ final class GocryptFsPath implements Path {
     }
 
     /**
-     * Normalizes a path string, removing redundant separators and {@code "."}
-     * segments and collapsing {@code ".."} segments. Backslashes are treated as
-     * separators only when the filesystem is configured with
-     * {@code windowsSeparators}; otherwise they are preserved as ordinary name
-     * characters.
+     * Cleans a path string, removing redundant separators and {@code "."}
+     * segments. {@code ".."} segments are preserved so that they can be resolved
+     * correctly during symbolic-link resolution (see {@link #resolveLinks}).
+     * Backslashes are treated as separators only when the filesystem is
+     * configured with {@code windowsSeparators}; otherwise they are preserved as
+     * ordinary name characters.
      *
      * @param path the path string
-     * @return the normalized path string
+     * @return the cleaned path string
+     * @throws IllegalArgumentException if {@code path} is {@code null}
+     */
+    private String clean(String path) {
+        if (path == null) {
+            throw new IllegalArgumentException("null path");
+        }
+        String cleaned = fs.windowsSeparators() ? path.replace('\\', '/') : path;
+        boolean isAbs = cleaned.startsWith("/");
+        List<String> parts = new ArrayList<>();
+        for (String seg : cleaned.split("/", -1)) {
+            if (seg.isEmpty() || seg.equals(".")) {
+                continue;
+            }
+            parts.add(seg);
+        }
+        String joined = String.join("/", parts);
+        if (isAbs) {
+            return "/" + joined;
+        }
+        return joined;
+    }
+
+    /**
+     * Lexically normalizes a path string, removing redundant separators,
+     * {@code "."} segments and collapsing {@code ".."} segments without regard
+     * for symbolic links. Backslashes are treated as separators only when the
+     * filesystem is configured with {@code windowsSeparators}; otherwise they
+     * are preserved as ordinary name characters.
+     *
+     * @param path the path string
+     * @return the lexically normalized path string
      * @throws IllegalArgumentException if {@code path} is {@code null}
      */
     private String normalize(String path) {
@@ -297,14 +333,15 @@ final class GocryptFsPath implements Path {
     }
 
     /**
-     * Returns a normalized copy of this path. This implementation stores paths
-     * already normalized, so it returns an equal path.
+     * Returns a lexically normalized copy of this path, removing redundant
+     * separators, {@code "."} segments and collapsing {@code ".."} segments
+     * without resolving symbolic links.
      *
      * @return a normalized path
      */
     @Override
     public Path normalize() {
-        return new GocryptFsPath(fs, path, absolute);
+        return new GocryptFsPath(fs, normalize(path), absolute);
     }
 
     /**
@@ -432,10 +469,14 @@ final class GocryptFsPath implements Path {
      */
     @Override
     public Path toRealPath(LinkOption... options) throws IOException {
-        Path abs = toAbsolutePath().normalize();
+        Path abs = toAbsolutePath();
         if (Arrays.asList(options).contains(LinkOption.NOFOLLOW_LINKS)) {
-            fs.core().stat(abs.toString());
-            return abs;
+            // Without following links the best possible resolution of ".." is
+            // lexical; the symbolic links it would need to resolve are not
+            // followed.
+            Path normalized = abs.normalize();
+            fs.core().stat(normalized.toString());
+            return normalized;
         }
         return resolveLinks(abs, 0, true);
     }
@@ -454,9 +495,12 @@ final class GocryptFsPath implements Path {
      * @throws IOException on filesystem errors while resolving links
      */
     GocryptFsPath toRealPathLenient(LinkOption... options) throws IOException {
-        Path abs = toAbsolutePath().normalize();
+        Path abs = toAbsolutePath();
         if (Arrays.asList(options).contains(LinkOption.NOFOLLOW_LINKS)) {
-            return (GocryptFsPath) abs;
+            // Without following links the best possible resolution of ".." is
+            // lexical; the symbolic links it would need to resolve are not
+            // followed.
+            return (GocryptFsPath) abs.normalize();
         }
         return resolveLinks(abs, 0, false);
     }

@@ -112,10 +112,11 @@ final class GocryptFsWatchService implements WatchService {
             throw new ClosedWatchServiceException();
         }
         synchronized (keys) {
-            GocryptFsWatchKey key = keys.get(dir);
+            GocryptFsPath normalized = (GocryptFsPath) dir.normalize();
+            GocryptFsWatchKey key = keys.get(normalized);
             if (key == null) {
-                key = new GocryptFsWatchKey(this, dir);
-                keys.put(dir, key);
+                key = new GocryptFsWatchKey(this, normalized);
+                keys.put(normalized, key);
             }
             key.setEvents(events);
             key.snapshot();

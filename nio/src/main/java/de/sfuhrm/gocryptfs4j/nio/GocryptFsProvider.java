@@ -339,6 +339,20 @@ public final class GocryptFsProvider extends FileSystemProvider {
     }
 
     /**
+     * Returns the absolute form of a gocryptfs path with {@code ".."} segments
+     * resolved lexically. Used for operations that do not follow symbolic links
+     * (so a {@code ".."} segment cannot be resolved relative to a link target)
+     * but must still hand a {@code ".."}-free path to the core, which rejects
+     * {@code ".."}.
+     *
+     * @param path the path
+     * @return the lexically normalized absolute path
+     */
+    private static GocryptFsPath toNormalizedAbsolute(Path path) {
+        return (GocryptFsPath) toAbsolute(path).normalize();
+    }
+
+    /**
      * Returns the core gocryptfs instance of the filesystem a path belongs to.
      *
      * @param path the path
@@ -376,7 +390,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
      */
     private static GocryptFsPath resolve(Path path, LinkOption... options) throws IOException {
         GocryptFsPath p = toAbsolute(path);
-        return noFollow(options) ? p : p.toRealPathLenient();
+        return noFollow(options) ? (GocryptFsPath) p.normalize() : p.toRealPathLenient();
     }
 
     // ------------------------------------------------------------------
@@ -551,7 +565,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
     @Override
     public void createDirectory(Path dir, FileAttribute<?>... attrs) throws IOException {
         Objects.requireNonNull(dir, "dir");
-        GocryptFsPath d = toAbsolute(dir);
+        GocryptFsPath d = toNormalizedAbsolute(dir);
         core(d).mkdir(d.toString());
         applyAttributes(d, attrs);
     }
@@ -566,7 +580,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
     @Override
     public void delete(Path path) throws IOException {
         Objects.requireNonNull(path, "path");
-        GocryptFsPath p = toAbsolute(path);
+        GocryptFsPath p = toNormalizedAbsolute(path);
         core(p).delete(p.toString());
     }
 
@@ -591,7 +605,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
             throws IOException {
         Objects.requireNonNull(link, "link");
         Objects.requireNonNull(target, "target");
-        GocryptFsPath l = toAbsolute(link);
+        GocryptFsPath l = toNormalizedAbsolute(link);
         core(l).createSymlink(l.toString(), target.toString());
     }
 
@@ -607,7 +621,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
     @Override
     public Path readSymbolicLink(Path link) throws IOException {
         Objects.requireNonNull(link, "link");
-        GocryptFsPath l = toAbsolute(link);
+        GocryptFsPath l = toNormalizedAbsolute(link);
         String target = core(l).readSymlinkTarget(l.toString());
         return l.getFileSystem().getPath(target);
     }
@@ -645,9 +659,11 @@ public final class GocryptFsProvider extends FileSystemProvider {
         GocryptFsPath s = toAbsolute(source);
         if (!opts.contains(LinkOption.NOFOLLOW_LINKS)) {
             s = s.toRealPathLenient();
+        } else {
+            s = (GocryptFsPath) s.normalize();
         }
-        GocryptFsPath t = toAbsolute(target);
-        if (s.equals(t) || toAbsolute(source).equals(t)) {
+        GocryptFsPath t = toNormalizedAbsolute(target);
+        if (s.equals(t) || toNormalizedAbsolute(source).equals(t)) {
             return;
         }
         copyEntry(s, t, opts);
@@ -873,8 +889,8 @@ public final class GocryptFsProvider extends FileSystemProvider {
             throw new AtomicMoveNotSupportedException(source.toString(), target.toString(),
                     "atomic moves are not supported");
         }
-        GocryptFsPath s = toAbsolute(source);
-        GocryptFsPath t = toAbsolute(target);
+        GocryptFsPath s = toNormalizedAbsolute(source);
+        GocryptFsPath t = toNormalizedAbsolute(target);
         if (core(s) != core(t)) {
             throw new FileSystemException(s.toString(), t.toString(),
                     "cannot move between different encrypted filesystems");

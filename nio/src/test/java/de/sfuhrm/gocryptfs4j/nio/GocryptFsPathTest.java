@@ -93,11 +93,20 @@ class GocryptFsPathTest {
 
     @Test
     void normalization() {
-        assertEquals("/a/c", nio.getPath("/a/./b/../c").toString());
-        assertEquals("/", nio.getPath("/..").toString());
+        // Cleaning removes redundant separators and "." but preserves "..".
+        assertEquals("/a/b/../c", nio.getPath("/a/./b/../c").toString());
+        assertEquals("/..", nio.getPath("/..").toString());
         assertEquals("a/b", nio.getPath("a//b/").toString());
         assertEquals("a\\b", nio.getPath("a\\b").toString());
         assertEquals("../x", nio.getPath("../x").toString());
+    }
+
+    @Test
+    void normalizeCollapsesDotDotLexically() {
+        assertEquals("/a/c", nio.getPath("/a/./b/../c").normalize().toString());
+        assertEquals("/", nio.getPath("/..").normalize().toString());
+        assertEquals("b", nio.getPath("a/../b").normalize().toString());
+        assertEquals("../x", nio.getPath("../x").normalize().toString());
     }
 
     @Test
@@ -218,6 +227,24 @@ class GocryptFsPathTest {
                 () -> missing.toRealPath(LinkOption.NOFOLLOW_LINKS));
         assertEquals("/file.txt", nio.getPath("file.txt")
                 .toRealPath(LinkOption.NOFOLLOW_LINKS).toString());
+    }
+
+    @Test
+    void toRealPathResolvesDotDotAfterSymlink() throws IOException {
+        Files.createDirectories(nio.getPath("/deep/dir"));
+        Files.createFile(nio.getPath("/deep/file"));
+        Files.createSymbolicLink(nio.getPath("/deepLink"), nio.getPath("/deep/dir"));
+        try {
+            // POSIX resolves /deepLink -> /deep/dir, then ".." -> /deep, so the
+            // result is /deep/file and not the lexical /file.
+            assertEquals("/deep/file",
+                    nio.getPath("/deepLink/../file").toRealPath().toString());
+        } finally {
+            Files.deleteIfExists(nio.getPath("/deepLink"));
+            Files.deleteIfExists(nio.getPath("/deep/dir"));
+            Files.deleteIfExists(nio.getPath("/deep/file"));
+            Files.deleteIfExists(nio.getPath("/deep"));
+        }
     }
 
     @Test

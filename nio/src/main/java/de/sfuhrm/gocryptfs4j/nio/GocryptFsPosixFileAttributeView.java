@@ -59,7 +59,7 @@ final class GocryptFsPosixFileAttributeView implements PosixFileAttributeView {
      * @throws IOException on filesystem errors while resolving links
      */
     private GocryptFsPath target() throws IOException {
-        return followLinks ? path.toRealPathLenient() : path;
+        return followLinks ? path.toRealPathLenient() : (GocryptFsPath) path.normalize();
     }
 
     /**
