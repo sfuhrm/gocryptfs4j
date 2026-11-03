@@ -637,6 +637,28 @@ class GocryptFsTest {
     }
 
     @Test
+    void listDirectoryWithoutDirIVOnReadOnlyStoreListsEmpty() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        Path dirCipher;
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
+            fs.mkdir("/dir");
+            dirCipher = Paths.get(fs.resolve("/dir").cipherPath);
+        }
+        // Simulate a directory left without its diriv (a crash between mkdir and
+        // writeDirIV, or a store created by an older gocryptfs).
+        Files.delete(dirCipher.resolve("gocryptfs.diriv"));
+
+        FailingStore store = new FailingStore(new PathCipherStore(cipherDir));
+        store.failWriteSmall = true;
+        try (GocryptFs fs = GocryptFs.open(store, "pw".toCharArray())) {
+            assertTrue(fs.list("/dir").isEmpty(),
+                    "an empty directory without a diriv must list as empty on a read-only store");
+        }
+    }
+
+    @Test
     void plaintextNamesDirivIsOrdinaryFile() throws IOException {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
@@ -1021,6 +1043,7 @@ class GocryptFsTest {
         boolean failRename;
         boolean failCreateFile;
         boolean failDeleteDir;
+        boolean failWriteSmall;
 
         FailingStore(CipherStore delegate) {
             this.delegate = delegate;
@@ -1038,6 +1061,9 @@ class GocryptFsTest {
 
         @Override
         public void writeSmall(String name, byte[] data, boolean overwrite) throws IOException {
+            if (failWriteSmall) {
+                throw new IOException("writeSmall failed");
+            }
             delegate.writeSmall(name, data, overwrite);
         }
 

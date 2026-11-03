@@ -1,10 +1,17 @@
 package de.sfuhrm.gocryptfs4j.core;
 
 import de.sfuhrm.gocryptfs4j.crypto.Constants;
+import de.sfuhrm.gocryptfs4j.store.CipherChannel;
+import de.sfuhrm.gocryptfs4j.store.CipherNode;
+import de.sfuhrm.gocryptfs4j.store.CipherStore;
+import de.sfuhrm.gocryptfs4j.store.memory.MapCipherStore;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.file.NoSuchFileException;
+import java.nio.file.attribute.FileTime;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
@@ -106,6 +113,35 @@ class DirectoryManagerTest {
         h.store.createFile("sub/f");
 
         assertThrows(IOException.class, () -> h.directoryManager.readDirIV("sub"));
+    }
+
+    @Test
+    void readDirIVListsEmptyOnReadOnlyStoreWithoutPersistingDirIV() throws IOException {
+        ReadOnlyStore store = new ReadOnlyStore();
+        ManagerHarness h = ManagerHarness.encrypted(store);
+        h.store.mkdir("sub");
+        store.readOnly = true;
+
+        byte[] iv = h.directoryManager.readDirIV("sub");
+
+        assertEquals(Constants.DIR_IV_LEN, iv.length);
+        assertThrows(NoSuchFileException.class, () -> store.readSmall(
+                PathResolver.join("sub", Constants.DIR_IV_FILENAME), Constants.DIR_IV_LEN),
+                "a read-only store must not get a diriv file written");
+    }
+
+    @Test
+    void readDirIVOnReadOnlyStoreListsEmptyDirectory() throws IOException {
+        ReadOnlyStore store = new ReadOnlyStore();
+        ManagerHarness h = ManagerHarness.encrypted(store);
+        h.store.mkdir("sub");
+        store.readOnly = true;
+
+        byte[] iv = h.directoryManager.readDirIV("sub");
+        List<DirEntry> entries = h.directoryManager.listCipherDir("sub", iv);
+
+        assertTrue(entries.isEmpty(),
+                "an empty directory without a diriv must list as empty on a read-only store");
     }
 
     @Test
@@ -233,5 +269,90 @@ class DirectoryManagerTest {
 
         byte[] iv = h.directoryManager.readDirIV(h.store.root());
         assertTrue(h.directoryManager.listCipherDir(h.store.root(), iv).isEmpty());
+    }
+
+    /**
+     * A {@link CipherStore} over an in-memory store whose control-file writes
+     * can be disabled, simulating a read-only medium.
+     */
+    private static final class ReadOnlyStore implements CipherStore {
+
+        private final MapCipherStore delegate = new MapCipherStore();
+        boolean readOnly;
+
+        @Override
+        public String root() {
+            return delegate.root();
+        }
+
+        @Override
+        public byte[] readSmall(String name, int maxBytes) throws IOException {
+            return delegate.readSmall(name, maxBytes);
+        }
+
+        @Override
+        public void writeSmall(String name, byte[] data, boolean overwrite) throws IOException {
+            if (readOnly) {
+                throw new IOException("read-only store");
+            }
+            delegate.writeSmall(name, data, overwrite);
+        }
+
+        @Override
+        public CipherNode stat(String name) throws IOException {
+            return delegate.stat(name);
+        }
+
+        @Override
+        public List<CipherNode> list(String dir) throws IOException {
+            return delegate.list(dir);
+        }
+
+        @Override
+        public void createFile(String name) throws IOException {
+            delegate.createFile(name);
+        }
+
+        @Override
+        public void mkdir(String name) throws IOException {
+            delegate.mkdir(name);
+        }
+
+        @Override
+        public void delete(String name) throws IOException {
+            delegate.delete(name);
+        }
+
+        @Override
+        public void rename(String from, String to, boolean replaceExisting) throws IOException {
+            delegate.rename(from, to, replaceExisting);
+        }
+
+        @Override
+        public void createSymlink(String name, String target) throws IOException {
+            delegate.createSymlink(name, target);
+        }
+
+        @Override
+        public String readSymlink(String name) throws IOException {
+            return delegate.readSymlink(name);
+        }
+
+        @Override
+        public void setTimes(String name, @Nullable FileTime lastModifiedTime,
+                             @Nullable FileTime lastAccessTime, @Nullable FileTime creationTime)
+                throws IOException {
+            delegate.setTimes(name, lastModifiedTime, lastAccessTime, creationTime);
+        }
+
+        @Override
+        public CipherChannel open(String name, boolean writable) throws IOException {
+            return delegate.open(name, writable);
+        }
+
+        @Override
+        public void close() {
+            delegate.close();
+        }
     }
 }

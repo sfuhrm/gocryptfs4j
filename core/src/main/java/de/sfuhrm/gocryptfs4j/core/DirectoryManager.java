@@ -114,6 +114,14 @@ final class DirectoryManager {
             return cached.clone();
         }
         byte[] data = readOrCreateDirIV(cipherDir);
+        if (data == null) {
+            // The directory is empty but its diriv could not be persisted (for
+            // example on a read-only medium). There are no names to decrypt, so
+            // a fresh, unpersisted IV is returned. It is deliberately not
+            // cached, so a later read re-attempts the repair once the medium is
+            // writable again.
+            return Keys.randomBytes(Constants.DIR_IV_LEN);
+        }
         if (data.length != Constants.DIR_IV_LEN) {
             throw new IOException("bad diriv length " + data.length + " in " + cipherDir);
         }
@@ -140,11 +148,13 @@ final class DirectoryManager {
      * undecryptable; it is rejected instead.</p>
      *
      * @param cipherDir the ciphertext directory name
-     * @return the 16-byte directory IV
+     * @return the 16-byte directory IV, or {@code null} if the directory is
+     *         empty and a fresh IV could not be persisted (for example on a
+     *         read-only medium)
      * @throws IOException on filesystem errors, a corrupt diriv, or a missing
      *                     diriv in a non-empty directory
      */
-    private byte[] readOrCreateDirIV(String cipherDir) throws IOException {
+    private byte @Nullable [] readOrCreateDirIV(String cipherDir) throws IOException {
         String path = PathResolver.join(cipherDir, Constants.DIR_IV_FILENAME);
         try {
             return store.readSmall(path, Constants.DIR_IV_LEN);
@@ -156,8 +166,13 @@ final class DirectoryManager {
             try {
                 store.writeSmall(path, iv, false);
             } catch (FileAlreadyExistsException ignored) {
-                // Another handle repaired the directory concurrently; the write
+                // Another handle repaired the directory concurrently; the read
                 // below returns whichever diriv is there now.
+            } catch (IOException writeFailure) {
+                // The directory is empty but the repair cannot be persisted
+                // (for example the store is read-only). Return null so the
+                // caller can list it as empty rather than failing.
+                return null;
             }
             return store.readSmall(path, Constants.DIR_IV_LEN);
         }

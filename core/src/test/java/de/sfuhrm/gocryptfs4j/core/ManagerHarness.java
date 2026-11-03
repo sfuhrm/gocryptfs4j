@@ -49,7 +49,19 @@ final class ManagerHarness {
      * @param deterministicNames whether deterministic name encryption is used
      */
     private ManagerHarness(boolean plaintextNames, boolean deterministicNames) throws IOException {
-        this.store = new MapCipherStore();
+        this(new MapCipherStore(), plaintextNames, deterministicNames);
+    }
+
+    /**
+     * Creates a harness over the given store.
+     *
+     * @param store              the ciphertext-side store
+     * @param plaintextNames     whether file names are stored unencrypted
+     * @param deterministicNames whether deterministic name encryption is used
+     */
+    private ManagerHarness(CipherStore store, boolean plaintextNames,
+                            boolean deterministicNames) throws IOException {
+        this.store = store;
         this.plaintextNames = plaintextNames;
         this.deterministicNames = deterministicNames;
 
@@ -80,6 +92,17 @@ final class ManagerHarness {
      */
     static ManagerHarness encrypted() throws IOException {
         return new ManagerHarness(false, false);
+    }
+
+    /**
+     * Returns a harness with encrypted (per-directory IV) names over the given
+     * store.
+     *
+     * @param store the ciphertext-side store
+     * @return the harness
+     */
+    static ManagerHarness encrypted(CipherStore store) throws IOException {
+        return new ManagerHarness(store, false, false);
     }
 
     /**
