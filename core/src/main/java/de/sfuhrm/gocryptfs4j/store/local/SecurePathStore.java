@@ -12,7 +12,6 @@ import java.nio.channels.Channels;
 import java.nio.channels.FileChannel;
 import java.nio.channels.SeekableByteChannel;
 import java.nio.file.AccessMode;
-import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.OpenOption;
@@ -121,6 +120,20 @@ final class SecurePathStore implements CipherStore {
     public void writeSmall(String name, byte[] data, boolean overwrite) throws IOException {
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(data, "data");
+        if (!overwrite) {
+            // SecureDirectoryStream.move is rename(2): it always replaces an
+            // existing target, so enforcing the no-replace contract by checking
+            // the target first and then moving is racy. A file created in the
+            // meantime (for example a gocryptfs.diriv) would be silently
+            // replaced, leaving every name in the directory undecryptable.
+            // Delegate to the path-based store, whose Files.move without
+            // REPLACE_EXISTING fails with FileAlreadyExistsException instead of
+            // replacing. The parent is still verified through the secure
+            // traversal first; see verifyParent for the residual window.
+            verifyParent(name);
+            delegate.writeSmall(name, data, false);
+            return;
+        }
         try (SecurePath parent = requireParent(name)) {
             // Write to a temporary file in the same directory and move it into
             // place, so a crash never leaves a truncated control file (for
@@ -138,21 +151,7 @@ final class SecurePathStore implements CipherStore {
                         ((FileChannel) channel).force(true);
                     }
                 }
-                if (overwrite) {
-                    parent.dir().move(temp, parent.dir(), parent.name());
-                } else {
-                    // SecureDirectoryStream.move has no replace flag, so the
-                    // no-replace contract is enforced by checking the target
-                    // first (with the same unavoidable race as the plain
-                    // Files.move path).
-                    try {
-                        basicAttributes(parent.dir(), parent.name());
-                        throw new FileAlreadyExistsException(Paths.get(name).toString());
-                    } catch (NoSuchFileException e) {
-                        // Target is free.
-                    }
-                    parent.dir().move(temp, parent.dir(), parent.name());
-                }
+                parent.dir().move(temp, parent.dir(), parent.name());
                 moved = true;
             } finally {
                 if (!moved) {

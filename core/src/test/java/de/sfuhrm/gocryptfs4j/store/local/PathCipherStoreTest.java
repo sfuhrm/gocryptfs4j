@@ -1,6 +1,7 @@
 package de.sfuhrm.gocryptfs4j.store.local;
 
 import de.sfuhrm.gocryptfs4j.store.CipherNode;
+import de.sfuhrm.gocryptfs4j.store.CipherStore;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
@@ -400,5 +401,20 @@ class PathCipherStoreTest {
         PathCipherStore store = new PathCipherStore(tmp.resolve("cipher"), root);
         assertTrue(store.list(store.root()).isEmpty(),
                 "a disappearing entry must be skipped, not abort the listing");
+    }
+
+    @Test
+    void secureWriteSmallWithoutOverwriteDelegatesToPlainStore() throws Exception {
+        SecureDirectoryStream<Path> root = mockSecureDirectory();
+        CipherStore delegate = mock(CipherStore.class);
+        Path cipher = tmp.resolve("cipher");
+        SecurePathStore store = new SecurePathStore(delegate, cipher, root);
+        byte[] data = "x".getBytes(StandardCharsets.UTF_8);
+        String name = cipher.resolve("f").toString();
+
+        store.writeSmall(name, data, false);
+
+        verify(delegate).writeSmall(name, data, false);
+        verify(root, never()).move(any(), any(), any());
     }
 }
