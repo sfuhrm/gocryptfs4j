@@ -904,6 +904,32 @@ class GocryptFsTest {
     }
 
     @Test
+    void sparseWriteAfterPartialBlockKeepsFirstBlockReadable() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
+            fs.createFile("/hole.bin");
+
+            byte[] head = "HEAD".getBytes(StandardCharsets.UTF_8);
+            fs.write("/hole.bin", 0, head);
+
+            byte[] tail = "tail".getBytes(StandardCharsets.UTF_8);
+            fs.write("/hole.bin", 9000, tail);
+
+            assertEquals(9000 + tail.length, fs.size("/hole.bin"));
+
+            byte[] all = fs.readAll("/hole.bin");
+            assertEquals(9000 + tail.length, all.length);
+            assertEquals("HEAD", new String(all, 0, head.length, StandardCharsets.UTF_8));
+            for (int i = head.length; i < 9000; i++) {
+                assertEquals(0, all[i], "hole byte at " + i);
+            }
+            assertEquals("tail", new String(all, 9000, tail.length, StandardCharsets.UTF_8));
+        }
+    }
+
+    @Test
     void renameReplaceExistingKeepsTargetOnFailure() throws IOException {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);

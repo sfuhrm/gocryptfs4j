@@ -122,10 +122,25 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
         long wanted = position / blockSize;
         if (wanted != blockNo) {
             flushBlock();
+            // A write far behind EOF would leave the current final partial
+            // block followed by a zero hole. Zero-pad that block first so it
+            // stays a whole, authentic block.
+            long plainSize = file.plainSize();
+            if (plainSize > 0
+                    && plainSize % blockSize != 0
+                    && wanted > (plainSize - 1) / blockSize) {
+                file.zeroPad();
+            }
             loadBlock(wanted);
         }
         int off = (int) (position % blockSize);
         int n = Math.min(src.remaining(), blockSize - off);
+        if (off > blockLen) {
+            // The write starts past the current valid data, leaving a hole
+            // inside the block. Zero it out instead of encrypting stale bytes
+            // left over from a previously buffered block.
+            Arrays.fill(block, blockLen, off, (byte) 0);
+        }
         src.get(block, off, n);
         if (off + n > blockLen) {
             blockLen = off + n;

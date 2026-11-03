@@ -174,6 +174,37 @@ public final class CipherFile implements AutoCloseable {
     }
 
     /**
+     * Pads the final partial plaintext block with zeros up to the full block
+     * size and re-encrypts it.
+     *
+     * <p>A sparse write far beyond the end of the file would otherwise leave
+     * the last partial block followed by a hole of zeros; reading that block
+     * back then sees the full ciphertext block size (real bytes plus zeros)
+     * with the tag at the wrong position, which fails authentication. Padding
+     * first turns the partial block into a full block so the hole starts at a
+     * clean block boundary. Does nothing for empty or block-aligned files.</p>
+     *
+     * @throws IOException on filesystem or encryption errors
+     */
+    public synchronized void zeroPad() throws IOException {
+        if (!writable) {
+            throw new NonWritableChannelException();
+        }
+        long size = plainSize();
+        if (size == 0 || size % enc.plainBS == 0) {
+            return;
+        }
+        byte[] id = fileId();
+        if (id == null) {
+            return;
+        }
+        long blockNo = (size - 1) / enc.plainBS;
+        int len = readBlock(blockNo, blockPlain, 0);
+        Arrays.fill(blockPlain, len, (int) enc.plainBS, (byte) 0);
+        writeBlock(blockNo, blockPlain, 0, (int) enc.plainBS);
+    }
+
+    /**
      * Truncates the file to {@code newPlainSize} plaintext bytes. Only shrinking
      * and truncation to empty are performed here; growing is handled by the
      * buffered channel.

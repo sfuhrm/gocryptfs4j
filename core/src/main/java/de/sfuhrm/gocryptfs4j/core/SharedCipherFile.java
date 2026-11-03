@@ -125,6 +125,17 @@ public final class SharedCipherFile implements AutoCloseable {
     }
 
     /**
+     * Pads the final partial plaintext block with zeros up to the full block
+     * size, so a later sparse write past it does not leave an unreadable
+     * partial block behind.
+     *
+     * @throws IOException on filesystem or encryption errors
+     */
+    void zeroPad() throws IOException {
+        file().zeroPad();
+    }
+
+    /**
      * Truncates the shared file to the given plaintext size, growing (with
      * zero-fill) or shrinking as needed.
      *
