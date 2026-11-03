@@ -33,13 +33,13 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
     private final byte[] block;
 
     /** The block number currently buffered, or {@code -1} if none. */
-    private long blockNo = -1;
+    private volatile long blockNo = -1;
 
     /** The number of valid plaintext bytes in {@link #block}. */
-    private int blockLen;
+    private volatile int blockLen;
 
     /** Whether {@link #block} has unflushed modifications. */
-    private boolean dirty;
+    private volatile boolean dirty;
 
     /** The current plaintext position. */
     private long position;

@@ -2,10 +2,9 @@ package de.sfuhrm.gocryptfs4j.core;
 
 import java.io.IOException;
 import java.nio.channels.ClosedChannelException;
-import java.util.Collections;
-import java.util.IdentityHashMap;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArraySet;
 
 import org.jspecify.annotations.Nullable;
 
@@ -44,9 +43,14 @@ public final class SharedCipherFile implements AutoCloseable {
         /** Whether {@link #file} is currently opened for writing. */
         boolean writable;
 
-        /** Open buffered channels, tracked so a filesystem close can flush them. */
-        final Set<BlockBufferedChannel> channels = Collections.newSetFromMap(
-                new IdentityHashMap<BlockBufferedChannel, Boolean>());
+        /**
+         * Open buffered channels, tracked so a filesystem close can flush them.
+         * The set is mutated without a lock from {@link #newChannel} and
+         * {@link #channelClosed} while {@link #flushEntry} and
+         * {@link #effectiveSize} iterate it, so it is a copy-on-write set whose
+         * iterators never throw or observe a torn collection.
+         */
+        final Set<BlockBufferedChannel> channels = new CopyOnWriteArraySet<>();
     }
 
     /** The shared entry this handle references. */
@@ -235,7 +239,7 @@ public final class SharedCipherFile implements AutoCloseable {
      */
     static long effectiveSize(Entry entry) throws IOException {
         long size = entry.file == null ? 0 : entry.file.plainSize();
-        for (BlockBufferedChannel ch : entry.channels.toArray(new BlockBufferedChannel[0])) {
+        for (BlockBufferedChannel ch : entry.channels) {
             size = Math.max(size, ch.writeBackSize());
         }
         return size;
@@ -269,7 +273,7 @@ public final class SharedCipherFile implements AutoCloseable {
      * @throws IOException on filesystem or encryption errors
      */
     static void flushEntry(Entry entry) throws IOException {
-        for (BlockBufferedChannel ch : entry.channels.toArray(new BlockBufferedChannel[0])) {
+        for (BlockBufferedChannel ch : entry.channels) {
             ch.flush();
         }
     }
