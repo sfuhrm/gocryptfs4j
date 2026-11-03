@@ -20,6 +20,7 @@ import java.util.Base64;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -137,6 +138,24 @@ class ConfigFileTest {
         // The master key is not cached: the same instance still rejects
         // the old password.
         assertThrows(IOException.class, () -> reloaded.decryptMasterKey(PASSWORD));
+    }
+
+    @Test
+    void reencryptMasterKeyCopyDoesNotMutateSource() throws Exception {
+        byte[] masterKey = Keys.randomBytes(Constants.KEY_LEN);
+        ConfigFile cf = ConfigFile.create(masterKey, PASSWORD, false, ContentCipherType.AES_GCM);
+        String originalSalt = cf.scryptObject().salt();
+
+        ConfigFile copy = cf.reencryptMasterKeyCopy(masterKey, "new-password".toCharArray());
+
+        // The copy carries the new password and a freshly generated salt.
+        assertArrayEquals(masterKey, copy.decryptMasterKey("new-password".toCharArray()));
+        assertNotEquals(originalSalt, copy.scryptObject().salt());
+
+        // The source is untouched: same salt, still unlocked by the old password.
+        assertEquals(originalSalt, cf.scryptObject().salt());
+        assertArrayEquals(masterKey, cf.decryptMasterKey(PASSWORD));
+        assertThrows(IOException.class, () -> cf.decryptMasterKey("new-password".toCharArray()));
     }
 
     @Test

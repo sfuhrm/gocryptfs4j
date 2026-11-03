@@ -269,6 +269,27 @@ class GocryptFsTest {
     }
 
     @Test
+    void changePasswordFailureLeavesConfigUnchanged() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        FailingStore store = new FailingStore(new PathCipherStore(cipherDir));
+        char[] oldPassword = "old-password".toCharArray();
+        char[] newPassword = "new-password".toCharArray();
+
+        try (GocryptFs fs = GocryptFs.create(store, oldPassword)) {
+            store.failWriteConfig = true;
+            assertThrows(IOException.class, () -> fs.changePassword(newPassword));
+        }
+
+        // The failed write must leave the on-disk config under the old password.
+        try (GocryptFs fs = GocryptFs.open(new PathCipherStore(cipherDir), oldPassword)) {
+            assertTrue(fs.list("/").isEmpty());
+        }
+        assertThrows(IOException.class,
+                () -> GocryptFs.open(new PathCipherStore(cipherDir), newPassword));
+    }
+
+    @Test
     void openWriteStreaming() throws IOException {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
@@ -1044,6 +1065,7 @@ class GocryptFsTest {
         boolean failCreateFile;
         boolean failDeleteDir;
         boolean failWriteSmall;
+        boolean failWriteConfig;
 
         FailingStore(CipherStore delegate) {
             this.delegate = delegate;
@@ -1065,6 +1087,14 @@ class GocryptFsTest {
                 throw new IOException("writeSmall failed");
             }
             delegate.writeSmall(name, data, overwrite);
+        }
+
+        @Override
+        public void writeConfig(String name, byte[] data, boolean overwrite) throws IOException {
+            if (failWriteConfig) {
+                throw new IOException("writeConfig failed");
+            }
+            delegate.writeConfig(name, data, overwrite);
         }
 
         @Override

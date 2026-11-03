@@ -529,24 +529,26 @@ public final class ConfigFile {
     }
 
     /**
-     * Re-encrypts the master key with a new password, updating {@link #encryptedKey}
-     * and the scrypt salt in place.
+     * Re-encrypts the master key with a new password, returning a copy of this
+     * config that carries the updated {@link #encryptedKey} and scrypt salt.
+     * This config is left unchanged.
      *
      * <p>This is the equivalent of gocryptfs's {@code -passwd}. Because it takes
      * the master key directly, it also supports changing the password without
      * knowing the previous one (gocryptfs's {@code -passwd -masterkey}). The
      * scrypt cost parameters ({@code N}, {@code R}, {@code P}, {@code KeyLen}) and
      * all feature flags are preserved; only the salt is regenerated. Serialize the
-     * updated config with {@link #toBytes()} afterwards to persist the change.</p>
+     * returned config with {@link #toBytes()} to persist the change.</p>
      *
      * @param masterKey the 32-byte master key
      * @param password  the new password, encoded as UTF-8
+     * @return a copy of this config with the re-encrypted master key
      * @throws NullPointerException if {@code masterKey} or {@code password} is {@code null}
      * @throws IllegalArgumentException if {@code masterKey} is not 32 bytes long
      * @throws IllegalStateException if the config uses FIDO2 key protection, which
      *                               cannot be changed to a password
      */
-    public void reencryptMasterKey(byte[] masterKey, char[] password) {
+    public ConfigFile reencryptMasterKeyCopy(byte[] masterKey, char[] password) {
         Objects.requireNonNull(masterKey, "masterKey");
         Objects.requireNonNull(password, "password");
         if (masterKey.length != Constants.KEY_LEN) {
@@ -588,15 +590,46 @@ public final class ConfigFile {
             System.arraycopy(nonce, 0, encrypted, 0, nonce.length);
             System.arraycopy(ct, 0, encrypted, nonce.length, ct.length);
 
-            encryptedKey = Base64.getEncoder().encodeToString(encrypted);
-            scryptObject = new ScryptKdf(Base64.getEncoder().encodeToString(salt),
+            ConfigFile copy = new ConfigFile();
+            copy.creator = creator;
+            copy.version = version;
+            copy.featureFlags = featureFlags;
+            copy.longNameMax = longNameMax;
+            copy.fido2 = fido2;
+            copy.encryptedKey = Base64.getEncoder().encodeToString(encrypted);
+            copy.scryptObject = new ScryptKdf(Base64.getEncoder().encodeToString(salt),
                     s.n(), s.r(), s.p(), s.keyLen());
+            return copy;
         } finally {
             Keys.wipe(contentKey);
             Keys.wipe(scryptHash);
             Keys.wipe(passwordBytes);
             Keys.wipe(salt);
         }
+    }
+
+    /**
+     * Re-encrypts the master key with a new password, updating {@link #encryptedKey}
+     * and the scrypt salt in place.
+     *
+     * <p>This is the equivalent of gocryptfs's {@code -passwd}. Because it takes
+     * the master key directly, it also supports changing the password without
+     * knowing the previous one (gocryptfs's {@code -passwd -masterkey}). The
+     * scrypt cost parameters ({@code N}, {@code R}, {@code P}, {@code KeyLen}) and
+     * all feature flags are preserved; only the salt is regenerated. Serialize the
+     * updated config with {@link #toBytes()} afterwards to persist the change.</p>
+     *
+     * @param masterKey the 32-byte master key
+     * @param password  the new password, encoded as UTF-8
+     * @throws NullPointerException if {@code masterKey} or {@code password} is {@code null}
+     * @throws IllegalArgumentException if {@code masterKey} is not 32 bytes long
+     * @throws IllegalStateException if the config uses FIDO2 key protection, which
+     *                               cannot be changed to a password
+     */
+    public void reencryptMasterKey(byte[] masterKey, char[] password) {
+        ConfigFile updated = reencryptMasterKeyCopy(masterKey, password);
+        encryptedKey = updated.encryptedKey;
+        scryptObject = updated.scryptObject;
     }
 
     /**

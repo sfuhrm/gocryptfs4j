@@ -102,7 +102,7 @@ public final class GocryptFs implements AutoCloseable {
     private final String rootName;
 
     /** The parsed configuration file. */
-    private final ConfigFile config;
+    private ConfigFile config;
 
     /** The 32-byte master key. */
     private final byte[] masterKey;
@@ -658,9 +658,10 @@ public final class GocryptFs implements AutoCloseable {
         Lock writeLock = lock.writeLock();
         writeLock.lock();
         try {
-            config.reencryptMasterKey(masterKey, password);
+            ConfigFile updated = config.reencryptMasterKeyCopy(masterKey, password);
             store.writeConfig(PathResolver.join(rootName, Constants.CONF_DEFAULT_NAME),
-                    config.toBytes(), true);
+                    updated.toBytes(), true);
+            config = updated;
         } finally {
             writeLock.unlock();
         }
