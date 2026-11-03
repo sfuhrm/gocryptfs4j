@@ -178,19 +178,25 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
     }
 
     /**
-     * Returns the plaintext size of the underlying file, including any unflushed
-     * modifications to the currently buffered block.
+     * Returns the plaintext size of the underlying file, including the unflushed
+     * write-back of this and every other open channel on the same shared file.
      *
      * @return the plaintext size in bytes
      * @throws IOException on filesystem errors
      */
     @Override
     public long size() throws IOException {
-        long size = file.plainSize();
-        if (dirty) {
-            size = Math.max(size, blockNo * blockSize + blockLen);
-        }
-        return size;
+        return file.effectiveSize();
+    }
+
+    /**
+     * Returns the plaintext size this channel's dirty block would extend the
+     * file to, or {@code -1} if the buffered block is not dirty.
+     *
+     * @return the write-back size, or {@code -1}
+     */
+    long writeBackSize() {
+        return dirty ? blockNo * blockSize + blockLen : -1;
     }
 
     /**
@@ -214,7 +220,7 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
             throw new IllegalArgumentException("negative size");
         }
         flushBlock();
-        long current = file.plainSize();
+        long current = file.effectiveSize();
         if (size < current) {
             file.truncate(size);
         }

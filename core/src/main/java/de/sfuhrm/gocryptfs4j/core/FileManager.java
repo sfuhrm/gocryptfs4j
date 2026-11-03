@@ -353,9 +353,7 @@ final class FileManager {
         long size = contentEnc.cipherSizeToPlainSize(cipherSize);
         SharedCipherFile.Entry entry = sharedFiles.get(cipherFile);
         if (entry != null) {
-            for (BlockBufferedChannel ch : entry.channels) {
-                size = Math.max(size, ch.size());
-            }
+            size = Math.max(size, SharedCipherFile.effectiveSize(entry));
         }
         return size;
     }
@@ -373,7 +371,7 @@ final class FileManager {
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
         synchronized (fileLock(r.cipherPath)) {
             try (SharedCipherFile cf = openCipherFileByName(r.cipherPath, false)) {
-                return cf.plainSize();
+                return cf.effectiveSize();
             }
         }
     }
@@ -390,21 +388,26 @@ final class FileManager {
         Objects.requireNonNull(plainFile, "plainFile");
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
         synchronized (fileLock(r.cipherPath)) {
-            try (SeekableByteChannel ch = openChannel(r.cipherPath, 0, false)) {
-                long size = ch.size();
-                if (size > Integer.MAX_VALUE) {
-                    throw new IOException("file too large to read into memory: " + size);
-                }
-                byte[] out = new byte[(int) size];
-                int pos = 0;
-                while (pos < size) {
-                    int n = ch.read(ByteBuffer.wrap(out, pos, (int) (size - pos)));
-                    if (n < 0) {
-                        break;
+            try (SharedCipherFile cf = openCipherFileByName(r.cipherPath, false)) {
+                // Another handle may hold unflushed buffered blocks; flush them
+                // so this read sees the same content, then read back.
+                cf.flushChannels();
+                try (SeekableByteChannel ch = cf.newChannel(0, false)) {
+                    long size = ch.size();
+                    if (size > Integer.MAX_VALUE) {
+                        throw new IOException("file too large to read into memory: " + size);
                     }
-                    pos += n;
+                    byte[] out = new byte[(int) size];
+                    int pos = 0;
+                    while (pos < size) {
+                        int n = ch.read(ByteBuffer.wrap(out, pos, (int) (size - pos)));
+                        if (n < 0) {
+                            break;
+                        }
+                        pos += n;
+                    }
+                    return Arrays.copyOf(out, pos);
                 }
-                return Arrays.copyOf(out, pos);
             }
         }
     }

@@ -147,6 +147,12 @@ public final class SharedCipherFile implements AutoCloseable {
         if (newPlainSize < 0) {
             throw new IllegalArgumentException("negative size: " + newPlainSize);
         }
+        // Every open channel buffers one block without seeing the writes of the
+        // others. A dirty block buffered here would otherwise survive a shrink
+        // or truncate-to-empty performed by another handle and be written back
+        // later, resurrecting the truncated data. Flush and invalidate all
+        // channels first so no stale block outlives the truncation.
+        flushEntry(entry);
         if (newPlainSize == 0) {
             file().truncate(0);
             return;
@@ -218,13 +224,52 @@ public final class SharedCipherFile implements AutoCloseable {
     }
 
     /**
+     * Returns the effective plaintext size of an entry, including the unflushed
+     * write-back of every open buffered channel. The on-disk plaintext size
+     * alone misses a block that a channel has buffered but not yet written
+     * through.
+     *
+     * @param entry the shared entry
+     * @return the plaintext size including buffered channel data
+     * @throws IOException on filesystem errors
+     */
+    static long effectiveSize(Entry entry) throws IOException {
+        long size = entry.file == null ? 0 : entry.file.plainSize();
+        for (BlockBufferedChannel ch : entry.channels.toArray(new BlockBufferedChannel[0])) {
+            size = Math.max(size, ch.writeBackSize());
+        }
+        return size;
+    }
+
+    /**
+     * Returns the effective plaintext size of this handle's file, including the
+     * unflushed write-back of every open buffered channel.
+     *
+     * @return the plaintext size including buffered channel data
+     * @throws IOException on filesystem errors
+     */
+    long effectiveSize() throws IOException {
+        return effectiveSize(entry);
+    }
+
+    /**
+     * Flushes and invalidates the buffered block of every open channel of this
+     * entry, so their next access reloads the current on-disk content.
+     *
+     * @throws IOException on filesystem or encryption errors
+     */
+    void flushChannels() throws IOException {
+        flushEntry(entry);
+    }
+
+    /**
      * Flushes the buffered block of every open channel of this entry.
      *
      * @param entry the shared entry
      * @throws IOException on filesystem or encryption errors
      */
     static void flushEntry(Entry entry) throws IOException {
-        for (BlockBufferedChannel ch : entry.channels) {
+        for (BlockBufferedChannel ch : entry.channels.toArray(new BlockBufferedChannel[0])) {
             ch.flush();
         }
     }

@@ -84,6 +84,46 @@ class FileManagerTest {
     }
 
     @Test
+    void truncateByOtherHandleDropsBufferedWriteBack() throws IOException {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.fileManager.createFile("/f.txt");
+
+        // One open writable handle buffers a block that is not yet written
+        // through. A separate handle truncating the file away must flush and
+        // invalidate that block, otherwise closing the first handle would write
+        // it back and regrow the file.
+        try (SharedCipherFile cf = h.fileManager.openCipherFile("/f.txt", true);
+             BlockBufferedChannel ch = cf.newChannel(0, true)) {
+            ch.write(ByteBuffer.wrap(new byte[100]));
+
+            h.fileManager.truncate("/f.txt", 0);
+            assertEquals(0, h.fileManager.size("/f.txt"));
+        }
+
+        assertEquals(0, h.fileManager.size("/f.txt"));
+        assertArrayEquals(new byte[0], h.fileManager.readAll("/f.txt"));
+    }
+
+    @Test
+    void sizeAndReadAllSeeForeignBufferedWriteBack() throws IOException {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.fileManager.createFile("/f.txt");
+        byte[] data = new byte[100];
+        Arrays.fill(data, (byte) 0x5a);
+
+        // A writable handle buffers a block without flushing it; size and
+        // readAll must still see that unflushed data, not just the on-disk
+        // (still empty) plaintext.
+        try (SharedCipherFile cf = h.fileManager.openCipherFile("/f.txt", true);
+             BlockBufferedChannel ch = cf.newChannel(0, true)) {
+            ch.write(ByteBuffer.wrap(data));
+
+            assertEquals(100, h.fileManager.size("/f.txt"));
+            assertArrayEquals(data, h.fileManager.readAll("/f.txt"));
+        }
+    }
+
+    @Test
     void mkdirCreatesDirectory() throws IOException {
         ManagerHarness h = ManagerHarness.encrypted();
 
