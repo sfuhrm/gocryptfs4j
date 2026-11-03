@@ -177,6 +177,35 @@ class GocryptFsFileChannelTest {
     }
 
     @Test
+    void sparseWriteAfterReadOfHoleKeepsPartialBlockReadable() throws IOException {
+        Path file = nio.getPath("/sparse-after-read.txt");
+        try (SeekableByteChannel ch = Files.newByteChannel(file,
+                StandardOpenOption.CREATE_NEW, StandardOpenOption.READ,
+                StandardOpenOption.WRITE)) {
+            byte[] head = new byte[100];
+            java.util.Arrays.fill(head, (byte) 0x66);
+            ch.write(ByteBuffer.wrap(head));
+
+            long offset = 9000;
+            ch.position(offset);
+            // Reading at a hole position buffers the empty hole block, so the
+            // following write targets an already-buffered block.
+            assertEquals(-1, ch.read(ByteBuffer.allocate(10)));
+            ch.write(ByteBuffer.wrap(new byte[]{0x55}));
+        }
+
+        byte[] all = Files.readAllBytes(file);
+        assertEquals(9001, all.length);
+        for (int i = 0; i < 100; i++) {
+            assertEquals(0x66, all[i], "head byte " + i);
+        }
+        for (int i = 100; i < 9000; i++) {
+            assertEquals(0, all[i], "hole byte " + i);
+        }
+        assertEquals(0x55, all[9000]);
+    }
+
+    @Test
     void appendWritesAtEndRegardlessOfPosition() throws IOException {
         Path file = nio.getPath("/append.txt");
         Files.write(file, "0123".getBytes(StandardCharsets.UTF_8));

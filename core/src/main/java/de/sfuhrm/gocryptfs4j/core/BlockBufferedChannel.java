@@ -122,16 +122,13 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
         long wanted = position / blockSize;
         if (wanted != blockNo) {
             flushBlock();
-            // A write far behind EOF would leave the current final partial
-            // block followed by a zero hole. Zero-pad that block first so it
-            // stays a whole, authentic block.
-            long plainSize = file.plainSize();
-            if (plainSize > 0
-                    && plainSize % blockSize != 0
-                    && wanted > (plainSize - 1) / blockSize) {
-                file.zeroPad();
-            }
+            padFinalPartialBlock(wanted);
             loadBlock(wanted);
+        } else if (!dirty) {
+            // The target block is already buffered (e.g. a read at a hole
+            // position loaded it), but a write into it would still leave a
+            // hole after the final partial block. Pad that block here as well.
+            padFinalPartialBlock(wanted);
         }
         int off = (int) (position % blockSize);
         int n = Math.min(src.remaining(), blockSize - off);
@@ -278,6 +275,25 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
         } finally {
             Arrays.fill(block, (byte) 0);
             file.channelClosed(this);
+        }
+    }
+
+    /**
+     * Pads the final partial plaintext block of the file with zeros up to the
+     * full block size, but only when {@code wanted} targets a block beyond the
+     * last valid byte. Writing such a block would leave the partial block
+     * followed by a zero hole, which would no longer authenticate when read
+     * back.
+     *
+     * @param wanted the block number about to be written
+     * @throws IOException on filesystem or encryption errors
+     */
+    private void padFinalPartialBlock(long wanted) throws IOException {
+        long plainSize = file.plainSize();
+        if (plainSize > 0
+                && plainSize % blockSize != 0
+                && wanted > (plainSize - 1) / blockSize) {
+            file.zeroPad();
         }
     }
 

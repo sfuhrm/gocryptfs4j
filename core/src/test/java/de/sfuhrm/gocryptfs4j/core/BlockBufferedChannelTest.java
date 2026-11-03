@@ -185,6 +185,38 @@ class BlockBufferedChannelTest {
     }
 
     @Test
+    void sparseWriteAfterReadOfHoleBlockKeepsPartialBlockReadable() throws IOException {
+        ContentEnc enc = enc();
+        byte[] head = new byte[100];
+        Arrays.fill(head, (byte) 0x66);
+        byte[] tail = new byte[50];
+        Arrays.fill(tail, (byte) 0x55);
+
+        try (BlockBufferedChannel ch = openChannel(newFile(), enc, true)) {
+            ch.write(ByteBuffer.wrap(head));
+
+            long offset = 9000;
+            ch.position(offset);
+            // Reading at a hole position buffers the (empty) hole block, so the
+            // following write targets an already-buffered block.
+            assertEquals(-1, ch.read(ByteBuffer.allocate(10)));
+            ch.write(ByteBuffer.wrap(tail));
+
+            byte[] read = readAll(ch);
+            assertEquals(offset + tail.length, read.length);
+            for (int i = 0; i < head.length; i++) {
+                assertEquals(0x66, read[i], "head byte " + i);
+            }
+            for (int i = head.length; i < offset; i++) {
+                assertEquals(0, read[i], "hole byte " + i);
+            }
+            for (int i = 0; i < tail.length; i++) {
+                assertEquals(0x55, read[(int) offset + i], "tail byte " + i);
+            }
+        }
+    }
+
+    @Test
     void truncateGrowPadsWithZeros() throws IOException {
         ManagerHarness h = ManagerHarness.encrypted();
         h.fileManager.createFile("/f.txt");
