@@ -633,7 +633,7 @@ final class FileManager {
      */
     void createFile(String plainFile) throws IOException {
         Objects.requireNonNull(plainFile, "plainFile");
-        PathResolver.Resolved r = pathResolver.resolveParent(plainFile);
+        PathResolver.Resolved r = pathResolver.resolveParent(plainFile, true);
         boolean wroteName = nameManager.prepareLongName(r);
         try {
             store.createFile(r.cipherPath);
@@ -654,7 +654,7 @@ final class FileManager {
      */
     void mkdir(String plainDir) throws IOException {
         Objects.requireNonNull(plainDir, "plainDir");
-        PathResolver.Resolved r = pathResolver.resolveParent(plainDir);
+        PathResolver.Resolved r = pathResolver.resolveParent(plainDir, true);
         boolean wroteName = nameManager.prepareLongName(r);
         try {
             store.mkdir(r.cipherPath);
@@ -747,7 +747,7 @@ final class FileManager {
                 && toComps.subList(0, fromComps.size()).equals(fromComps)) {
             throw new IOException("cannot move " + plainFrom + " into its own subtree: " + plainTo);
         }
-        PathResolver.Resolved to = pathResolver.resolveParent(plainTo);
+        PathResolver.Resolved to = pathResolver.resolveParent(plainTo, true);
         byte @Nullable [] replacedDirIV = null;
         if (exists(to.cipherPath)) {
             if (!replaceExisting) {
@@ -846,7 +846,7 @@ final class FileManager {
     void createSymlink(String plainPath, String target) throws IOException {
         Objects.requireNonNull(plainPath, "plainPath");
         Objects.requireNonNull(target, "target");
-        PathResolver.Resolved r = pathResolver.resolveParent(plainPath);
+        PathResolver.Resolved r = pathResolver.resolveParent(plainPath, true);
         boolean wroteName = nameManager.prepareLongName(r);
         try {
             String cTarget = encryptSymlinkTarget(target, contentEnc, nameTransform, plaintextNames);

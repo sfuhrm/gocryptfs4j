@@ -94,11 +94,25 @@ class DirectoryManagerTest {
     }
 
     @Test
-    void readDirIVCreatesMissingDirIV() throws IOException {
+    void readDirIVDoesNotCreateMissingDirIV() throws IOException {
         ManagerHarness h = ManagerHarness.encrypted();
         h.store.mkdir("sub");
 
         byte[] iv = h.directoryManager.readDirIV("sub");
+
+        assertEquals(Constants.DIR_IV_LEN, iv.length);
+        assertTrue(anyNonZero(iv));
+        assertThrows(NoSuchFileException.class, () -> h.store.readSmall(
+                        PathResolver.join("sub", Constants.DIR_IV_FILENAME), Constants.DIR_IV_LEN),
+                "a read must not create a missing diriv");
+    }
+
+    @Test
+    void readDirIVOptInRepairCreatesMissingDirIV() throws IOException {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.store.mkdir("sub");
+
+        byte[] iv = h.directoryManager.readDirIV("sub", true);
 
         assertEquals(Constants.DIR_IV_LEN, iv.length);
         assertTrue(anyNonZero(iv));

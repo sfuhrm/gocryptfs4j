@@ -94,7 +94,12 @@ final class DirectoryManager {
     }
 
     /**
-     * Reads the {@code gocryptfs.diriv} of {@code cipherDir}.
+     * Reads the {@code gocryptfs.diriv} of {@code cipherDir} without ever
+     * creating it. A missing diriv in an empty directory is reported as a
+     * fresh, unpersisted IV so that read-only operations (for example listing)
+     * do not write to the cipher directory; this is also what keeps a live
+     * gocryptfs mount from racing with a concurrent {@code mkdir}, which
+     * creates the diriv itself with an exclusive create.
      *
      * @param cipherDir the ciphertext directory name
      * @return the 16-byte directory IV
@@ -102,6 +107,21 @@ final class DirectoryManager {
      * @throws NullPointerException if {@code cipherDir} is {@code null}
      */
     byte[] readDirIV(String cipherDir) throws IOException {
+        return readDirIV(cipherDir, false);
+    }
+
+    /**
+     * Reads the {@code gocryptfs.diriv} of {@code cipherDir}, optionally
+     * minting and persisting a fresh one when it is missing and the directory
+     * is empty.
+     *
+     * @param cipherDir the ciphertext directory name
+     * @param create    whether to create a missing diriv for an empty directory
+     * @return the 16-byte directory IV
+     * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code cipherDir} is {@code null}
+     */
+    byte[] readDirIV(String cipherDir, boolean create) throws IOException {
         Objects.requireNonNull(cipherDir, "cipherDir");
         if (plaintextNames) {
             return new byte[Constants.DIR_IV_LEN];
@@ -113,13 +133,13 @@ final class DirectoryManager {
         if (cached != null) {
             return cached.clone();
         }
-        byte[] data = readOrCreateDirIV(cipherDir);
+        byte[] data = readDirIVInternal(cipherDir, create);
         if (data == null) {
-            // The directory is empty but its diriv could not be persisted (for
-            // example on a read-only medium). There are no names to decrypt, so
-            // a fresh, unpersisted IV is returned. It is deliberately not
-            // cached, so a later read re-attempts the repair once the medium is
-            // writable again.
+            // The directory is empty and has no diriv. In read mode, or when
+            // the repair cannot be persisted (for example on a read-only
+            // medium), return a fresh, unpersisted IV. There are no names to
+            // decrypt, so this is safe for listing; it is deliberately not
+            // cached so a later read re-attempts once the diriv appears.
             return Keys.randomBytes(Constants.DIR_IV_LEN);
         }
         if (data.length != Constants.DIR_IV_LEN) {
@@ -136,25 +156,30 @@ final class DirectoryManager {
 
     /**
      * Reads the {@code gocryptfs.diriv} of {@code cipherDir}, minting and
-     * persisting a fresh one if the file is missing and the directory is empty.
+     * persisting a fresh one when {@code create} is set and the file is missing
+     * and the directory is empty.
      *
      * <p>A crash between {@code mkdir} and {@code writeDirIV} (or a directory
      * created by an older gocryptfs) can leave a directory without a
      * {@code gocryptfs.diriv}. Such a directory is empty &mdash; no entry can be
      * created under it while its diriv is missing &mdash; so minting a fresh
-     * random IV here is safe and makes the directory usable again. A directory
-     * that already has entries but no diriv was encrypted under an IV that is no
-     * longer available, so minting a fresh IV would make those names
-     * undecryptable; it is rejected instead.</p>
+     * random IV makes the directory usable again. This repair is performed only
+     * when explicitly requested (opt-in, from write paths), never as a side
+     * effect of a read. A directory that already has entries but no diriv was
+     * encrypted under an IV that is no longer available, so minting a fresh IV
+     * would make those names undecryptable; it is rejected instead.</p>
      *
      * @param cipherDir the ciphertext directory name
+     * @param create    whether to mint and persist a missing diriv for an empty
+     *                  directory
      * @return the 16-byte directory IV, or {@code null} if the directory is
-     *         empty and a fresh IV could not be persisted (for example on a
-     *         read-only medium)
+     *         empty and no diriv is available (because {@code create} is false,
+     *         or because a fresh IV could not be persisted on a read-only
+     *         medium)
      * @throws IOException on filesystem errors, a corrupt diriv, or a missing
      *                     diriv in a non-empty directory
      */
-    private byte @Nullable [] readOrCreateDirIV(String cipherDir) throws IOException {
+    private byte @Nullable [] readDirIVInternal(String cipherDir, boolean create) throws IOException {
         String path = PathResolver.join(cipherDir, Constants.DIR_IV_FILENAME);
         try {
             return store.readSmall(path, Constants.DIR_IV_LEN);
@@ -162,12 +187,15 @@ final class DirectoryManager {
             if (!store.list(cipherDir).isEmpty()) {
                 throw new IOException("directory has entries but no gocryptfs.diriv: " + cipherDir);
             }
+            if (!create) {
+                return null;
+            }
             byte[] iv = Keys.randomBytes(Constants.DIR_IV_LEN);
             try {
                 store.writeSmall(path, iv, false);
             } catch (FileAlreadyExistsException ignored) {
-                // Another handle repaired the directory concurrently; the read
-                // below returns whichever diriv is there now.
+                // Another handle created the directory's diriv concurrently;
+                // the read below returns whichever diriv is there now.
             } catch (IOException writeFailure) {
                 // The directory is empty but the repair cannot be persisted
                 // (for example the store is read-only). Return null so the

@@ -99,16 +99,20 @@ final class PathResolver {
      *                                  or targets the reserved {@code gocryptfs.conf} control file
      */
     Resolved resolve(String plainPath) throws IOException {
+        return resolve(plainPath, false);
+    }
+
+    Resolved resolve(String plainPath, boolean create) throws IOException {
         Objects.requireNonNull(plainPath, "plainPath");
         List<String> comps = normalize(plainPath);
         checkNotControlFile(comps);
         String cur = rootName;
-        byte[] curIV = directoryManager.readDirIV(cur);
+        byte[] curIV = directoryManager.readDirIV(cur, create);
         for (int i = 0; i < comps.size() - 1; i++) {
             String cName = nameManager.cipherNameFor(comps.get(i), curIV);
             cur = join(cur, cName);
             checkIntermediateDirectory(cur);
-            curIV = directoryManager.readDirIV(cur);
+            curIV = directoryManager.readDirIV(cur, create);
         }
         if (comps.isEmpty()) {
             return new Resolved(rootName, null, curIV, null, "");
@@ -126,6 +130,10 @@ final class PathResolver {
      * @throws IOException if the path is empty or the parent cannot be resolved
      */
     Resolved resolveParent(String plainPath) throws IOException {
+        return resolveParent(plainPath, false);
+    }
+
+    Resolved resolveParent(String plainPath, boolean create) throws IOException {
         List<String> comps = normalize(plainPath);
         checkNotControlFile(comps);
         if (comps.isEmpty()) {
@@ -133,12 +141,12 @@ final class PathResolver {
         }
         String plainName = comps.remove(comps.size() - 1);
         String cur = rootName;
-        byte[] curIV = directoryManager.readDirIV(cur);
+        byte[] curIV = directoryManager.readDirIV(cur, create);
         for (String c : comps) {
             String cName = nameManager.cipherNameFor(c, curIV);
             cur = join(cur, cName);
             checkIntermediateDirectory(cur);
-            curIV = directoryManager.readDirIV(cur);
+            curIV = directoryManager.readDirIV(cur, create);
         }
         String cName = nameManager.cipherNameFor(plainName, curIV);
         return new Resolved(join(cur, cName), cur, curIV, cName, plainName);
