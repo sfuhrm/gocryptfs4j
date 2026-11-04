@@ -244,14 +244,17 @@ public final class CipherFile implements AutoCloseable {
         int len = readBlock(blockNo, blockPlain, 0);
         byte[] truncated = Arrays.copyOf(blockPlain, Math.min(keep, len));
         byte[] cipherBlock = enc.encryptBlock(truncated, blockNo, id);
-        // Truncate the whole last block away before writing the re-encrypted
-        // partial block. Writing first and truncating afterwards leaves, on a
-        // crash in between, the new partial block followed by the stale tail
-        // of the old last block, which no longer authenticates. Truncating
-        // first leaves a clean (only slightly shorter) file at the block
-        // boundary, which then grows by the single re-encrypted block.
-        channel.truncate(enc.blockNoToCipherOff(blockNo));
-        writeCipherRange(enc.blockNoToCipherOff(blockNo), cipherBlock);
+        // Write the re-encrypted partial block first, then truncate the stale
+        // tail away. A crash between the two steps leaves, in the worst case,
+        // the new partial block followed by the stale tail of the old last
+        // block, which no longer authenticates. Truncating first would instead
+        // lose the kept bytes of the final block if a crash occurred before the
+        // re-encrypted block was written, silently shrinking the file by up to
+        // one block. As in gocryptfs, prefer never losing bytes that should
+        // have survived.
+        long blockCipherOff = enc.blockNoToCipherOff(blockNo);
+        writeCipherRange(blockCipherOff, cipherBlock);
+        channel.truncate(blockCipherOff + cipherBlock.length);
     }
 
     /**
