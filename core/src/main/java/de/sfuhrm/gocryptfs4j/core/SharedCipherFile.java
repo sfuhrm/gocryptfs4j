@@ -262,13 +262,16 @@ public final class SharedCipherFile implements AutoCloseable {
                     try {
                         BlockCache cache = entry.cache;
                         if (cache != null) {
-                            cache.flush();
-                            cache.wipe();
+                            try {
+                                cache.flush();
+                            } finally {
+                                cache.wipe();
+                            }
                         }
-                        file.close();
                     } finally {
                         entry.file = null;
                         entry.cache = null;
+                        file.close();
                     }
                 }
             }
