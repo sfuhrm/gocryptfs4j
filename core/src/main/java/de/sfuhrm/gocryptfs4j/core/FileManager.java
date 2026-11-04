@@ -333,8 +333,20 @@ final class FileManager {
      * @throws IOException on filesystem or encryption errors
      */
     void flushSharedFiles() throws IOException {
+        IOException failure = null;
         for (SharedCipherFile.Entry entry : sharedFiles.values()) {
-            SharedCipherFile.flushEntry(entry);
+            try {
+                SharedCipherFile.flushEntry(entry);
+            } catch (IOException e) {
+                if (failure == null) {
+                    failure = e;
+                } else {
+                    failure.addSuppressed(e);
+                }
+            }
+        }
+        if (failure != null) {
+            throw failure;
         }
     }
 

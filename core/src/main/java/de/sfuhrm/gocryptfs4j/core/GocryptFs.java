@@ -1183,15 +1183,31 @@ public final class GocryptFs implements AutoCloseable {
      */
     @Override
     public void close() throws IOException {
+        IOException failure = null;
         try {
             // Flush before the keys are wiped so buffered plaintext can still
-            // be encrypted; the keys are always wiped, even if flushing fails.
+            // be encrypted; every entry is flushed, with failures collected.
             fileManager.flushSharedFiles();
-        } finally {
-            wipeSecrets();
+        } catch (IOException e) {
+            failure = e;
         }
-        if (ownsStore) {
-            store.close();
+        try {
+            wipeSecrets();
+        } finally {
+            if (ownsStore) {
+                try {
+                    store.close();
+                } catch (IOException e) {
+                    if (failure == null) {
+                        failure = e;
+                    } else {
+                        failure.addSuppressed(e);
+                    }
+                }
+            }
+        }
+        if (failure != null) {
+            throw failure;
         }
     }
 }
