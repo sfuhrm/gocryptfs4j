@@ -126,9 +126,9 @@ final class SecurePathStore implements CipherStore {
             // the target first and then moving is racy. A file created in the
             // meantime (for example a gocryptfs.diriv) would be silently
             // replaced, leaving every name in the directory undecryptable.
-            // Delegate to the path-based store, whose Files.move without
-            // REPLACE_EXISTING fails with FileAlreadyExistsException instead of
-            // replacing. The parent is still verified through the secure
+            // Delegate to the path-based store, which publishes the temporary
+            // file with a hard link so the create-new contract is enforced
+            // atomically. The parent is still verified through the secure
             // traversal first; see verifyParent for the residual window.
             verifyParent(name);
             delegate.writeSmall(name, data, false);

@@ -162,14 +162,20 @@ final class PlainPathStore implements CipherStore {
             if (overwrite) {
                 Files.move(temp, p, StandardCopyOption.ATOMIC_MOVE,
                         StandardCopyOption.REPLACE_EXISTING);
+                moved = true;
             } else {
-                // No ATOMIC_MOVE here: with it, rename(2) would replace the
-                // target and skip the create-new check. Without it, Files.move
-                // throws FileAlreadyExistsException if the file appeared in the
-                // meantime, preserving the create-new contract.
-                Files.move(temp, p);
+                // Publish the temporary file by hard-linking it at the target
+                // and then unlinking the temporary name. link(2) atomically
+                // fails with FileAlreadyExistsException if the target exists,
+                // so the create-new contract holds under concurrency. A plain
+                // Files.move without REPLACE_EXISTING cannot provide this: on
+                // Linux the JDK only stats the target before calling rename(2),
+                // which then replaces it, so a target created in between would
+                // be silently overwritten.
+                Files.createLink(p, temp);
+                moved = true;
+                Files.delete(temp);
             }
-            moved = true;
         } finally {
             if (!moved) {
                 Files.deleteIfExists(temp);
