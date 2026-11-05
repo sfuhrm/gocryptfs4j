@@ -13,6 +13,8 @@ import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.Objects;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
  * AES-SIV (RFC 5297) helper matching the {@code siv_aead} backend used by
@@ -36,8 +38,20 @@ public final class AesSiv implements ContentCipher {
     /** The CTR sub-key, the second half of the 64-byte key. */
     private final byte[] k2;
 
+    /**
+     * Immutable copies of the two sub-keys. They are deliberately created in
+     * the constructor and never rebuilt from {@link #k1} or {@link #k2}, so
+     * wiping the mutable copies can never turn an in-flight encryption into an
+     * all-zero-key encryption.
+     */
+    private final KeyParameter k1Key;
+    private final KeyParameter k2Key;
+
     /** Whether this cipher has been wiped. */
     private volatile boolean wiped;
+
+    /** Guards operations against a concurrent {@link #wipe()}. */
+    private final ReentrantReadWriteLock stateLock = new ReentrantReadWriteLock();
 
     /**
      * A per-instance, per-thread CMAC scratch, reused because {@link CMac} is
@@ -66,6 +80,8 @@ public final class AesSiv implements ContentCipher {
         }
         this.k1 = Arrays.copyOfRange(key, 0, Constants.KEY_LEN);
         this.k2 = Arrays.copyOfRange(key, Constants.KEY_LEN, 2 * Constants.KEY_LEN);
+        this.k1Key = new KeyParameter(k1);
+        this.k2Key = new KeyParameter(k2);
     }
 
     /**
@@ -80,16 +96,24 @@ public final class AesSiv implements ContentCipher {
      */
     @Override
     public void wipe() {
-        if (!wiped) {
-            wiped = true;
-            Arrays.fill(k1, (byte) 0);
-            Arrays.fill(k2, (byte) 0);
-            // Overwrite every scratch key schedule with a zero key so the real
-            // key schedule can be garbage-collected.
-            KeyParameter zero = new KeyParameter(new byte[Constants.KEY_LEN]);
-            cmacScratch.wipeAll(mac -> mac.init(zero));
-            ctrScratch.wipeAll(c -> c.init(true,
-                    new ParametersWithIV(zero, new byte[Constants.AES_BLOCK_SIZE])));
+        Lock writeLock = stateLock.writeLock();
+        writeLock.lock();
+        try {
+            if (!wiped) {
+                wiped = true;
+                Arrays.fill(k1, (byte) 0);
+                Arrays.fill(k2, (byte) 0);
+                // Overwrite every scratch key schedule with a zero key so the
+                // real key schedule can be garbage-collected. No operation can
+                // be using a scratch cipher here because wipe holds the write
+                // lock.
+                KeyParameter zero = new KeyParameter(new byte[Constants.KEY_LEN]);
+                cmacScratch.wipeAll(mac -> mac.init(zero));
+                ctrScratch.wipeAll(c -> c.init(true,
+                        new ParametersWithIV(zero, new byte[Constants.AES_BLOCK_SIZE])));
+            }
+        } finally {
+            writeLock.unlock();
         }
     }
 
@@ -109,14 +133,23 @@ public final class AesSiv implements ContentCipher {
     public byte[] encrypt(byte[] plaintext, byte[] nonce, byte @Nullable [] aad) {
         Objects.requireNonNull(plaintext, "plaintext");
         Objects.requireNonNull(nonce, "nonce");
-        checkUsable();
-        checkNonce(nonce);
-        byte[] siv = s2v(k1, new byte[][]{orEmpty(aad), nonce}, plaintext, cmacScratch.get());
-        byte[] ct = ctr(k2, siv, plaintext, ctrScratch.get());
-        byte[] out = new byte[siv.length + ct.length];
-        System.arraycopy(siv, 0, out, 0, siv.length);
-        System.arraycopy(ct, 0, out, siv.length, ct.length);
-        return out;
+        Lock readLock = stateLock.readLock();
+        readLock.lock();
+        try {
+            checkUsable();
+            checkNonce(nonce);
+            byte[] siv = s2v(k1Key, new byte[][]{orEmpty(aad), nonce}, plaintext,
+                    cmacScratch.get());
+            checkUsable();
+            byte[] ct = ctr(k2Key, siv, plaintext, ctrScratch.get());
+            checkUsable();
+            byte[] out = new byte[siv.length + ct.length];
+            System.arraycopy(siv, 0, out, 0, siv.length);
+            System.arraycopy(ct, 0, out, siv.length, ct.length);
+            return out;
+        } finally {
+            readLock.unlock();
+        }
     }
 
     /**
@@ -136,19 +169,28 @@ public final class AesSiv implements ContentCipher {
     public byte[] decrypt(byte[] ciphertext, byte[] nonce, byte @Nullable [] aad) throws GeneralSecurityException {
         Objects.requireNonNull(ciphertext, "ciphertext");
         Objects.requireNonNull(nonce, "nonce");
-        checkUsable();
-        checkNonce(nonce);
-        if (ciphertext.length < Constants.AES_BLOCK_SIZE) {
-            throw new AEADBadTagException("AES-SIV ciphertext is too short");
+        Lock readLock = stateLock.readLock();
+        readLock.lock();
+        try {
+            checkUsable();
+            checkNonce(nonce);
+            if (ciphertext.length < Constants.AES_BLOCK_SIZE) {
+                throw new AEADBadTagException("AES-SIV ciphertext is too short");
+            }
+            byte[] siv = Arrays.copyOfRange(ciphertext, 0, Constants.AES_BLOCK_SIZE);
+            byte[] ct = Arrays.copyOfRange(ciphertext, Constants.AES_BLOCK_SIZE, ciphertext.length);
+            byte[] plaintext = ctr(k2Key, siv, ct, ctrScratch.get());
+            checkUsable();
+            byte[] expected = s2v(k1Key, new byte[][]{orEmpty(aad), nonce}, plaintext,
+                    cmacScratch.get());
+            checkUsable();
+            if (!MessageDigest.isEqual(expected, siv)) {
+                throw new AEADBadTagException("AES-SIV authentication failed");
+            }
+            return plaintext;
+        } finally {
+            readLock.unlock();
         }
-        byte[] siv = Arrays.copyOfRange(ciphertext, 0, Constants.AES_BLOCK_SIZE);
-        byte[] ct = Arrays.copyOfRange(ciphertext, Constants.AES_BLOCK_SIZE, ciphertext.length);
-        byte[] plaintext = ctr(k2, siv, ct, ctrScratch.get());
-        byte[] expected = s2v(k1, new byte[][]{orEmpty(aad), nonce}, plaintext, cmacScratch.get());
-        if (!MessageDigest.isEqual(expected, siv)) {
-            throw new AEADBadTagException("AES-SIV authentication failed");
-        }
-        return plaintext;
     }
 
     /**
@@ -195,6 +237,19 @@ public final class AesSiv implements ContentCipher {
      * @return the 16-byte synthetic IV
      */
     static byte[] s2v(byte[] k1, byte[][] ad, byte[] last, CMac mac) {
+        return s2v(new KeyParameter(k1), ad, last, mac);
+    }
+
+    /**
+     * S2V using an already-built key parameter.
+     *
+     * @param k1   the S2V sub-key
+     * @param ad   the associated-data strings
+     * @param last the final string (typically the plaintext)
+     * @param mac  the CMAC scratch instance to use
+     * @return the 16-byte synthetic IV
+     */
+    private static byte[] s2v(KeyParameter k1, byte[][] ad, byte[] last, CMac mac) {
         byte[] d = cmac(mac, k1, new byte[Constants.AES_BLOCK_SIZE]);
         for (byte[] s : ad) {
             byte[] dd = dbl(d);
@@ -233,10 +288,23 @@ public final class AesSiv implements ContentCipher {
      * @return the encrypted/decrypted data
      */
     static byte[] ctr(byte[] k2, byte[] siv, byte[] data, CTRModeCipher cipher) {
+        return ctr(new KeyParameter(k2), siv, data, cipher);
+    }
+
+    /**
+     * CTR using an already-built key parameter.
+     *
+     * @param k2     the CTR sub-key
+     * @param siv    the 16-byte synthetic IV
+     * @param data   the data to encrypt or decrypt
+     * @param cipher the SIC (CTR) scratch instance to use
+     * @return the encrypted/decrypted data
+     */
+    private static byte[] ctr(KeyParameter k2, byte[] siv, byte[] data, CTRModeCipher cipher) {
         byte[] q = siv.clone();
         q[8] &= 0x7f;
         q[12] &= 0x7f;
-        cipher.init(true, new ParametersWithIV(new KeyParameter(k2), q));
+        cipher.init(true, new ParametersWithIV(k2, q));
         byte[] out = new byte[data.length];
         cipher.processBytes(data, 0, data.length, out, 0);
         return out;
@@ -250,8 +318,8 @@ public final class AesSiv implements ContentCipher {
      * @param data the data to authenticate
      * @return the 16-byte CMAC
      */
-    private static byte[] cmac(CMac mac, byte[] key, byte[] data) {
-        mac.init(new KeyParameter(key));
+    private static byte[] cmac(CMac mac, KeyParameter key, byte[] data) {
+        mac.init(key);
         mac.update(data, 0, data.length);
         byte[] out = new byte[Constants.AES_BLOCK_SIZE];
         mac.doFinal(out, 0);

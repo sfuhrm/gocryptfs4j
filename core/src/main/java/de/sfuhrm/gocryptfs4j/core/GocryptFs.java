@@ -144,6 +144,24 @@ public final class GocryptFs implements AutoCloseable {
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
 
     /**
+     * Whether this filesystem has been closed. Once set, every public
+     * operation fails with {@link IllegalStateException} instead of touching
+     * wiped key material.
+     */
+    private volatile boolean closed;
+
+    /**
+     * Throws if this filesystem has been closed.
+     *
+     * @throws IllegalStateException if this filesystem has been closed
+     */
+    private void ensureOpen() {
+        if (closed) {
+            throw new IllegalStateException("filesystem has been closed");
+        }
+    }
+
+    /**
      * Creates an instance, called after the master key has been unlocked.
      *
      * @param store     the ciphertext-side store
@@ -610,6 +628,7 @@ public final class GocryptFs implements AutoCloseable {
      * @return true if file names are stored unencrypted
      */
     public boolean plaintextNames() {
+        ensureOpen();
         return plaintextNames;
     }
 
@@ -620,6 +639,7 @@ public final class GocryptFs implements AutoCloseable {
      * @return the read lock
      */
     public Lock readLock() {
+        ensureOpen();
         return lock.readLock();
     }
 
@@ -630,6 +650,7 @@ public final class GocryptFs implements AutoCloseable {
      * @return the write lock
      */
     public Lock writeLock() {
+        ensureOpen();
         return lock.writeLock();
     }
 
@@ -658,6 +679,7 @@ public final class GocryptFs implements AutoCloseable {
         Lock writeLock = lock.writeLock();
         writeLock.lock();
         try {
+            ensureOpen();
             ConfigFile updated = config.reencryptMasterKeyCopy(masterKey, password);
             store.writeConfig(PathResolver.join(rootName, Constants.CONF_DEFAULT_NAME),
                     updated.toBytes(), true);
@@ -680,6 +702,7 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainName} or {@code dirIV} is {@code null}
      */
     String cipherNameFor(String plainName, byte[] dirIV) throws IOException {
+        ensureOpen();
         return nameManager.cipherNameFor(plainName, dirIV);
     }
 
@@ -695,6 +718,7 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainName} or {@code dirIV} is {@code null}
      */
     String encryptNameRaw(String plainName, byte[] dirIV) {
+        ensureOpen();
         return nameManager.encryptName(plainName, dirIV);
     }
 
@@ -707,6 +731,7 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code cipherDir} is {@code null}
      */
     byte[] readDirIV(String cipherDir) throws IOException {
+        ensureOpen();
         return directoryManager.readDirIV(cipherDir);
     }
 
@@ -726,6 +751,7 @@ public final class GocryptFs implements AutoCloseable {
      *                                  or targets the reserved {@code gocryptfs.conf} control file
      */
     PathResolver.Resolved resolve(String plainPath) throws IOException {
+        ensureOpen();
         return pathResolver.resolve(plainPath);
     }
 
@@ -746,6 +772,7 @@ public final class GocryptFs implements AutoCloseable {
         Lock readLock = lock.readLock();
         readLock.lock();
         try {
+            ensureOpen();
             PathResolver.Resolved r = pathResolver.resolve(plainDir);
             byte[] iv = directoryManager.readDirIV(r.cipherPath);
             List<DirEntry> entries = directoryManager.listCipherDir(r.cipherPath, iv);
@@ -772,6 +799,7 @@ public final class GocryptFs implements AutoCloseable {
         Lock readLock = lock.readLock();
         readLock.lock();
         try {
+            ensureOpen();
             return fileManager.stat(plainPath);
         } finally {
             readLock.unlock();
@@ -793,6 +821,7 @@ public final class GocryptFs implements AutoCloseable {
         Lock writeLock = lock.writeLock();
         writeLock.lock();
         try {
+            ensureOpen();
             return fileManager.openCipherFile(plainFile, writable);
         } finally {
             writeLock.unlock();
@@ -811,6 +840,7 @@ public final class GocryptFs implements AutoCloseable {
         Lock readLock = lock.readLock();
         readLock.lock();
         try {
+            ensureOpen();
             return fileManager.size(plainFile);
         } finally {
             readLock.unlock();
@@ -829,6 +859,7 @@ public final class GocryptFs implements AutoCloseable {
         Lock readLock = lock.readLock();
         readLock.lock();
         try {
+            ensureOpen();
             return fileManager.readAll(plainFile);
         } finally {
             readLock.unlock();
@@ -847,6 +878,7 @@ public final class GocryptFs implements AutoCloseable {
         Lock readLock = lock.readLock();
         readLock.lock();
         try {
+            ensureOpen();
             return fileManager.openRead(plainFile);
         } finally {
             readLock.unlock();
@@ -869,6 +901,7 @@ public final class GocryptFs implements AutoCloseable {
         Lock writeLock = lock.writeLock();
         writeLock.lock();
         try {
+            ensureOpen();
             return fileManager.openWrite(plainFile);
         } finally {
             writeLock.unlock();
@@ -889,6 +922,7 @@ public final class GocryptFs implements AutoCloseable {
         Lock readLock = lock.readLock();
         readLock.lock();
         try {
+            ensureOpen();
             fileManager.write(plainFile, offset, data);
         } finally {
             readLock.unlock();
@@ -908,6 +942,7 @@ public final class GocryptFs implements AutoCloseable {
         Lock readLock = lock.readLock();
         readLock.lock();
         try {
+            ensureOpen();
             fileManager.truncate(plainFile, newSize);
         } finally {
             readLock.unlock();
@@ -930,6 +965,7 @@ public final class GocryptFs implements AutoCloseable {
         Lock writeLock = lock.writeLock();
         writeLock.lock();
         try {
+            ensureOpen();
             fileManager.setTimes(plainPath, lastModifiedTime, lastAccessTime, createTime);
         } finally {
             writeLock.unlock();
@@ -950,6 +986,7 @@ public final class GocryptFs implements AutoCloseable {
         Lock readLock = lock.readLock();
         readLock.lock();
         try {
+            ensureOpen();
             fileManager.checkAccess(plainPath, modes);
         } finally {
             readLock.unlock();
@@ -969,6 +1006,7 @@ public final class GocryptFs implements AutoCloseable {
         Lock readLock = lock.readLock();
         readLock.lock();
         try {
+            ensureOpen();
             return fileManager.posixAttributes(plainPath);
         } finally {
             readLock.unlock();
@@ -988,6 +1026,7 @@ public final class GocryptFs implements AutoCloseable {
         Lock writeLock = lock.writeLock();
         writeLock.lock();
         try {
+            ensureOpen();
             fileManager.setPosixPermissions(plainPath, permissions);
         } finally {
             writeLock.unlock();
@@ -1006,6 +1045,7 @@ public final class GocryptFs implements AutoCloseable {
         Lock writeLock = lock.writeLock();
         writeLock.lock();
         try {
+            ensureOpen();
             fileManager.setPosixOwner(plainPath, owner);
         } finally {
             writeLock.unlock();
@@ -1024,6 +1064,7 @@ public final class GocryptFs implements AutoCloseable {
         Lock writeLock = lock.writeLock();
         writeLock.lock();
         try {
+            ensureOpen();
             fileManager.setPosixGroup(plainPath, group);
         } finally {
             writeLock.unlock();
@@ -1045,6 +1086,7 @@ public final class GocryptFs implements AutoCloseable {
         Lock writeLock = lock.writeLock();
         writeLock.lock();
         try {
+            ensureOpen();
             fileManager.createFile(plainFile);
         } finally {
             writeLock.unlock();
@@ -1062,6 +1104,7 @@ public final class GocryptFs implements AutoCloseable {
         Lock writeLock = lock.writeLock();
         writeLock.lock();
         try {
+            ensureOpen();
             fileManager.mkdir(plainDir);
         } finally {
             writeLock.unlock();
@@ -1079,6 +1122,7 @@ public final class GocryptFs implements AutoCloseable {
         Lock writeLock = lock.writeLock();
         writeLock.lock();
         try {
+            ensureOpen();
             fileManager.delete(plainPath);
         } finally {
             writeLock.unlock();
@@ -1113,6 +1157,7 @@ public final class GocryptFs implements AutoCloseable {
         Lock writeLock = lock.writeLock();
         writeLock.lock();
         try {
+            ensureOpen();
             fileManager.rename(plainFrom, plainTo, replaceExisting);
         } finally {
             writeLock.unlock();
@@ -1131,6 +1176,7 @@ public final class GocryptFs implements AutoCloseable {
         Lock writeLock = lock.writeLock();
         writeLock.lock();
         try {
+            ensureOpen();
             fileManager.createSymlink(plainPath, target);
         } finally {
             writeLock.unlock();
@@ -1149,6 +1195,7 @@ public final class GocryptFs implements AutoCloseable {
         Lock readLock = lock.readLock();
         readLock.lock();
         try {
+            ensureOpen();
             return fileManager.readSymlinkTarget(plainPath);
         } finally {
             readLock.unlock();
@@ -1176,38 +1223,52 @@ public final class GocryptFs implements AutoCloseable {
      * the master key and every key derived from it and, when this instance
      * created the store itself (via the URI-based factories), closing the store.
      *
-     * <p>Closing is idempotent. A store supplied directly to
-     * {@code open}/{@code create} is owned by the caller and is left open.</p>
+     * <p>Closing takes the write lock, so it waits for every operation that
+     * already holds the read or write lock; operations started after the close
+     * has begun fail with {@link IllegalStateException}. Closing is idempotent.
+     * A store supplied directly to {@code open}/{@code create} is owned by the
+     * caller and is left open.</p>
      *
      * @throws IOException if a pending write cannot be flushed or the store cannot be closed
      */
     @Override
     public void close() throws IOException {
-        IOException failure = null;
+        Lock writeLock = lock.writeLock();
+        writeLock.lock();
         try {
-            // Flush before the keys are wiped so buffered plaintext can still
-            // be encrypted; every entry is flushed, with failures collected.
-            fileManager.flushSharedFiles();
-        } catch (IOException e) {
-            failure = e;
-        }
-        try {
-            wipeSecrets();
-        } finally {
-            if (ownsStore) {
-                try {
-                    store.close();
-                } catch (IOException e) {
-                    if (failure == null) {
-                        failure = e;
-                    } else {
-                        failure.addSuppressed(e);
+            if (closed) {
+                return;
+            }
+            closed = true;
+            IOException failure = null;
+            try {
+                // Flush before the keys are wiped so buffered plaintext can
+                // still be encrypted; every entry is flushed, with failures
+                // collected.
+                fileManager.flushSharedFiles();
+            } catch (IOException e) {
+                failure = e;
+            }
+            try {
+                wipeSecrets();
+            } finally {
+                if (ownsStore) {
+                    try {
+                        store.close();
+                    } catch (IOException e) {
+                        if (failure == null) {
+                            failure = e;
+                        } else {
+                            failure.addSuppressed(e);
+                        }
                     }
                 }
             }
-        }
-        if (failure != null) {
-            throw failure;
+            if (failure != null) {
+                throw failure;
+            }
+        } finally {
+            writeLock.unlock();
         }
     }
 }

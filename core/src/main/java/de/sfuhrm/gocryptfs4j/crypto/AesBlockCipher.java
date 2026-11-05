@@ -5,6 +5,8 @@ import org.bouncycastle.crypto.engines.AESEngine;
 import org.bouncycastle.crypto.params.KeyParameter;
 
 import java.util.Objects;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
  * AES-256 as a stateless {@link BlockCipher}, backed by BouncyCastle's
@@ -25,6 +27,9 @@ public final class AesBlockCipher implements BlockCipher {
 
     /** Whether this cipher has been wiped. */
     private volatile boolean wiped;
+
+    /** Guards operations against a concurrent {@link #wipe()}. */
+    private final ReentrantReadWriteLock stateLock = new ReentrantReadWriteLock();
 
     /**
      * Creates an AES-256 block cipher.
@@ -49,13 +54,20 @@ public final class AesBlockCipher implements BlockCipher {
      */
     @Override
     public void wipe() {
-        if (!wiped) {
-            wiped = true;
-            // Overwrite the engines' key schedules with an all-zero key; the
-            // real key is not retained by this class.
-            KeyParameter zero = new KeyParameter(new byte[Constants.KEY_LEN]);
-            encrypt.init(true, zero);
-            decrypt.init(false, zero);
+        Lock writeLock = stateLock.writeLock();
+        writeLock.lock();
+        try {
+            if (!wiped) {
+                wiped = true;
+                // Overwrite the engines' key schedules with an all-zero key;
+                // the real key is not retained by this class. No operation can
+                // be using the engines here because wipe holds the write lock.
+                KeyParameter zero = new KeyParameter(new byte[Constants.KEY_LEN]);
+                encrypt.init(true, zero);
+                decrypt.init(false, zero);
+            }
+        } finally {
+            writeLock.unlock();
         }
     }
 
@@ -83,8 +95,14 @@ public final class AesBlockCipher implements BlockCipher {
     public void encrypt(byte[] in, int inOff, byte[] out, int outOff) {
         Objects.requireNonNull(in, "in");
         Objects.requireNonNull(out, "out");
-        checkUsable();
-        encrypt.processBlock(in, inOff, out, outOff);
+        Lock readLock = stateLock.readLock();
+        readLock.lock();
+        try {
+            checkUsable();
+            encrypt.processBlock(in, inOff, out, outOff);
+        } finally {
+            readLock.unlock();
+        }
     }
 
     /**
@@ -101,8 +119,14 @@ public final class AesBlockCipher implements BlockCipher {
     public void decrypt(byte[] in, int inOff, byte[] out, int outOff) {
         Objects.requireNonNull(in, "in");
         Objects.requireNonNull(out, "out");
-        checkUsable();
-        decrypt.processBlock(in, inOff, out, outOff);
+        Lock readLock = stateLock.readLock();
+        readLock.lock();
+        try {
+            checkUsable();
+            decrypt.processBlock(in, inOff, out, outOff);
+        } finally {
+            readLock.unlock();
+        }
     }
 
     /**

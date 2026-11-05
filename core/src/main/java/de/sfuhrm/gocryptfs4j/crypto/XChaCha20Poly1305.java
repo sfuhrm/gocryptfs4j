@@ -10,6 +10,8 @@ import javax.crypto.AEADBadTagException;
 import java.security.GeneralSecurityException;
 import java.util.Arrays;
 import java.util.Objects;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
  * XChaCha20-Poly1305 helper matching Go's {@code chacha20poly1305.NewX}: a
@@ -21,8 +23,19 @@ public final class XChaCha20Poly1305 implements ContentCipher {
     /** A copy of the 32-byte key, kept so it can be wiped. */
     private final byte[] key;
 
+    /**
+     * An immutable copy of the key. It is deliberately created in the
+     * constructor and never rebuilt from {@link #key}, so wiping the mutable
+     * copy can never turn an in-flight encryption into an all-zero-key
+     * encryption.
+     */
+    private final KeyParameter keyParam;
+
     /** Whether this cipher has been wiped. */
     private volatile boolean wiped;
+
+    /** Guards operations against a concurrent {@link #wipe()}. */
+    private final ReentrantReadWriteLock stateLock = new ReentrantReadWriteLock();
 
     /** A thread-local cipher for encryption, reused because it is not thread-safe. */
     private final TrackedThreadLocal<AEADCipher> encryptCipher = new TrackedThreadLocal<>(
@@ -46,6 +59,7 @@ public final class XChaCha20Poly1305 implements ContentCipher {
                     + Constants.KEY_LEN + " bytes");
         }
         this.key = Arrays.copyOf(key, key.length);
+        this.keyParam = new KeyParameter(key);
     }
 
     /**
@@ -59,17 +73,24 @@ public final class XChaCha20Poly1305 implements ContentCipher {
      */
     @Override
     public void wipe() {
-        if (!wiped) {
-            wiped = true;
-            Arrays.fill(key, (byte) 0);
-            // Overwrite every scratch cipher with a zero key so the real key
-            // schedule can be garbage-collected.
-            KeyParameter zero = new KeyParameter(new byte[Constants.KEY_LEN]);
-            byte[] zeroNonce = new byte[Constants.XCHACHA_NONCE_LEN];
-            encryptCipher.wipeAll(c -> c.init(true,
-                    new AEADParameters(zero, Constants.AUTH_TAG_LEN * 8, zeroNonce)));
-            decryptCipher.wipeAll(c -> c.init(false,
-                    new AEADParameters(zero, Constants.AUTH_TAG_LEN * 8, zeroNonce)));
+        Lock writeLock = stateLock.writeLock();
+        writeLock.lock();
+        try {
+            if (!wiped) {
+                wiped = true;
+                Arrays.fill(key, (byte) 0);
+                // Overwrite every scratch cipher with a zero key so the real key
+                // schedule can be garbage-collected. No operation can be using a
+                // scratch cipher here because wipe holds the write lock.
+                KeyParameter zero = new KeyParameter(new byte[Constants.KEY_LEN]);
+                byte[] zeroNonce = new byte[Constants.XCHACHA_NONCE_LEN];
+                encryptCipher.wipeAll(c -> c.init(true,
+                        new AEADParameters(zero, Constants.AUTH_TAG_LEN * 8, zeroNonce)));
+                decryptCipher.wipeAll(c -> c.init(false,
+                        new AEADParameters(zero, Constants.AUTH_TAG_LEN * 8, zeroNonce)));
+            }
+        } finally {
+            writeLock.unlock();
         }
     }
 
@@ -111,18 +132,25 @@ public final class XChaCha20Poly1305 implements ContentCipher {
     public byte[] encrypt(byte[] plaintext, byte[] nonce, byte @Nullable [] aad) {
         Objects.requireNonNull(plaintext, "plaintext");
         Objects.requireNonNull(nonce, "nonce");
-        checkUsable();
-        checkNonce(nonce);
-        AEADCipher cipher = encryptCipher.get();
-        cipher.init(true, new AEADParameters(new KeyParameter(key), Constants.AUTH_TAG_LEN * 8, nonce, aad));
-        byte[] out = new byte[cipher.getOutputSize(plaintext.length)];
-        int len = cipher.processBytes(plaintext, 0, plaintext.length, out, 0);
+        Lock readLock = stateLock.readLock();
+        readLock.lock();
         try {
-            len += cipher.doFinal(out, len);
-        } catch (InvalidCipherTextException e) {
-            throw new IllegalStateException("XChaCha20-Poly1305 encryption failed", e);
+            checkUsable();
+            checkNonce(nonce);
+            AEADCipher cipher = encryptCipher.get();
+            cipher.init(true, new AEADParameters(keyParam, Constants.AUTH_TAG_LEN * 8, nonce, aad));
+            checkUsable();
+            byte[] out = new byte[cipher.getOutputSize(plaintext.length)];
+            int len = cipher.processBytes(plaintext, 0, plaintext.length, out, 0);
+            try {
+                len += cipher.doFinal(out, len);
+            } catch (InvalidCipherTextException e) {
+                throw new IllegalStateException("XChaCha20-Poly1305 encryption failed", e);
+            }
+            return out;
+        } finally {
+            readLock.unlock();
         }
-        return out;
     }
 
     /**
@@ -142,20 +170,27 @@ public final class XChaCha20Poly1305 implements ContentCipher {
     public byte[] decrypt(byte[] ciphertext, byte[] nonce, byte @Nullable [] aad) throws GeneralSecurityException {
         Objects.requireNonNull(ciphertext, "ciphertext");
         Objects.requireNonNull(nonce, "nonce");
-        checkUsable();
-        checkNonce(nonce);
-        AEADCipher cipher = decryptCipher.get();
-        cipher.init(false, new AEADParameters(new KeyParameter(key), Constants.AUTH_TAG_LEN * 8, nonce, aad));
-        byte[] out = new byte[cipher.getOutputSize(ciphertext.length)];
-        int len = cipher.processBytes(ciphertext, 0, ciphertext.length, out, 0);
+        Lock readLock = stateLock.readLock();
+        readLock.lock();
         try {
-            len += cipher.doFinal(out, len);
-        } catch (InvalidCipherTextException e) {
-            AEADBadTagException ex = new AEADBadTagException("XChaCha20-Poly1305 authentication failed");
-            ex.initCause(e);
-            throw ex;
+            checkUsable();
+            checkNonce(nonce);
+            AEADCipher cipher = decryptCipher.get();
+            cipher.init(false, new AEADParameters(keyParam, Constants.AUTH_TAG_LEN * 8, nonce, aad));
+            checkUsable();
+            byte[] out = new byte[cipher.getOutputSize(ciphertext.length)];
+            int len = cipher.processBytes(ciphertext, 0, ciphertext.length, out, 0);
+            try {
+                len += cipher.doFinal(out, len);
+            } catch (InvalidCipherTextException e) {
+                AEADBadTagException ex = new AEADBadTagException("XChaCha20-Poly1305 authentication failed");
+                ex.initCause(e);
+                throw ex;
+            }
+            return out;
+        } finally {
+            readLock.unlock();
         }
-        return out;
     }
 
     /**
@@ -176,20 +211,27 @@ public final class XChaCha20Poly1305 implements ContentCipher {
     @Override
     public int encrypt(byte[] in, int inOff, int inLen, byte[] nonce,
                        byte @Nullable [] aad, int aadOff, int aadLen, byte[] out, int outOff) {
-        checkUsable();
-        checkNonce(nonce);
-        AEADCipher cipher = encryptCipher.get();
-        cipher.init(true, new AEADParameters(new KeyParameter(key), Constants.AUTH_TAG_LEN * 8, nonce));
-        if (aadLen > 0) {
-            cipher.processAADBytes(aad, aadOff, aadLen);
-        }
-        int len = cipher.processBytes(in, inOff, inLen, out, outOff);
+        Lock readLock = stateLock.readLock();
+        readLock.lock();
         try {
-            len += cipher.doFinal(out, outOff + len);
-        } catch (InvalidCipherTextException e) {
-            throw new IllegalStateException("XChaCha20-Poly1305 encryption failed", e);
+            checkUsable();
+            checkNonce(nonce);
+            AEADCipher cipher = encryptCipher.get();
+            cipher.init(true, new AEADParameters(keyParam, Constants.AUTH_TAG_LEN * 8, nonce));
+            checkUsable();
+            if (aadLen > 0) {
+                cipher.processAADBytes(aad, aadOff, aadLen);
+            }
+            int len = cipher.processBytes(in, inOff, inLen, out, outOff);
+            try {
+                len += cipher.doFinal(out, outOff + len);
+            } catch (InvalidCipherTextException e) {
+                throw new IllegalStateException("XChaCha20-Poly1305 encryption failed", e);
+            }
+            return len;
+        } finally {
+            readLock.unlock();
         }
-        return len;
     }
 
     /**
@@ -212,21 +254,28 @@ public final class XChaCha20Poly1305 implements ContentCipher {
     public int decrypt(byte[] in, int inOff, int inLen, byte[] nonce,
                        byte @Nullable [] aad, int aadOff, int aadLen, byte[] out, int outOff)
             throws GeneralSecurityException {
-        checkUsable();
-        checkNonce(nonce);
-        AEADCipher cipher = decryptCipher.get();
-        cipher.init(false, new AEADParameters(new KeyParameter(key), Constants.AUTH_TAG_LEN * 8, nonce));
-        if (aadLen > 0) {
-            cipher.processAADBytes(aad, aadOff, aadLen);
-        }
-        int len = cipher.processBytes(in, inOff, inLen, out, outOff);
+        Lock readLock = stateLock.readLock();
+        readLock.lock();
         try {
-            len += cipher.doFinal(out, outOff + len);
-        } catch (InvalidCipherTextException e) {
-            AEADBadTagException ex = new AEADBadTagException("XChaCha20-Poly1305 authentication failed");
-            ex.initCause(e);
-            throw ex;
+            checkUsable();
+            checkNonce(nonce);
+            AEADCipher cipher = decryptCipher.get();
+            cipher.init(false, new AEADParameters(keyParam, Constants.AUTH_TAG_LEN * 8, nonce));
+            checkUsable();
+            if (aadLen > 0) {
+                cipher.processAADBytes(aad, aadOff, aadLen);
+            }
+            int len = cipher.processBytes(in, inOff, inLen, out, outOff);
+            try {
+                len += cipher.doFinal(out, outOff + len);
+            } catch (InvalidCipherTextException e) {
+                AEADBadTagException ex = new AEADBadTagException("XChaCha20-Poly1305 authentication failed");
+                ex.initCause(e);
+                throw ex;
+            }
+            return len;
+        } finally {
+            readLock.unlock();
         }
-        return len;
     }
 }

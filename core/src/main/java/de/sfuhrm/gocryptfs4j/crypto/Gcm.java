@@ -8,6 +8,8 @@ import javax.crypto.spec.SecretKeySpec;
 import java.security.GeneralSecurityException;
 import java.util.Arrays;
 import java.util.Objects;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
  * AES-256-GCM helper matching Go's {@code cipher.NewGCMWithNonceSize} with a
@@ -22,8 +24,19 @@ public final class Gcm implements ContentCipher {
     /** A copy of the AES key, kept so it can be wiped. */
     private final byte[] key;
 
+    /**
+     * An immutable copy of the AES key. It is deliberately created in the
+     * constructor and never rebuilt from {@link #key}, so wiping the mutable
+     * copy can never turn an in-flight encryption into an all-zero-key
+     * encryption.
+     */
+    private final SecretKeySpec keySpec;
+
     /** Whether this cipher has been wiped. */
     private volatile boolean wiped;
+
+    /** Guards operations against a concurrent {@link #wipe()}. */
+    private final ReentrantReadWriteLock stateLock = new ReentrantReadWriteLock();
 
     /** A thread-local cipher for encryption, reused because {@link Cipher} is not thread-safe. */
     private final TrackedThreadLocal<Cipher> encryptCipher = new TrackedThreadLocal<>(Gcm::newCipher);
@@ -58,6 +71,7 @@ public final class Gcm implements ContentCipher {
             throw new IllegalArgumentException("GCM key must be " + Constants.KEY_LEN + " bytes");
         }
         this.key = Arrays.copyOf(key, key.length);
+        this.keySpec = new SecretKeySpec(key, "AES");
     }
 
     /**
@@ -71,16 +85,23 @@ public final class Gcm implements ContentCipher {
      */
     @Override
     public void wipe() {
-        if (!wiped) {
-            wiped = true;
-            Arrays.fill(key, (byte) 0);
-            // Overwrite every scratch cipher with a zero key so the real key
-            // schedule can be garbage-collected.
-            SecretKeySpec zero = new SecretKeySpec(new byte[Constants.KEY_LEN], "AES");
-            GCMParameterSpec params = new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8,
-                    new byte[Constants.DEFAULT_IV_BITS / 8]);
-            encryptCipher.wipeAll(c -> zeroCipher(c, Cipher.ENCRYPT_MODE, zero, params));
-            decryptCipher.wipeAll(c -> zeroCipher(c, Cipher.DECRYPT_MODE, zero, params));
+        Lock writeLock = stateLock.writeLock();
+        writeLock.lock();
+        try {
+            if (!wiped) {
+                wiped = true;
+                Arrays.fill(key, (byte) 0);
+                // Overwrite every scratch cipher with a zero key so the real key
+                // schedule can be garbage-collected. No operation can be using a
+                // scratch cipher here because wipe holds the write lock.
+                SecretKeySpec zero = new SecretKeySpec(new byte[Constants.KEY_LEN], "AES");
+                GCMParameterSpec params = new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8,
+                        new byte[Constants.DEFAULT_IV_BITS / 8]);
+                encryptCipher.wipeAll(c -> zeroCipher(c, Cipher.ENCRYPT_MODE, zero, params));
+                decryptCipher.wipeAll(c -> zeroCipher(c, Cipher.DECRYPT_MODE, zero, params));
+            }
+        } finally {
+            writeLock.unlock();
         }
     }
 
@@ -126,17 +147,22 @@ public final class Gcm implements ContentCipher {
     public byte[] encrypt(byte[] plaintext, byte[] nonce, byte @Nullable [] aad) {
         Objects.requireNonNull(plaintext, "plaintext");
         Objects.requireNonNull(nonce, "nonce");
-        checkUsable();
+        Lock readLock = stateLock.readLock();
+        readLock.lock();
         try {
+            checkUsable();
             Cipher cipher = encryptCipher.get();
-            cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(key, "AES"),
+            cipher.init(Cipher.ENCRYPT_MODE, keySpec,
                     new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8, nonce));
+            checkUsable();
             if (aad != null && aad.length > 0) {
                 cipher.updateAAD(aad);
             }
             return cipher.doFinal(plaintext);
         } catch (GeneralSecurityException e) {
             throw new IllegalStateException("AES-GCM encryption failed", e);
+        } finally {
+            readLock.unlock();
         }
     }
 
@@ -157,14 +183,21 @@ public final class Gcm implements ContentCipher {
     public byte[] decrypt(byte[] ciphertext, byte[] nonce, byte @Nullable [] aad) throws GeneralSecurityException {
         Objects.requireNonNull(ciphertext, "ciphertext");
         Objects.requireNonNull(nonce, "nonce");
-        checkUsable();
-        Cipher cipher = decryptCipher.get();
-        cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "AES"),
-                new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8, nonce));
-        if (aad != null && aad.length > 0) {
-            cipher.updateAAD(aad);
+        Lock readLock = stateLock.readLock();
+        readLock.lock();
+        try {
+            checkUsable();
+            Cipher cipher = decryptCipher.get();
+            cipher.init(Cipher.DECRYPT_MODE, keySpec,
+                    new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8, nonce));
+            checkUsable();
+            if (aad != null && aad.length > 0) {
+                cipher.updateAAD(aad);
+            }
+            return cipher.doFinal(ciphertext);
+        } finally {
+            readLock.unlock();
         }
-        return cipher.doFinal(ciphertext);
     }
 
     /**
@@ -185,17 +218,22 @@ public final class Gcm implements ContentCipher {
     @Override
     public int encrypt(byte[] in, int inOff, int inLen, byte[] nonce,
                        byte @Nullable [] aad, int aadOff, int aadLen, byte[] out, int outOff) {
-        checkUsable();
+        Lock readLock = stateLock.readLock();
+        readLock.lock();
         try {
+            checkUsable();
             Cipher cipher = encryptCipher.get();
-            cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(key, "AES"),
+            cipher.init(Cipher.ENCRYPT_MODE, keySpec,
                     new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8, nonce));
+            checkUsable();
             if (aadLen > 0) {
                 cipher.updateAAD(aad, aadOff, aadLen);
             }
             return cipher.doFinal(in, inOff, inLen, out, outOff);
         } catch (GeneralSecurityException e) {
             throw new IllegalStateException("AES-GCM encryption failed", e);
+        } finally {
+            readLock.unlock();
         }
     }
 
@@ -219,13 +257,20 @@ public final class Gcm implements ContentCipher {
     public int decrypt(byte[] in, int inOff, int inLen, byte[] nonce,
                        byte @Nullable [] aad, int aadOff, int aadLen, byte[] out, int outOff)
             throws GeneralSecurityException {
-        checkUsable();
-        Cipher cipher = decryptCipher.get();
-        cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "AES"),
-                new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8, nonce));
-        if (aadLen > 0) {
-            cipher.updateAAD(aad, aadOff, aadLen);
+        Lock readLock = stateLock.readLock();
+        readLock.lock();
+        try {
+            checkUsable();
+            Cipher cipher = decryptCipher.get();
+            cipher.init(Cipher.DECRYPT_MODE, keySpec,
+                    new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8, nonce));
+            checkUsable();
+            if (aadLen > 0) {
+                cipher.updateAAD(aad, aadOff, aadLen);
+            }
+            return cipher.doFinal(in, inOff, inLen, out, outOff);
+        } finally {
+            readLock.unlock();
         }
-        return cipher.doFinal(in, inOff, inLen, out, outOff);
     }
 }
