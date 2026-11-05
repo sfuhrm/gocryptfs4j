@@ -1233,6 +1233,64 @@ public final class GocryptFs implements AutoCloseable {
     }
 
     /**
+     * Returns a copy of this filesystem's 32-byte master key for recovery.
+     *
+     * <p><strong>Security warning:</strong> the master key is the only secret
+     * needed to decrypt every file in the cipher directory. It cannot be
+     * recovered if lost, but it must never be logged, committed, sent over an
+     * untrusted channel or stored next to the ciphertext. Anyone who obtains
+     * it can read and modify the filesystem even without the password. Keep it
+     * in a secure offline location, separate from both the cipher directory
+     * and the {@code gocryptfs.conf} file.</p>
+     *
+     * <p>The returned array is a fresh copy owned by the caller and remains
+     * valid after this filesystem is closed. It is mutable so the caller can
+     * (and should) wipe it with {@link java.util.Arrays#fill(byte[], byte)}
+     * once it is no longer needed; this class does not retain or wipe it.</p>
+     *
+     * @return a newly allocated copy of the 32-byte master key
+     * @throws IllegalStateException if this filesystem has been closed
+     */
+    public byte[] exportMasterKey() {
+        Lock readLock = lock.readLock();
+        readLock.lock();
+        try {
+            ensureOpen();
+            return masterKey.clone();
+        } finally {
+            readLock.unlock();
+        }
+    }
+
+    /**
+     * Formats a master key like gocryptfs's master-key reminder: lowercase hex
+     * split into groups of eight hexadecimal digits separated by dashes.
+     *
+     * <p>The result can be passed directly to {@code gocryptfs -masterkey}, and
+     * {@code gocryptfs} ignores the dashes when parsing it.</p>
+     *
+     * @param masterKey the master key bytes
+     * @return the dash-separated hexadecimal representation
+     * @throws NullPointerException if {@code masterKey} is {@code null}
+     */
+    public static String formatMasterKey(byte[] masterKey) {
+        Objects.requireNonNull(masterKey, "masterKey");
+        StringBuilder hex = new StringBuilder(masterKey.length * 2);
+        for (byte b : masterKey) {
+            hex.append(Character.forDigit((b >>> 4) & 0x0f, 16));
+            hex.append(Character.forDigit(b & 0x0f, 16));
+        }
+        StringBuilder out = new StringBuilder(hex.length() + hex.length() / 8);
+        for (int i = 0; i < hex.length(); i += 8) {
+            if (i > 0) {
+                out.append('-');
+            }
+            out.append(hex, i, Math.min(i + 8, hex.length()));
+        }
+        return out.toString();
+    }
+
+    /**
      * Changes the password protecting this filesystem's master key and writes
      * the updated {@code gocryptfs.conf} atomically.
      *
@@ -1259,9 +1317,14 @@ public final class GocryptFs implements AutoCloseable {
         try {
             ensureOpen();
             ensureWritable();
+            String configName = PathResolver.join(rootName, Constants.CONF_DEFAULT_NAME);
+            // Keep the old config, like gocryptfs does when resetting a
+            // password with -masterkey, so a typo in the new password does not
+            // lock the user out before the new config has been verified.
+            byte[] previous = store.readSmall(configName, Constants.CONFIG_MAX_SIZE);
+            store.writeSmall(configName + ".bak", previous, true);
             ConfigFile updated = config.reencryptMasterKeyCopy(masterKey, password);
-            store.writeConfig(PathResolver.join(rootName, Constants.CONF_DEFAULT_NAME),
-                    updated.toBytes(), true);
+            store.writeConfig(configName, updated.toBytes(), true);
             config = updated;
         } finally {
             writeLock.unlock();
