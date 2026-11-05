@@ -47,6 +47,8 @@ public final class SharedCipherFile implements AutoCloseable {
          * All channels on this entry share it so their writes are coherent.
          */
         @Nullable volatile BlockCache cache;
+
+        @Nullable volatile IOException failure;
     }
 
     /** The shared entry this handle references. */
@@ -237,7 +239,13 @@ public final class SharedCipherFile implements AutoCloseable {
     static void flushEntry(Entry entry) throws IOException {
         BlockCache cache = entry.cache;
         if (cache != null) {
-            cache.flush();
+            try {
+                cache.flush();
+                entry.failure = null;
+            } catch (IOException e) {
+                entry.failure = e;
+                throw e;
+            }
         }
     }
 
@@ -259,19 +267,31 @@ public final class SharedCipherFile implements AutoCloseable {
             if (entry.refs == 0) {
                 CipherFile file = entry.file;
                 if (file != null) {
-                    try {
-                        BlockCache cache = entry.cache;
-                        if (cache != null) {
-                            try {
-                                cache.flush();
-                            } finally {
-                                cache.wipe();
-                            }
+                    IOException failure = null;
+                    BlockCache cache = entry.cache;
+                    if (cache != null) {
+                        try {
+                            flushEntry(entry);
+                        } catch (IOException e) {
+                            failure = e;
+                        } finally {
+                            cache.wipe();
                         }
-                    } finally {
-                        entry.file = null;
-                        entry.cache = null;
+                    }
+                    entry.file = null;
+                    entry.cache = null;
+                    try {
                         file.close();
+                    } catch (IOException e) {
+                        if (failure == null) {
+                            failure = e;
+                        } else {
+                            failure.addSuppressed(e);
+                        }
+                    }
+                    if (failure != null) {
+                        entry.failure = failure;
+                        throw failure;
                     }
                 }
             }

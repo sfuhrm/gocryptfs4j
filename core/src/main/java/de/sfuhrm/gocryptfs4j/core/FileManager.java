@@ -192,6 +192,7 @@ final class FileManager {
         synchronized (entry.lock) {
             if (entry.file == null) {
                 entry.file = CipherFile.open(store.open(cipherFile, writable), contentEnc, writable);
+                entry.failure = null;
                 entry.writable = writable;
             } else if (writable && !entry.writable) {
                 // A read-only shared file is already open (other read-only
