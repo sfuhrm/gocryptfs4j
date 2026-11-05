@@ -54,16 +54,39 @@ public final class SharedCipherFile implements AutoCloseable {
     /** The shared entry this handle references. */
     private final Entry entry;
 
+    /** When buffered writes are flushed to storage. */
+    private final SyncPolicy syncPolicy;
+
     /** Whether this handle has already been released. */
     private boolean closed;
 
     /**
-     * Creates a handle over the given shared entry.
+     * Creates a handle over the given shared entry, flushing on close.
      *
      * @param entry the shared entry
      */
     SharedCipherFile(Entry entry) {
+        this(entry, SyncPolicy.ON_CLOSE);
+    }
+
+    /**
+     * Creates a handle over the given shared entry.
+     *
+     * @param entry      the shared entry
+     * @param syncPolicy when buffered writes are flushed to storage
+     */
+    SharedCipherFile(Entry entry, SyncPolicy syncPolicy) {
         this.entry = Objects.requireNonNull(entry, "entry");
+        this.syncPolicy = SyncPolicy.orDefault(syncPolicy);
+    }
+
+    /**
+     * Returns when buffered writes are flushed to storage.
+     *
+     * @return the sync policy
+     */
+    public SyncPolicy getSyncPolicy() {
+        return syncPolicy;
     }
 
     /**
@@ -152,6 +175,7 @@ public final class SharedCipherFile implements AutoCloseable {
      * @throws IOException on filesystem errors
      */
     public void force(boolean metaData) throws IOException {
+        flushEntry(entry);
         file().force(metaData);
     }
 
@@ -167,6 +191,23 @@ public final class SharedCipherFile implements AutoCloseable {
      * @throws IllegalArgumentException if {@code position} is negative
      */
     public BlockBufferedChannel newChannel(long position, boolean writable) throws IOException {
+        return newChannel(position, writable, syncPolicy);
+    }
+
+    /**
+     * Opens a buffered, random-access channel over this file at the given
+     * plaintext position, using the given sync policy. The returned channel
+     * owns this handle; closing it releases this handle's reference.
+     *
+     * @param position   the initial plaintext position
+     * @param writable   whether the channel permits writes
+     * @param syncPolicy when buffered writes are flushed to storage
+     * @return the buffered channel
+     * @throws IOException on filesystem errors
+     * @throws IllegalArgumentException if {@code position} is negative
+     */
+    public BlockBufferedChannel newChannel(long position, boolean writable, SyncPolicy syncPolicy)
+            throws IOException {
         if (position < 0) {
             throw new IllegalArgumentException("negative position: " + position);
         }
@@ -178,7 +219,8 @@ public final class SharedCipherFile implements AutoCloseable {
                 entry.cache = cache;
             }
         }
-        BlockBufferedChannel ch = new BlockBufferedChannel(this, position, writable, cache);
+        BlockBufferedChannel ch = new BlockBufferedChannel(this, position, writable, cache,
+                SyncPolicy.orDefault(syncPolicy));
         return ch;
     }
 
@@ -189,6 +231,16 @@ public final class SharedCipherFile implements AutoCloseable {
      */
     void channelClosed() throws IOException {
         close();
+    }
+
+    /**
+     * Called by a channel on close with the channel's sync policy.
+     *
+     * @param syncPolicy the channel's sync policy
+     * @throws IOException on filesystem errors
+     */
+    void channelClosed(SyncPolicy syncPolicy) throws IOException {
+        release(SyncPolicy.orDefault(syncPolicy));
     }
 
     /**
@@ -234,19 +286,22 @@ public final class SharedCipherFile implements AutoCloseable {
      * Flushes the shared block cache of this entry.
      *
      * @param entry the shared entry
+     * @return {@code true} if a modified block was written
      * @throws IOException on filesystem or encryption errors
      */
-    static void flushEntry(Entry entry) throws IOException {
+    static boolean flushEntry(Entry entry) throws IOException {
         BlockCache cache = entry.cache;
         if (cache != null) {
             try {
-                cache.flush();
+                boolean wrote = cache.flush();
                 entry.failure = null;
+                return wrote;
             } catch (IOException e) {
                 entry.failure = e;
                 throw e;
             }
         }
+        return false;
     }
 
     /**
@@ -258,28 +313,58 @@ public final class SharedCipherFile implements AutoCloseable {
      */
     @Override
     public void close() throws IOException {
+        release(syncPolicy);
+    }
+
+    /**
+     * Releases this handle's reference using the given sync policy.
+     *
+     * @param syncPolicy when buffered writes are flushed to storage
+     * @throws IOException on filesystem errors
+     */
+    private void release(SyncPolicy syncPolicy) throws IOException {
         synchronized (entry.lock) {
             if (closed) {
                 return;
             }
             closed = true;
             entry.refs--;
-            if (entry.refs == 0) {
-                CipherFile file = entry.file;
+            boolean last = entry.refs == 0;
+            CipherFile file = entry.file;
+            BlockCache cache = entry.cache;
+            IOException failure = null;
+            boolean wrote = false;
+
+            // Flush on every channel close (the default policy), not only on
+            // the last one: a write() that closes its channel must be visible
+            // to other processes while another handle is still open. NONE
+            // keeps the old batching behaviour and flushes only at last close.
+            if (cache != null && file != null && (last || syncPolicy != SyncPolicy.NONE)) {
+                try {
+                    wrote = flushEntry(entry);
+                } catch (IOException e) {
+                    failure = e;
+                }
+            }
+
+            if (!last && file != null && failure == null && wrote
+                    && syncPolicy != SyncPolicy.NONE) {
+                try {
+                    file.force(true);
+                } catch (IOException e) {
+                    failure = e;
+                }
+            }
+
+            if (last) {
+                if (cache != null) {
+                    // No handle is left that could retry a failed flush, so do
+                    // not retain plaintext after the file itself is closed.
+                    cache.wipe();
+                }
+                entry.file = null;
+                entry.cache = null;
                 if (file != null) {
-                    IOException failure = null;
-                    BlockCache cache = entry.cache;
-                    if (cache != null) {
-                        try {
-                            flushEntry(entry);
-                        } catch (IOException e) {
-                            failure = e;
-                        } finally {
-                            cache.wipe();
-                        }
-                    }
-                    entry.file = null;
-                    entry.cache = null;
                     try {
                         file.close();
                     } catch (IOException e) {
@@ -289,11 +374,16 @@ public final class SharedCipherFile implements AutoCloseable {
                             failure.addSuppressed(e);
                         }
                     }
-                    if (failure != null) {
-                        entry.failure = failure;
-                        throw failure;
-                    }
                 }
+            } else if (failure != null) {
+                // Keep the dirty block so a later close or force on another
+                // still-open handle can retry the failed write.
+                entry.failure = failure;
+            }
+
+            if (failure != null) {
+                entry.failure = failure;
+                throw failure;
             }
         }
     }

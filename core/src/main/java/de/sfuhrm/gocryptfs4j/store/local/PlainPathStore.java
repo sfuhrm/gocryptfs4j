@@ -61,6 +61,11 @@ final class PlainPathStore implements CipherStore {
         return root.toString();
     }
 
+    @Override
+    public AutoCloseable lockRoot() throws IOException {
+        return RootFileLock.acquire(root);
+    }
+
     /**
      * Resolves a ciphertext name to a path within the root directory.
      *

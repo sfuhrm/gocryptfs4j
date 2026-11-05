@@ -83,6 +83,9 @@ final class FileManager {
      */
     private final Map<String, SharedCipherFile.Entry> sharedFiles = new ConcurrentHashMap<>();
 
+    /** When buffered writes of new handles are flushed to storage. */
+    private volatile SyncPolicy syncPolicy = SyncPolicy.ON_CLOSE;
+
     /**
      * Creates a file manager.
      *
@@ -105,6 +108,24 @@ final class FileManager {
         this.nameManager = Objects.requireNonNull(nameManager, "nameManager");
         this.directoryManager = Objects.requireNonNull(directoryManager, "directoryManager");
         this.pathResolver = Objects.requireNonNull(pathResolver, "pathResolver");
+    }
+
+    /**
+     * Returns when buffered writes of new handles are flushed to storage.
+     *
+     * @return the sync policy
+     */
+    SyncPolicy syncPolicy() {
+        return syncPolicy;
+    }
+
+    /**
+     * Sets when buffered writes of new handles are flushed to storage.
+     *
+     * @param syncPolicy the sync policy
+     */
+    void setSyncPolicy(SyncPolicy syncPolicy) {
+        this.syncPolicy = SyncPolicy.orDefault(syncPolicy);
     }
 
     // ------------------------------------------------------------------
@@ -169,9 +190,25 @@ final class FileManager {
      * @throws NullPointerException if {@code plainFile} is {@code null}
      */
     SharedCipherFile openCipherFile(String plainFile, boolean writable) throws IOException {
+        return openCipherFile(plainFile, writable, syncPolicy);
+    }
+
+    /**
+     * Opens a plaintext file for random access with an explicit sync policy.
+     *
+     * @param plainFile  the plaintext file path
+     * @param writable   whether to open for writing
+     * @param syncPolicy when buffered writes are flushed to storage
+     * @return the opened cipher file handle
+     * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code plainFile} or {@code syncPolicy} is {@code null}
+     */
+    SharedCipherFile openCipherFile(String plainFile, boolean writable, SyncPolicy syncPolicy)
+            throws IOException {
         Objects.requireNonNull(plainFile, "plainFile");
+        Objects.requireNonNull(syncPolicy, "syncPolicy");
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
-        return openCipherFileByName(r.cipherPath, writable);
+        return openCipherFileByName(r.cipherPath, writable, syncPolicy);
     }
 
     /**
@@ -186,7 +223,25 @@ final class FileManager {
      * @throws NullPointerException if {@code cipherFile} is {@code null}
      */
     SharedCipherFile openCipherFileByName(String cipherFile, boolean writable) throws IOException {
+        return openCipherFileByName(cipherFile, writable, syncPolicy);
+    }
+
+    /**
+     * Opens a cipher-side file for random access with an explicit sync policy,
+     * sharing one backing {@link CipherFile} (with reference counting) across
+     * all concurrently open handles on the same ciphertext path.
+     *
+     * @param cipherFile the ciphertext file name
+     * @param writable   whether to open for writing
+     * @param syncPolicy when buffered writes are flushed to storage on this handle
+     * @return the opened cipher file handle
+     * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code cipherFile} or {@code syncPolicy} is {@code null}
+     */
+    SharedCipherFile openCipherFileByName(String cipherFile, boolean writable,
+                                          SyncPolicy syncPolicy) throws IOException {
         Objects.requireNonNull(cipherFile, "cipherFile");
+        Objects.requireNonNull(syncPolicy, "syncPolicy");
         SharedCipherFile.Entry entry =
                 sharedFiles.computeIfAbsent(cipherFile, key -> new SharedCipherFile.Entry());
         synchronized (entry.lock) {
@@ -206,7 +261,7 @@ final class FileManager {
             }
             entry.refs++;
         }
-        return new SharedCipherFile(entry);
+        return new SharedCipherFile(entry, syncPolicy);
     }
 
     /**
@@ -221,9 +276,25 @@ final class FileManager {
      */
     private SeekableByteChannel openChannel(String cipherFile, long position, boolean writable)
             throws IOException {
-        SharedCipherFile cf = openCipherFileByName(cipherFile, writable);
+        return openChannel(cipherFile, position, writable, syncPolicy);
+    }
+
+    /**
+     * Opens a buffered channel at the given plaintext position with an explicit
+     * sync policy.
+     *
+     * @param cipherFile the ciphertext file name
+     * @param position   the initial plaintext position
+     * @param writable   whether the channel permits writes
+     * @param syncPolicy when buffered writes are flushed to storage
+     * @return the buffered channel
+     * @throws IOException on filesystem errors
+     */
+    private SeekableByteChannel openChannel(String cipherFile, long position, boolean writable,
+                                             SyncPolicy syncPolicy) throws IOException {
+        SharedCipherFile cf = openCipherFileByName(cipherFile, writable, syncPolicy);
         try {
-            return cf.newChannel(position, writable);
+            return cf.newChannel(position, writable, syncPolicy);
         } catch (IOException | RuntimeException e) {
             cf.close();
             throw e;
@@ -458,12 +529,26 @@ final class FileManager {
      * @throws NullPointerException if {@code plainFile} is {@code null}
      */
     OutputStream openWrite(String plainFile) throws IOException {
+        return openWrite(plainFile, syncPolicy);
+    }
+
+    /**
+     * Opens a streaming, encrypting output stream with an explicit sync policy.
+     *
+     * @param plainFile  the plaintext file path
+     * @param syncPolicy when buffered writes are flushed to storage
+     * @return the encrypting output stream
+     * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code plainFile} or {@code syncPolicy} is {@code null}
+     */
+    OutputStream openWrite(String plainFile, SyncPolicy syncPolicy) throws IOException {
         Objects.requireNonNull(plainFile, "plainFile");
+        Objects.requireNonNull(syncPolicy, "syncPolicy");
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
-        SharedCipherFile cf = openCipherFileByName(r.cipherPath, true);
+        SharedCipherFile cf = openCipherFileByName(r.cipherPath, true, syncPolicy);
         try {
             cf.truncate(0);
-            return Channels.newOutputStream(cf.newChannel(0, true));
+            return Channels.newOutputStream(cf.newChannel(0, true, syncPolicy));
         } catch (IOException | RuntimeException e) {
             cf.close();
             throw e;
@@ -481,14 +566,32 @@ final class FileManager {
      * @throws IllegalArgumentException if {@code offset} is negative
      */
     void write(String plainFile, long offset, byte[] data) throws IOException {
+        write(plainFile, offset, data, syncPolicy);
+    }
+
+    /**
+     * Writes {@code data} at plaintext {@code offset} with an explicit sync
+     * policy.
+     *
+     * @param plainFile  the plaintext file path
+     * @param offset     the plaintext offset to write at
+     * @param data       the data to write
+     * @param syncPolicy when buffered writes are flushed to storage
+     * @throws IOException on filesystem or encryption errors
+     * @throws NullPointerException if {@code plainFile}, {@code data} or {@code syncPolicy} is {@code null}
+     * @throws IllegalArgumentException if {@code offset} is negative
+     */
+    void write(String plainFile, long offset, byte[] data, SyncPolicy syncPolicy)
+            throws IOException {
         Objects.requireNonNull(plainFile, "plainFile");
         Objects.requireNonNull(data, "data");
+        Objects.requireNonNull(syncPolicy, "syncPolicy");
         if (offset < 0) {
             throw new IllegalArgumentException("negative offset: " + offset);
         }
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
         synchronized (fileLock(r.cipherPath)) {
-            try (SeekableByteChannel ch = openChannel(r.cipherPath, offset, true)) {
+            try (SeekableByteChannel ch = openChannel(r.cipherPath, offset, true, syncPolicy)) {
                 ByteBuffer buf = ByteBuffer.wrap(data);
                 while (buf.hasRemaining()) {
                     int n = ch.write(buf);
@@ -510,13 +613,28 @@ final class FileManager {
      * @throws IllegalArgumentException if {@code newSize} is negative
      */
     void truncate(String plainFile, long newSize) throws IOException {
+        truncate(plainFile, newSize, syncPolicy);
+    }
+
+    /**
+     * Truncates a plaintext file with an explicit sync policy.
+     *
+     * @param plainFile  the plaintext file path
+     * @param newSize    the new plaintext size in bytes
+     * @param syncPolicy when buffered writes are flushed to storage
+     * @throws IOException on filesystem or encryption errors
+     * @throws NullPointerException if {@code plainFile} or {@code syncPolicy} is {@code null}
+     * @throws IllegalArgumentException if {@code newSize} is negative
+     */
+    void truncate(String plainFile, long newSize, SyncPolicy syncPolicy) throws IOException {
         Objects.requireNonNull(plainFile, "plainFile");
+        Objects.requireNonNull(syncPolicy, "syncPolicy");
         if (newSize < 0) {
             throw new IllegalArgumentException("negative size: " + newSize);
         }
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
         synchronized (fileLock(r.cipherPath)) {
-            try (SharedCipherFile cf = openCipherFileByName(r.cipherPath, true)) {
+            try (SharedCipherFile cf = openCipherFileByName(r.cipherPath, true, syncPolicy)) {
                 cf.truncate(newSize);
             }
         }

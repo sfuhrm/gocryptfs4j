@@ -25,6 +25,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * An in-memory {@link CipherStore} backed by {@link Map}s.
@@ -62,6 +63,9 @@ public final class MapCipherStore implements CipherStore {
     /** Directory markers, including the empty root. */
     private final Set<String> dirs = ConcurrentHashMap.newKeySet();
 
+    /** Whether this store is currently open for writing by a filesystem. */
+    private final AtomicBoolean locked = new AtomicBoolean();
+
     /** Creates an empty store. */
     public MapCipherStore() {
         dirs.add("");
@@ -70,6 +74,14 @@ public final class MapCipherStore implements CipherStore {
     @Override
     public String root() {
         return "";
+    }
+
+    @Override
+    public AutoCloseable lockRoot() throws IOException {
+        if (!locked.compareAndSet(false, true)) {
+            throw new IOException("cipher directory is already open for writing");
+        }
+        return () -> locked.set(false);
     }
 
     @Override

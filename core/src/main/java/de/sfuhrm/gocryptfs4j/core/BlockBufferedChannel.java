@@ -29,6 +29,9 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
     /** The shared block cache holding the buffered block. */
     private final BlockCache cache;
 
+    /** When buffered writes are flushed to storage. */
+    private final SyncPolicy syncPolicy;
+
     /** The plaintext block size. */
     private final int blockSize;
 
@@ -50,11 +53,35 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
      * @param cache    the shared block cache
      */
     BlockBufferedChannel(SharedCipherFile file, long position, boolean writable, BlockCache cache) {
+        this(file, position, writable, cache, file.getSyncPolicy());
+    }
+
+    /**
+     * Creates a channel over the given shared file with an explicit sync policy.
+     *
+     * @param file       the shared file to read from and write to
+     * @param position   the initial plaintext position
+     * @param writable   whether the channel permits writes
+     * @param cache      the shared block cache
+     * @param syncPolicy when buffered writes are flushed to storage
+     */
+    BlockBufferedChannel(SharedCipherFile file, long position, boolean writable, BlockCache cache,
+                         SyncPolicy syncPolicy) {
         this.file = file;
         this.position = position;
         this.writable = writable;
         this.cache = cache;
+        this.syncPolicy = SyncPolicy.orDefault(syncPolicy);
         this.blockSize = cache.blockSize();
+    }
+
+    /**
+     * Returns when buffered writes are flushed to storage.
+     *
+     * @return the sync policy
+     */
+    public SyncPolicy getSyncPolicy() {
+        return syncPolicy;
     }
 
     /**
@@ -109,6 +136,9 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
         int len = Math.min(src.remaining(), blockSize - off);
         int w = cache.write(wanted, off, len, src);
         position += w;
+        if (syncPolicy == SyncPolicy.ALWAYS && cache.flush()) {
+            file.force(true);
+        }
         return w;
     }
 
@@ -175,6 +205,9 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
         long current = file.effectiveSize();
         if (size < current) {
             file.truncate(size);
+            if (syncPolicy == SyncPolicy.ALWAYS) {
+                file.force(true);
+            }
         }
         if (position > size) {
             position = size;
@@ -215,8 +248,8 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
 
     /**
      * Closes the channel and releases the underlying shared file. The shared
-     * block cache is flushed (and wiped) when the last handle on the shared file
-     * is released.
+     * block cache is flushed according to the sync policy, and wiped when the
+     * last handle on the shared file is released.
      *
      * @throws IOException on filesystem errors
      */
@@ -226,6 +259,6 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
             return;
         }
         open = false;
-        file.channelClosed();
+        file.channelClosed(syncPolicy);
     }
 }

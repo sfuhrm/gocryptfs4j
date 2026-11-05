@@ -102,6 +102,11 @@ final class SecurePathStore implements CipherStore {
     }
 
     @Override
+    public AutoCloseable lockRoot() throws IOException {
+        return RootFileLock.acquire(root);
+    }
+
+    @Override
     public byte[] readSmall(String name, int maxBytes) throws IOException {
         Objects.requireNonNull(name, "name");
         try (SecurePath parent = requireParent(name)) {

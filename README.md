@@ -207,6 +207,13 @@ try-with-resources as shown above. Other operations include `size`, `truncate`,
 streaming decrypting `InputStream`) and `openWrite` (a streaming encrypting
 `OutputStream`).
 
+A writable `GocryptFs` holds an exclusive advisory lock on its cipher directory
+for its whole lifetime. A second writable instance, whether in the same JVM or
+in another process, fails to open until the first one is closed. Use
+`GocryptFs.openReadOnly(store, password)` (or the equivalent `boolean readOnly`
+overload) for a reader that takes no lock and never writes, including on
+read-only media; it may coexist with a writable instance.
+
 Passwords are encoded as UTF-8 before they reach scrypt, matching the raw bytes
 gocryptfs reads from a UTF-8 terminal, passfile or extpass program. Non-ASCII
 passwords, such as German umlauts, therefore interoperate with gocryptfs.
@@ -263,6 +270,10 @@ plaintext name contains a backslash (legal on Linux) can be both listed and
 opened. Set the `windowsSeparators` environment key to `true` (or use the
 `newFileSystem(Path, char[], boolean)` overload) to treat `\` as a path
 separator, as on Windows.
+
+Set the `readOnly` environment key to `true` (or use the
+`newFileSystem(Path, char[], boolean, boolean)` overload) to open the NIO view
+without a writer lock and reject writes.
 
 > Note: the NIO view exposes basic attributes (type, size, times) and, when the
 > backing filesystem supports it, the POSIX attributes (permissions, owner and

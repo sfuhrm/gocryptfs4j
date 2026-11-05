@@ -47,6 +47,22 @@ class PathCipherStoreTest {
     Path tmp;
 
     @Test
+    void lockRootIsExclusivePerRootAndReleasedOnClose() throws Exception {
+        Path dir = Files.createDirectory(tmp.resolve("cipher"));
+        PathCipherStore first = new PathCipherStore(dir);
+        PathCipherStore second = new PathCipherStore(dir);
+
+        try (AutoCloseable ignored = first.lockRoot()) {
+            assertThrows(IOException.class, second::lockRoot,
+                    "a second lock on the same root must fail");
+        }
+
+        try (AutoCloseable ignored = second.lockRoot()) {
+            // The lock is available again after the first handle was closed.
+        }
+    }
+
+    @Test
     void readSmallReadsRegularFile() throws Exception {
         Path dir = Files.createDirectory(tmp.resolve("cipher"));
         Path file = dir.resolve("f");

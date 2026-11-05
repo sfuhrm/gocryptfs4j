@@ -50,6 +50,9 @@ public final class GocryptFsFileSystem extends FileSystem {
     /** The absolute, normalized cipher directory key. */
     private final String key;
 
+    /** The key under which this filesystem is registered with the provider. */
+    private final String registrationKey;
+
     /** The URI identifying this filesystem. */
     private final URI uri;
 
@@ -86,17 +89,45 @@ public final class GocryptFsFileSystem extends FileSystem {
      */
     GocryptFsFileSystem(GocryptFsProvider provider, CipherStore store, GocryptFs core,
                         String key, boolean windowsSeparators) {
+        this(provider, store, core, key, windowsSeparators, false);
+    }
+
+    /**
+     * Creates a filesystem. Called by the provider when a cipher directory is
+     * opened.
+     *
+     * @param provider          the provider that created this filesystem
+     * @param store             the backing cipher store, owned and closed by this filesystem
+     * @param core              the core gocryptfs instance
+     * @param key               the absolute, normalized cipher directory key
+     * @param windowsSeparators whether {@code "\"} is treated as a path separator
+     * @param readOnlyRequested whether the caller explicitly opened it read-only
+     */
+    GocryptFsFileSystem(GocryptFsProvider provider, CipherStore store, GocryptFs core,
+                        String key, boolean windowsSeparators, boolean readOnlyRequested) {
         this.provider = provider;
         this.store = store;
         this.core = core;
         this.key = key;
+        this.registrationKey = readOnlyRequested ? readOnlyKey(key) : key;
         this.windowsSeparators = windowsSeparators;
         this.uri = URI.create("gocryptfs://" + urlEncode(key) + "/");
         this.root = GocryptFsPath.absolute(this, "/");
         this.userPrincipalLookupService = new GocryptFsUserPrincipalLookupService();
         FileStore backingStore = fileStore(key);
         this.supportsPosix = backingStore != null && backingStore.supportsFileAttributeView("posix");
-        this.readOnly = backingStore != null && backingStore.isReadOnly();
+        this.readOnly = readOnlyRequested
+                || (backingStore != null && backingStore.isReadOnly());
+    }
+
+    /**
+     * Returns the provider registration key for a read-only filesystem.
+     *
+     * @param key the absolute, normalized cipher directory key
+     * @return the registration key
+     */
+    static String readOnlyKey(String key) {
+        return key + "\u0000read-only";
     }
 
     /**
@@ -173,6 +204,17 @@ public final class GocryptFsFileSystem extends FileSystem {
      */
     String key() {
         return key;
+    }
+
+    /**
+     * Returns the key under which this filesystem is registered with the
+     * provider. Read-only filesystems use a distinct key so they can coexist
+     * with a writable filesystem on the same cipher directory.
+     *
+     * @return the provider registration key
+     */
+    String registrationKey() {
+        return registrationKey;
     }
 
     /**

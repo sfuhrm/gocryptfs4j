@@ -74,15 +74,18 @@ final class BlockCache {
      * Flushes the cached block back to the file if it was modified, then
      * invalidates it so the next access reloads the current content.
      *
+     * @return {@code true} if a modified block was written
      * @throws IOException on filesystem or encryption errors
      */
-    synchronized void flush() throws IOException {
+    synchronized boolean flush() throws IOException {
+        boolean wrote = dirty;
         if (dirty) {
             file().writeBlock(blockNo, block, 0, blockLen);
         }
         blockNo = -1;
         blockLen = 0;
         dirty = false;
+        return wrote;
     }
 
     /**

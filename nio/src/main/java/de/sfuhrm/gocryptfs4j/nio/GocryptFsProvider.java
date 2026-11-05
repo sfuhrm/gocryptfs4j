@@ -65,7 +65,9 @@ import java.util.concurrent.locks.Lock;
  * for password-protected filesystems or {@code fido2Token} (a
  * {@link Fido2Token}) for FIDO2-protected ones. The optional
  * {@code windowsSeparators} entry (a {@code Boolean}) controls whether
- * backslashes are treated as path separators.</p>
+ * backslashes are treated as path separators, and the optional {@code readOnly}
+ * entry (a {@code Boolean}) opens the filesystem without a writer lock and for
+ * reading only.</p>
  *
  * <p>This provider only backs the cipher directory with a local
  * {@link PathCipherStore}, so {@code cipherDir} must refer to a directory on a
@@ -111,17 +113,36 @@ public final class GocryptFsProvider extends FileSystemProvider {
      */
     public FileSystem newFileSystem(Path cipherDir, char[] password, boolean windowsSeparators)
             throws IOException {
+        return newFileSystem(cipherDir, password, windowsSeparators, false);
+    }
+
+    /**
+     * Opens a filesystem directly, without a URI, optionally read-only.
+     *
+     * @param cipherDir         the ciphertext directory
+     * @param password          the password to unlock the master key with
+     * @param windowsSeparators whether {@code "\"} is treated as a path separator
+     * @param readOnly          whether to open without a writer lock and for reading only
+     * @return the opened filesystem
+     * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code cipherDir} or {@code password} is {@code null}
+     */
+    public FileSystem newFileSystem(Path cipherDir, char[] password, boolean windowsSeparators,
+                                    boolean readOnly) throws IOException {
         Objects.requireNonNull(cipherDir, "cipherDir");
         Objects.requireNonNull(password, "password");
+        ensureNotRegistered(cipherDir, readOnly);
         PathCipherStore store = new PathCipherStore(cipherDir);
         GocryptFs core;
         try {
-            core = GocryptFs.open(store, password);
+            core = readOnly
+                    ? GocryptFs.openReadOnly(store, password)
+                    : GocryptFs.open(store, password);
         } catch (IOException | RuntimeException e) {
             closeQuietly(store);
             throw e;
         }
-        return register(cipherDir, store, core, windowsSeparators);
+        return register(cipherDir, store, core, windowsSeparators, readOnly);
     }
 
     /**
@@ -149,17 +170,59 @@ public final class GocryptFsProvider extends FileSystemProvider {
      */
     public FileSystem newFileSystem(Path cipherDir, Fido2Token token, boolean windowsSeparators)
             throws IOException {
+        return newFileSystem(cipherDir, token, windowsSeparators, false);
+    }
+
+    /**
+     * Opens a FIDO2-protected filesystem directly, without a URI, optionally
+     * read-only.
+     *
+     * @param cipherDir         the ciphertext directory
+     * @param token             the FIDO2 token implementation to unlock the master key with
+     * @param windowsSeparators whether {@code "\"} is treated as a path separator
+     * @param readOnly          whether to open without a writer lock and for reading only
+     * @return the opened filesystem
+     * @throws IOException on filesystem errors or if the token interaction fails
+     * @throws NullPointerException if {@code cipherDir} or {@code token} is {@code null}
+     */
+    public FileSystem newFileSystem(Path cipherDir, Fido2Token token, boolean windowsSeparators,
+                                    boolean readOnly) throws IOException {
         Objects.requireNonNull(cipherDir, "cipherDir");
         Objects.requireNonNull(token, "token");
+        ensureNotRegistered(cipherDir, readOnly);
         PathCipherStore store = new PathCipherStore(cipherDir);
         GocryptFs core;
         try {
-            core = GocryptFs.open(store, token);
+            core = readOnly
+                    ? GocryptFs.openReadOnly(store, token)
+                    : GocryptFs.open(store, token);
         } catch (IOException | RuntimeException e) {
             closeQuietly(store);
             throw e;
         }
-        return register(cipherDir, store, core, windowsSeparators);
+        return register(cipherDir, store, core, windowsSeparators, readOnly);
+    }
+
+    /**
+     * Fails early if a filesystem for the cipher directory is already open
+     * under this provider, so that the public provider contract reports
+     * {@link FileSystemAlreadyExistsException} rather than a writer-lock
+     * conflict. A read-only filesystem uses a distinct registration key and may
+     * coexist with a writable one.
+     *
+     * @param cipherDir the ciphertext directory
+     * @param readOnly  whether the caller requests a read-only filesystem
+     * @throws IOException if the real path cannot be resolved
+     * @throws FileSystemAlreadyExistsException if the requested filesystem is already open
+     */
+    private void ensureNotRegistered(Path cipherDir, boolean readOnly) throws IOException {
+        String key = cipherDir.toRealPath().toString();
+        String registrationKey = readOnly
+                ? GocryptFsFileSystem.readOnlyKey(key)
+                : key;
+        if (filesystems.containsKey(registrationKey)) {
+            throw new FileSystemAlreadyExistsException(key);
+        }
     }
 
     /**
@@ -174,13 +237,14 @@ public final class GocryptFsProvider extends FileSystemProvider {
      * @throws IOException if the real path of the cipher directory cannot be resolved
      */
     private FileSystem register(Path cipherDir, CipherStore store, GocryptFs core,
-                                boolean windowsSeparators) throws IOException {
+                                boolean windowsSeparators, boolean readOnly) throws IOException {
         boolean takenOver = false;
         try {
             String key = cipherDir.toRealPath().toString();
             GocryptFsFileSystem fs = new GocryptFsFileSystem(this, store, core, key,
-                    windowsSeparators);
-            GocryptFsFileSystem existing = filesystems.putIfAbsent(key, fs);
+                    windowsSeparators, readOnly);
+            GocryptFsFileSystem existing =
+                    filesystems.putIfAbsent(fs.registrationKey(), fs);
             if (existing != null) {
                 throw new FileSystemAlreadyExistsException(key);
             }
@@ -226,7 +290,9 @@ public final class GocryptFsProvider extends FileSystemProvider {
      * (a {@code char[]}) or {@code fido2Token} (a {@link Fido2Token}). The
      * optional {@code windowsSeparators} entry (a {@code Boolean}, default
      * {@code false}) controls whether {@code "\"} is treated as a path
-     * separator.</p>
+     * separator, and the optional {@code readOnly} entry (a {@code Boolean},
+     * default {@code false}) opens the filesystem without a writer lock and for
+     * reading only.</p>
      *
      * @throws NullPointerException if {@code uri} is {@code null}
      * @throws IllegalArgumentException if the scheme is not {@code gocryptfs}, the
@@ -244,6 +310,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
         Object password = env == null ? null : env.get("password");
         Object fido2Token = env == null ? null : env.get("fido2Token");
         Object windowsSeparators = env == null ? null : env.get("windowsSeparators");
+        Object readOnly = env == null ? null : env.get("readOnly");
         if (cipherDir == null) {
             throw new IllegalArgumentException("environment must contain 'cipherDir'");
         }
@@ -260,17 +327,24 @@ public final class GocryptFsProvider extends FileSystemProvider {
             }
             wsep = (Boolean) windowsSeparators;
         }
+        boolean ro = false;
+        if (readOnly != null) {
+            if (!(readOnly instanceof Boolean)) {
+                throw new IllegalArgumentException("readOnly must be a Boolean");
+            }
+            ro = (Boolean) readOnly;
+        }
         if (password != null) {
             if (!(password instanceof char[])) {
                 throw new IllegalArgumentException("password must be a char[]");
             }
-            return newFileSystem(dir, (char[]) password, wsep);
+            return newFileSystem(dir, (char[]) password, wsep, ro);
         }
         if (fido2Token != null) {
             if (!(fido2Token instanceof Fido2Token)) {
                 throw new IllegalArgumentException("fido2Token must be a Fido2Token");
             }
-            return newFileSystem(dir, (Fido2Token) fido2Token, wsep);
+            return newFileSystem(dir, (Fido2Token) fido2Token, wsep, ro);
         }
         throw new IllegalArgumentException("environment must contain 'password' or 'fido2Token'");
     }
@@ -287,8 +361,11 @@ public final class GocryptFsProvider extends FileSystemProvider {
         // absolute cipher paths), so use the raw authority, not getHost()
         // which returns null for percent-encoded authorities.
         String authority = uri.getRawAuthority();
-        GocryptFsFileSystem fs = authority == null
-                ? null : filesystems.get(GocryptFsFileSystem.urlDecode(authority));
+        String key = authority == null ? null : GocryptFsFileSystem.urlDecode(authority);
+        GocryptFsFileSystem fs = key == null ? null : filesystems.get(key);
+        if (fs == null && key != null) {
+            fs = filesystems.get(GocryptFsFileSystem.readOnlyKey(key));
+        }
         if (fs == null) {
             throw new java.nio.file.FileSystemNotFoundException("no filesystem for " + uri);
         }
@@ -317,7 +394,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
      * @param fs the filesystem to remove
      */
     void remove(GocryptFsFileSystem fs) {
-        filesystems.remove(fs.key(), fs);
+        filesystems.remove(fs.registrationKey(), fs);
     }
 
     // ------------------------------------------------------------------

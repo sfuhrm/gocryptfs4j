@@ -56,6 +56,34 @@ public interface CipherStore extends AutoCloseable {
     String root();
 
     /**
+     * Acquires an exclusive, advisory lock on the store root for the lifetime
+     * of a writable filesystem.
+     *
+     * <p>This is a capability: a store that can coordinate writers (for example
+     * a local directory using an advisory file lock, or a remote backend using
+     * a lease) should override it and fail with an {@link IOException} when the
+     * root is already locked by another instance or process. The returned
+     * handle releases the lock when closed, and closing it more than once must
+     * be harmless. Read-only filesystems never call this method.</p>
+     *
+     * <p>The default implementation returns a no-op handle so existing custom
+     * and in-memory stores keep working. Such a store does not provide
+     * cross-process protection; callers that need it should use a store that
+     * overrides this method. Implementations should also coordinate multiple
+     * instances within the same JVM, because an advisory file lock acquired by
+     * the same JVM is reported as an overlapping lock rather than as
+     * contention.</p>
+     *
+     * @return a handle that releases the root lock when closed
+     * @throws IOException if the root is already locked
+     */
+    default AutoCloseable lockRoot() throws IOException {
+        return () -> {
+            // No locking capability.
+        };
+    }
+
+    /**
      * Reads a small ciphertext control file, refusing to buffer more than
      * {@code maxBytes} bytes.
      *

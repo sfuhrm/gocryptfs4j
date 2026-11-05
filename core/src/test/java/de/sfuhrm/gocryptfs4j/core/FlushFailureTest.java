@@ -45,6 +45,33 @@ class FlushFailureTest {
     }
 
     @Test
+    void failedFlushKeepsBlockForAnotherOpenHandleToRetry() throws Exception {
+        FailingWriteStore store = new FailingWriteStore();
+        ManagerHarness h = ManagerHarness.encrypted(store);
+        h.fileManager.createFile("/f.txt");
+
+        SharedCipherFile a = h.fileManager.openCipherFile("/f.txt", true);
+        BlockBufferedChannel ca = a.newChannel(0, true);
+        byte[] payload = new byte[100];
+        java.util.Arrays.fill(payload, (byte) 0x5a);
+        ca.write(ByteBuffer.wrap(payload));
+        BlockCache cache = cacheOf(ca);
+
+        SharedCipherFile b = h.fileManager.openCipherFile("/f.txt", true);
+
+        store.failWrites = true;
+        assertThrows(IOException.class, ca::close);
+        assertEquals(0x5a, blockOf(cache)[0], "the dirty block must be retained for a retry");
+
+        store.failWrites = false;
+        b.close();
+
+        byte[] read = h.fileManager.readAll("/f.txt");
+        assertEquals(payload.length, read.length);
+        assertEquals(0x5a, read[0]);
+    }
+
+    @Test
     void flushFailureDoesNotStopRemainingEntries() throws Exception {
         FailingWriteStore store = new FailingWriteStore();
         ManagerHarness h = ManagerHarness.encrypted(store);

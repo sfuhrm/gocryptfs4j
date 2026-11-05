@@ -18,6 +18,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.URI;
+import java.nio.file.AccessDeniedException;
 import java.nio.file.AccessMode;
 import java.nio.file.attribute.FileTime;
 import java.nio.file.attribute.GroupPrincipal;
@@ -63,6 +64,13 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * instance and is closed by {@link #close()}, so remote backends (the point of
  * the SPI) do not leak connections.</p>
  *
+ * <p>A writable instance holds an exclusive writer lock on the store root for
+ * its lifetime (see {@link CipherStore#lockRoot()}); opening the same cipher
+ * directory for writing a second time fails until the first instance is closed.
+ * An instance opened through {@link #openReadOnly} takes no lock and rejects
+ * every mutating operation, so a reader can coexist with a writer and can use
+ * read-only media.</p>
+ *
  * <p>Sensitive input buffers supplied by the caller &mdash; the password
  * {@code char[]} and the raw master-key {@code byte[]} &mdash; are read but
  * neither retained nor wiped by this class: the caller keeps ownership of them
@@ -100,6 +108,15 @@ public final class GocryptFs implements AutoCloseable {
 
     /** The ciphertext root name, as returned by {@link CipherStore#root()}. */
     private final String rootName;
+
+    /** Whether this filesystem was opened read-only. */
+    private final boolean readOnly;
+
+    /**
+     * The writer lock held for the lifetime of this filesystem, or {@code null}
+     * for a read-only instance.
+     */
+    private final @Nullable CipherRootLock rootLock;
 
     /** The parsed configuration file. */
     private ConfigFile config;
@@ -150,6 +167,9 @@ public final class GocryptFs implements AutoCloseable {
      */
     private volatile boolean closed;
 
+    /** When buffered writes of newly opened handles are flushed to storage. */
+    private volatile SyncPolicy syncPolicy = SyncPolicy.ON_CLOSE;
+
     /**
      * Throws if this filesystem has been closed.
      *
@@ -162,6 +182,66 @@ public final class GocryptFs implements AutoCloseable {
     }
 
     /**
+     * Throws if this filesystem was opened read-only.
+     *
+     * @throws IOException if this filesystem is read-only
+     */
+    private void ensureWritable() throws IOException {
+        if (readOnly) {
+            throw new IOException("filesystem is read-only");
+        }
+    }
+
+    /**
+     * Returns when buffered writes of newly opened handles are flushed to
+     * storage. The default is {@link SyncPolicy#ON_CLOSE}.
+     *
+     * @return the sync policy
+     */
+    public SyncPolicy getSyncPolicy() {
+        return syncPolicy;
+    }
+
+    /**
+     * Sets when buffered writes of newly opened handles are flushed to storage.
+     * Handles that are already open keep the policy they were opened with.
+     *
+     * @param syncPolicy the sync policy
+     * @throws NullPointerException if {@code syncPolicy} is {@code null}
+     */
+    public void setSyncPolicy(SyncPolicy syncPolicy) {
+        this.syncPolicy = Objects.requireNonNull(syncPolicy, "syncPolicy");
+        fileManager.setSyncPolicy(syncPolicy);
+    }
+
+    /**
+     * Sets the sync policy and returns this filesystem.
+     *
+     * @param syncPolicy the sync policy
+     * @return this filesystem
+     * @throws NullPointerException if {@code syncPolicy} is {@code null}
+     */
+    public GocryptFs withSyncPolicy(SyncPolicy syncPolicy) {
+        setSyncPolicy(syncPolicy);
+        return this;
+    }
+
+    /**
+     * Closes a resource, ignoring failures.
+     *
+     * @param closeable the resource to close, or {@code null}
+     */
+    private static void closeQuietly(@Nullable AutoCloseable closeable) {
+        if (closeable != null) {
+            try {
+                closeable.close();
+            } catch (Exception ignored) {
+                // Best-effort cleanup on a failure path.
+            }
+        }
+    }
+
+    /**
      * Creates an instance, called after the master key has been unlocked.
      *
      * @param store     the ciphertext-side store
@@ -169,7 +249,7 @@ public final class GocryptFs implements AutoCloseable {
      * @param masterKey the 32-byte master key
      */
     private GocryptFs(CipherStore store, ConfigFile config, byte[] masterKey) {
-        this(store, config, masterKey, false);
+        this(store, config, masterKey, false, false, null);
     }
 
     /**
@@ -182,6 +262,23 @@ public final class GocryptFs implements AutoCloseable {
      *                  it on {@link #close()}
      */
     private GocryptFs(CipherStore store, ConfigFile config, byte[] masterKey, boolean ownsStore) {
+        this(store, config, masterKey, ownsStore, false, null);
+    }
+
+    /**
+     * Creates an instance, called after the master key has been unlocked and,
+     * for a writable filesystem, the root lock has been acquired.
+     *
+     * @param store     the ciphertext-side store
+     * @param config    the parsed configuration
+     * @param masterKey the 32-byte master key
+     * @param ownsStore whether this instance owns {@code store} and must close
+     *                  it on {@link #close()}
+     * @param readOnly  whether the filesystem is read-only
+     * @param rootLock  the writer lock, or {@code null} for a read-only instance
+     */
+    private GocryptFs(CipherStore store, ConfigFile config, byte[] masterKey, boolean ownsStore,
+                      boolean readOnly, @Nullable CipherRootLock rootLock) {
         String root = store.root();
         boolean plainNames = config.plaintextNames();
         boolean dirIv = config.dirIv();
@@ -209,6 +306,8 @@ public final class GocryptFs implements AutoCloseable {
             this.config = config;
             this.masterKey = masterKey;
             this.ownsStore = ownsStore;
+            this.readOnly = readOnly;
+            this.rootLock = rootLock;
             this.plaintextNames = plainNames;
             this.eme = emeHelper;
             this.contentEnc = contentEncHelper;
@@ -219,6 +318,7 @@ public final class GocryptFs implements AutoCloseable {
                     this.nameManager, this.directoryManager);
             this.fileManager = new FileManager(store, contentEncHelper, nameTransformHelper,
                     plainNames, this.nameManager, this.directoryManager, this.pathResolver);
+            this.fileManager.setSyncPolicy(syncPolicy);
             this.directoryManager.setFileManager(this.fileManager);
             constructed = true;
         } finally {
@@ -251,7 +351,106 @@ public final class GocryptFs implements AutoCloseable {
     public static GocryptFs open(CipherStore store, char[] password) throws IOException {
         Objects.requireNonNull(store, "store");
         Objects.requireNonNull(password, "password");
-        return open(store, password, false);
+        return open(store, password, false, false);
+    }
+
+    /**
+     * Opens an existing cipher store, optionally read-only.
+     *
+     * <p>A read-only filesystem takes no writer lock and never writes to the
+     * cipher directory. Mutating operations fail with an {@link IOException}.
+     * Use this mode for media that cannot be written and for readers that must
+     * coexist with a writable instance or mount.</p>
+     *
+     * @param store    the ciphertext-side store
+     * @param password the password to unlock the master key with, encoded as
+     *                 UTF-8; read but neither retained nor wiped by this class
+     * @param readOnly whether to open without a writer lock and for reading only
+     * @return the opened filesystem
+     * @throws IOException if the config is missing, the password is wrong or the filesystem is corrupt
+     * @throws NullPointerException if {@code store} or {@code password} is {@code null}
+     */
+    public static GocryptFs open(CipherStore store, char[] password, boolean readOnly)
+            throws IOException {
+        Objects.requireNonNull(store, "store");
+        Objects.requireNonNull(password, "password");
+        return open(store, password, false, readOnly);
+    }
+
+    /**
+     * Opens an existing cipher store read-only.
+     *
+     * @param store    the ciphertext-side store
+     * @param password the password to unlock the master key with
+     * @return the opened read-only filesystem
+     * @throws IOException if the config is missing, the password is wrong or the filesystem is corrupt
+     * @throws NullPointerException if {@code store} or {@code password} is {@code null}
+     */
+    public static GocryptFs openReadOnly(CipherStore store, char[] password) throws IOException {
+        return open(store, password, true);
+    }
+
+    /**
+     * Opens an existing cipher store with an explicit sync policy.
+     *
+     * @param store      the ciphertext-side store
+     * @param password   the password to unlock the master key with
+     * @param syncPolicy when buffered writes are flushed to storage
+     * @return the opened filesystem
+     * @throws IOException if the config is missing, the password is wrong or the filesystem is corrupt
+     * @throws NullPointerException if {@code store}, {@code password} or {@code syncPolicy} is {@code null}
+     */
+    public static GocryptFs open(CipherStore store, char[] password, SyncPolicy syncPolicy)
+            throws IOException {
+        return open(store, password, false, syncPolicy);
+    }
+
+    /**
+     * Opens an existing cipher store with an explicit sync policy.
+     *
+     * @param store      the ciphertext-side store
+     * @param password   the password to unlock the master key with
+     * @param readOnly   whether to open without a writer lock and for reading only
+     * @param syncPolicy when buffered writes are flushed to storage
+     * @return the opened filesystem
+     * @throws IOException if the config is missing, the password is wrong or the filesystem is corrupt
+     * @throws NullPointerException if {@code store}, {@code password} or {@code syncPolicy} is {@code null}
+     */
+    public static GocryptFs open(CipherStore store, char[] password, boolean readOnly,
+                                 SyncPolicy syncPolicy) throws IOException {
+        Objects.requireNonNull(syncPolicy, "syncPolicy");
+        return open(store, password, readOnly).withSyncPolicy(syncPolicy);
+    }
+
+    /**
+     * Opens an existing cipher store with an explicit sync policy.
+     *
+     * @param store      the ciphertext-side store
+     * @param password   the password to unlock the master key with
+     * @param syncPolicy when buffered writes are flushed to storage
+     * @param readOnly   whether to open without a writer lock and for reading only
+     * @return the opened filesystem
+     * @throws IOException if the config is missing, the password is wrong or the filesystem is corrupt
+     * @throws NullPointerException if {@code store}, {@code password} or {@code syncPolicy} is {@code null}
+     */
+    public static GocryptFs open(CipherStore store, char[] password, SyncPolicy syncPolicy,
+                                 boolean readOnly) throws IOException {
+        return open(store, password, readOnly, syncPolicy);
+    }
+
+    /**
+     * Opens an existing cipher store read-only with an explicit sync policy.
+     *
+     * @param store      the ciphertext-side store
+     * @param password   the password to unlock the master key with
+     * @param syncPolicy when buffered writes are flushed to storage
+     * @return the opened read-only filesystem
+     * @throws IOException if the config is missing, the password is wrong or the filesystem is corrupt
+     * @throws NullPointerException if {@code store}, {@code password} or {@code syncPolicy} is {@code null}
+     */
+    public static GocryptFs openReadOnly(CipherStore store, char[] password,
+                                         SyncPolicy syncPolicy) throws IOException {
+        return open(store, password, true, syncPolicy);
     }
 
     /**
@@ -259,11 +458,21 @@ public final class GocryptFs implements AutoCloseable {
      * {@code password}, recording whether the returned instance owns
      * {@code store}.
      */
-    private static GocryptFs open(CipherStore store, char[] password, boolean ownsStore)
-            throws IOException {
-        ConfigFile config = ConfigFile.load(store);
-        byte[] masterKey = config.decryptMasterKey(password);
-        return new GocryptFs(store, config, masterKey, ownsStore);
+    private static GocryptFs open(CipherStore store, char[] password, boolean ownsStore,
+                                  boolean readOnly) throws IOException {
+        CipherRootLock rootLock = readOnly ? null : CipherRootLock.acquire(store);
+        boolean ok = false;
+        try {
+            ConfigFile config = ConfigFile.load(store);
+            byte[] masterKey = config.decryptMasterKey(password);
+            GocryptFs fs = new GocryptFs(store, config, masterKey, ownsStore, readOnly, rootLock);
+            ok = true;
+            return fs;
+        } finally {
+            if (!ok && rootLock != null) {
+                closeQuietly(rootLock);
+            }
+        }
     }
 
     /**
@@ -278,14 +487,135 @@ public final class GocryptFs implements AutoCloseable {
      * @throws IllegalArgumentException if {@code masterKey} is not 32 bytes long
      */
     public static GocryptFs open(CipherStore store, byte[] masterKey) throws IOException {
+        return open(store, masterKey, false);
+    }
+
+    /**
+     * Opens an existing cipher store using the raw 32-byte master key,
+     * optionally read-only.
+     *
+     * @param store     the ciphertext-side store
+     * @param masterKey the 32-byte master key; cloned, so the caller's array is
+     *                  neither retained nor wiped by this class
+     * @param readOnly  whether to open without a writer lock and for reading only
+     * @return the opened filesystem
+     * @throws IOException if the config is missing or the filesystem is corrupt
+     * @throws NullPointerException if {@code store} or {@code masterKey} is {@code null}
+     * @throws IllegalArgumentException if {@code masterKey} is not 32 bytes long
+     */
+    public static GocryptFs open(CipherStore store, byte[] masterKey, boolean readOnly)
+            throws IOException {
         Objects.requireNonNull(store, "store");
         Objects.requireNonNull(masterKey, "masterKey");
         if (masterKey.length != Constants.KEY_LEN) {
             throw new IllegalArgumentException("master key must be "
                     + Constants.KEY_LEN + " bytes");
         }
-        ConfigFile config = ConfigFile.load(store);
-        return new GocryptFs(store, config, masterKey.clone());
+        return openMasterKey(store, masterKey, false, readOnly);
+    }
+
+    /**
+     * Opens an existing cipher store using the raw 32-byte master key,
+     * read-only.
+     *
+     * @param store     the ciphertext-side store
+     * @param masterKey the 32-byte master key
+     * @return the opened read-only filesystem
+     * @throws IOException if the config is missing or the filesystem is corrupt
+     * @throws NullPointerException if {@code store} or {@code masterKey} is {@code null}
+     * @throws IllegalArgumentException if {@code masterKey} is not 32 bytes long
+     */
+    public static GocryptFs openReadOnly(CipherStore store, byte[] masterKey) throws IOException {
+        return open(store, masterKey, true);
+    }
+
+    /**
+     * Opens an existing cipher store using the raw master key with an explicit
+     * sync policy.
+     *
+     * @param store      the ciphertext-side store
+     * @param masterKey  the 32-byte master key
+     * @param syncPolicy when buffered writes are flushed to storage
+     * @return the opened filesystem
+     * @throws IOException if the config is missing or the filesystem is corrupt
+     * @throws NullPointerException if {@code store}, {@code masterKey} or {@code syncPolicy} is {@code null}
+     * @throws IllegalArgumentException if {@code masterKey} is not 32 bytes long
+     */
+    public static GocryptFs open(CipherStore store, byte[] masterKey, SyncPolicy syncPolicy)
+            throws IOException {
+        return open(store, masterKey, false, syncPolicy);
+    }
+
+    /**
+     * Opens an existing cipher store using the raw master key with an explicit
+     * sync policy.
+     *
+     * @param store      the ciphertext-side store
+     * @param masterKey  the 32-byte master key
+     * @param readOnly   whether to open without a writer lock and for reading only
+     * @param syncPolicy when buffered writes are flushed to storage
+     * @return the opened filesystem
+     * @throws IOException if the config is missing or the filesystem is corrupt
+     * @throws NullPointerException if {@code store}, {@code masterKey} or {@code syncPolicy} is {@code null}
+     * @throws IllegalArgumentException if {@code masterKey} is not 32 bytes long
+     */
+    public static GocryptFs open(CipherStore store, byte[] masterKey, boolean readOnly,
+                                 SyncPolicy syncPolicy) throws IOException {
+        Objects.requireNonNull(syncPolicy, "syncPolicy");
+        return open(store, masterKey, readOnly).withSyncPolicy(syncPolicy);
+    }
+
+    /**
+     * Opens an existing cipher store using the raw master key with an explicit
+     * sync policy.
+     *
+     * @param store      the ciphertext-side store
+     * @param masterKey  the 32-byte master key
+     * @param syncPolicy when buffered writes are flushed to storage
+     * @param readOnly   whether to open without a writer lock and for reading only
+     * @return the opened filesystem
+     * @throws IOException if the config is missing or the filesystem is corrupt
+     * @throws NullPointerException if {@code store}, {@code masterKey} or {@code syncPolicy} is {@code null}
+     * @throws IllegalArgumentException if {@code masterKey} is not 32 bytes long
+     */
+    public static GocryptFs open(CipherStore store, byte[] masterKey, SyncPolicy syncPolicy,
+                                 boolean readOnly) throws IOException {
+        return open(store, masterKey, readOnly, syncPolicy);
+    }
+
+    /**
+     * Opens an existing cipher store read-only using the raw master key with an
+     * explicit sync policy.
+     *
+     * @param store      the ciphertext-side store
+     * @param masterKey  the 32-byte master key
+     * @param syncPolicy when buffered writes are flushed to storage
+     * @return the opened read-only filesystem
+     * @throws IOException if the config is missing or the filesystem is corrupt
+     * @throws NullPointerException if {@code store}, {@code masterKey} or {@code syncPolicy} is {@code null}
+     * @throws IllegalArgumentException if {@code masterKey} is not 32 bytes long
+     */
+    public static GocryptFs openReadOnly(CipherStore store, byte[] masterKey,
+                                         SyncPolicy syncPolicy) throws IOException {
+        return open(store, masterKey, true, syncPolicy);
+    }
+
+    private static GocryptFs openMasterKey(CipherStore store, byte[] masterKey,
+                                           boolean ownsStore, boolean readOnly)
+            throws IOException {
+        CipherRootLock rootLock = readOnly ? null : CipherRootLock.acquire(store);
+        boolean ok = false;
+        try {
+            ConfigFile config = ConfigFile.load(store);
+            GocryptFs fs = new GocryptFs(store, config, masterKey.clone(), ownsStore,
+                    readOnly, rootLock);
+            ok = true;
+            return fs;
+        } finally {
+            if (!ok && rootLock != null) {
+                closeQuietly(rootLock);
+            }
+        }
     }
 
     /**
@@ -298,34 +628,78 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code store} or {@code token} is {@code null}
      */
     public static GocryptFs open(CipherStore store, Fido2Token token) throws IOException {
+        return open(store, token, false);
+    }
+
+    /**
+     * Opens an existing FIDO2-protected cipher store, optionally read-only.
+     *
+     * @param store    the ciphertext-side store
+     * @param token    the FIDO2 token implementation to unlock the master key with
+     * @param readOnly whether to open without a writer lock and for reading only
+     * @return the opened filesystem
+     * @throws IOException if the config is missing, not FIDO2-protected, or the token fails
+     * @throws NullPointerException if {@code store} or {@code token} is {@code null}
+     */
+    public static GocryptFs open(CipherStore store, Fido2Token token, boolean readOnly)
+            throws IOException {
         Objects.requireNonNull(store, "store");
         Objects.requireNonNull(token, "token");
-        ConfigFile config = ConfigFile.load(store);
-        Fido2Params params = config.fido2();
-        if (!config.isFeatureFlagSet(Constants.FLAG_FIDO2) || params == null) {
-            throw new IOException("filesystem is not protected by a FIDO2 token");
-        }
-        byte[] credentialId = params.credentialId();
-        byte[] hmacSalt = params.hmacSalt();
-        if (credentialId == null || hmacSalt == null) {
-            throw new IOException("FIDO2 parameters are incomplete");
-        }
-        List<String> assertOptions = params.assertOptions() == null
-                ? Collections.<String>emptyList()
-                : params.assertOptions();
-        byte[] secret = token.hmacSecret(credentialId, hmacSalt, assertOptions);
+        return openFido2(store, token, false, readOnly);
+    }
+
+    /**
+     * Opens an existing FIDO2-protected cipher store read-only.
+     *
+     * @param store the ciphertext-side store
+     * @param token the FIDO2 token implementation to unlock the master key with
+     * @return the opened read-only filesystem
+     * @throws IOException if the config is missing, not FIDO2-protected, or the token fails
+     * @throws NullPointerException if {@code store} or {@code token} is {@code null}
+     */
+    public static GocryptFs openReadOnly(CipherStore store, Fido2Token token) throws IOException {
+        return open(store, token, true);
+    }
+
+    private static GocryptFs openFido2(CipherStore store, Fido2Token token,
+                                       boolean ownsStore, boolean readOnly) throws IOException {
+        CipherRootLock rootLock = readOnly ? null : CipherRootLock.acquire(store);
+        boolean ok = false;
         try {
-            checkFido2Secret(secret);
-            byte[] masterKey = config.decryptMasterKey(secret);
-            return new GocryptFs(store, config, masterKey);
-        } catch (IOException e) {
-            if (e.getCause() instanceof GeneralSecurityException) {
-                throw new IOException("FIDO2 HMAC secret did not unlock the master key "
-                        + "(wrong security key or credential?)", e);
+            ConfigFile config = ConfigFile.load(store);
+            Fido2Params params = config.fido2();
+            if (!config.isFeatureFlagSet(Constants.FLAG_FIDO2) || params == null) {
+                throw new IOException("filesystem is not protected by a FIDO2 token");
             }
-            throw e;
+            byte[] credentialId = params.credentialId();
+            byte[] hmacSalt = params.hmacSalt();
+            if (credentialId == null || hmacSalt == null) {
+                throw new IOException("FIDO2 parameters are incomplete");
+            }
+            List<String> assertOptions = params.assertOptions() == null
+                    ? Collections.<String>emptyList()
+                    : params.assertOptions();
+            byte[] secret = token.hmacSecret(credentialId, hmacSalt, assertOptions);
+            try {
+                checkFido2Secret(secret);
+                byte[] masterKey = config.decryptMasterKey(secret);
+                GocryptFs fs = new GocryptFs(store, config, masterKey, ownsStore, readOnly,
+                        rootLock);
+                ok = true;
+                return fs;
+            } catch (IOException e) {
+                if (e.getCause() instanceof GeneralSecurityException) {
+                    throw new IOException("FIDO2 HMAC secret did not unlock the master key "
+                            + "(wrong security key or credential?)", e);
+                }
+                throw e;
+            } finally {
+                Keys.wipe(secret);
+            }
         } finally {
-            Keys.wipe(secret);
+            if (!ok && rootLock != null) {
+                closeQuietly(rootLock);
+            }
         }
     }
 
@@ -341,12 +715,28 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code uri} or {@code password} is {@code null}
      */
     public static GocryptFs open(URI uri, Map<String, ?> env, char[] password) throws IOException {
+        return open(uri, env, password, false);
+    }
+
+    /**
+     * Opens a cipher store identified by a URI, optionally read-only.
+     *
+     * @param uri      the URI identifying the store
+     * @param env      backend-specific options, or {@code null} for defaults
+     * @param password the password to unlock the master key with
+     * @param readOnly whether to open without a writer lock and for reading only
+     * @return the opened filesystem
+     * @throws IOException if no provider handles the scheme, or opening fails
+     * @throws NullPointerException if {@code uri} or {@code password} is {@code null}
+     */
+    public static GocryptFs open(URI uri, Map<String, ?> env, char[] password, boolean readOnly)
+            throws IOException {
         Objects.requireNonNull(uri, "uri");
         Objects.requireNonNull(password, "password");
         CipherStore store = CipherStores.newStore(uri, env);
         boolean ok = false;
         try {
-            GocryptFs fs = open(store, password, true);
+            GocryptFs fs = open(store, password, true, readOnly);
             ok = true;
             return fs;
         } finally {
@@ -354,6 +744,72 @@ public final class GocryptFs implements AutoCloseable {
                 store.close();
             }
         }
+    }
+
+    /**
+     * Opens a cipher store identified by a URI read-only.
+     *
+     * @param uri      the URI identifying the store
+     * @param env      backend-specific options, or {@code null} for defaults
+     * @param password the password to unlock the master key with
+     * @return the opened read-only filesystem
+     * @throws IOException if no provider handles the scheme, or opening fails
+     * @throws NullPointerException if {@code uri} or {@code password} is {@code null}
+     */
+    public static GocryptFs openReadOnly(URI uri, Map<String, ?> env, char[] password)
+            throws IOException {
+        return open(uri, env, password, true);
+    }
+
+    /**
+     * Opens a cipher store identified by a URI with an explicit sync policy.
+     *
+     * @param uri        the URI identifying the store
+     * @param env        backend-specific options, or {@code null} for defaults
+     * @param password   the password to unlock the master key with
+     * @param syncPolicy when buffered writes are flushed to storage
+     * @return the opened filesystem
+     * @throws IOException if no provider handles the scheme, or opening fails
+     * @throws NullPointerException if {@code uri}, {@code password} or {@code syncPolicy} is {@code null}
+     */
+    public static GocryptFs open(URI uri, Map<String, ?> env, char[] password,
+                                 SyncPolicy syncPolicy) throws IOException {
+        return open(uri, env, password, false, syncPolicy);
+    }
+
+    /**
+     * Opens a cipher store identified by a URI with an explicit sync policy.
+     *
+     * @param uri        the URI identifying the store
+     * @param env        backend-specific options, or {@code null} for defaults
+     * @param password   the password to unlock the master key with
+     * @param readOnly   whether to open without a writer lock and for reading only
+     * @param syncPolicy when buffered writes are flushed to storage
+     * @return the opened filesystem
+     * @throws IOException if no provider handles the scheme, or opening fails
+     * @throws NullPointerException if {@code uri}, {@code password} or {@code syncPolicy} is {@code null}
+     */
+    public static GocryptFs open(URI uri, Map<String, ?> env, char[] password, boolean readOnly,
+                                 SyncPolicy syncPolicy) throws IOException {
+        Objects.requireNonNull(syncPolicy, "syncPolicy");
+        return open(uri, env, password, readOnly).withSyncPolicy(syncPolicy);
+    }
+
+    /**
+     * Opens a cipher store identified by a URI read-only with an explicit sync
+     * policy.
+     *
+     * @param uri        the URI identifying the store
+     * @param env        backend-specific options, or {@code null} for defaults
+     * @param password   the password to unlock the master key with
+     * @param syncPolicy when buffered writes are flushed to storage
+     * @return the opened read-only filesystem
+     * @throws IOException if no provider handles the scheme, or opening fails
+     * @throws NullPointerException if {@code uri}, {@code password} or {@code syncPolicy} is {@code null}
+     */
+    public static GocryptFs openReadOnly(URI uri, Map<String, ?> env, char[] password,
+                                         SyncPolicy syncPolicy) throws IOException {
+        return open(uri, env, password, true, syncPolicy);
     }
 
     /**
@@ -399,6 +855,44 @@ public final class GocryptFs implements AutoCloseable {
                 store.close();
             }
         }
+    }
+
+    /**
+     * Creates a new filesystem in a cipher store identified by a URI with an
+     * explicit sync policy.
+     *
+     * @param uri        the URI identifying the store
+     * @param env        backend-specific options, or {@code null} for defaults
+     * @param password   the password to protect the master key with
+     * @param syncPolicy when buffered writes are flushed to storage
+     * @return the opened filesystem
+     * @throws IOException if no provider handles the scheme, or creation fails
+     * @throws NullPointerException if {@code uri}, {@code password} or {@code syncPolicy} is {@code null}
+     */
+    public static GocryptFs create(URI uri, Map<String, ?> env, char[] password,
+                                   SyncPolicy syncPolicy) throws IOException {
+        return create(uri, env, password, false, ContentCipherType.AES_GCM, syncPolicy);
+    }
+
+    /**
+     * Creates a new filesystem in a cipher store identified by a URI with an
+     * explicit sync policy.
+     *
+     * @param uri            the URI identifying the store
+     * @param env            backend-specific options, or {@code null} for defaults
+     * @param password       the password to protect the master key with
+     * @param plaintextNames whether to store file names unencrypted
+     * @param cipherType     the content-encryption cipher
+     * @param syncPolicy     when buffered writes are flushed to storage
+     * @return the opened filesystem
+     * @throws IOException if no provider handles the scheme, or creation fails
+     * @throws NullPointerException if {@code uri}, {@code password}, {@code cipherType} or {@code syncPolicy} is {@code null}
+     */
+    public static GocryptFs create(URI uri, Map<String, ?> env, char[] password,
+                                   boolean plaintextNames, ContentCipherType cipherType,
+                                   SyncPolicy syncPolicy) throws IOException {
+        Objects.requireNonNull(syncPolicy, "syncPolicy");
+        return create(uri, env, password, plaintextNames, cipherType).withSyncPolicy(syncPolicy);
     }
 
     /**
@@ -450,22 +944,74 @@ public final class GocryptFs implements AutoCloseable {
     }
 
     /**
+     * Creates a new filesystem with an explicit sync policy.
+     *
+     * @param store      the ciphertext-side store, whose root must be empty
+     * @param password   the password to protect the master key with
+     * @param syncPolicy when buffered writes are flushed to storage
+     * @return the opened filesystem
+     * @throws IOException on storage errors
+     * @throws NullPointerException if {@code store}, {@code password} or {@code syncPolicy} is {@code null}
+     */
+    public static GocryptFs create(CipherStore store, char[] password, SyncPolicy syncPolicy)
+            throws IOException {
+        return create(store, password, false, ContentCipherType.AES_GCM, syncPolicy);
+    }
+
+    /**
+     * Creates a new filesystem with an explicit sync policy.
+     *
+     * @param store          the ciphertext-side store, whose root must be empty
+     * @param password       the password to protect the master key with
+     * @param plaintextNames whether to store file names unencrypted
+     * @param syncPolicy     when buffered writes are flushed to storage
+     * @return the opened filesystem
+     * @throws IOException on storage errors
+     * @throws NullPointerException if {@code store}, {@code password} or {@code syncPolicy} is {@code null}
+     */
+    public static GocryptFs create(CipherStore store, char[] password, boolean plaintextNames,
+                                   SyncPolicy syncPolicy) throws IOException {
+        return create(store, password, plaintextNames, ContentCipherType.AES_GCM, syncPolicy);
+    }
+
+    /**
+     * Creates a new filesystem with an explicit sync policy.
+     *
+     * @param store          the ciphertext-side store, whose root must be empty
+     * @param password       the password to protect the master key with
+     * @param plaintextNames whether to store file names unencrypted
+     * @param cipherType     the content-encryption cipher
+     * @param syncPolicy     when buffered writes are flushed to storage
+     * @return the opened filesystem
+     * @throws IOException on storage errors
+     * @throws NullPointerException if {@code store}, {@code password}, {@code cipherType} or {@code syncPolicy} is {@code null}
+     */
+    public static GocryptFs create(CipherStore store, char[] password, boolean plaintextNames,
+                                   ContentCipherType cipherType, SyncPolicy syncPolicy)
+            throws IOException {
+        Objects.requireNonNull(syncPolicy, "syncPolicy");
+        return create(store, password, plaintextNames, cipherType).withSyncPolicy(syncPolicy);
+    }
+
+    /**
      * Creates a new filesystem, recording whether the returned instance owns
      * {@code store} and must close it on {@link #close()}.
      */
     private static GocryptFs create(CipherStore store, char[] password, boolean plaintextNames,
                                     ContentCipherType cipherType, boolean ownsStore)
             throws IOException {
-        if (!store.list(store.root()).isEmpty()) {
-            throw new IOException("cipher dir is not empty: " + store.root());
-        }
-        byte[] masterKey = Keys.randomBytes(Constants.KEY_LEN);
+        CipherRootLock rootLock = CipherRootLock.acquire(store);
+        byte[] masterKey = null;
         boolean ok = false;
         try {
+            if (!store.list(store.root()).isEmpty()) {
+                throw new IOException("cipher dir is not empty: " + store.root());
+            }
+            masterKey = Keys.randomBytes(Constants.KEY_LEN);
             ConfigFile config = ConfigFile.create(masterKey, password, plaintextNames, cipherType);
             store.writeConfig(PathResolver.join(store.root(), Constants.CONF_DEFAULT_NAME),
                     config.toBytes(), false);
-            GocryptFs fs = new GocryptFs(store, config, masterKey, ownsStore);
+            GocryptFs fs = new GocryptFs(store, config, masterKey, ownsStore, false, rootLock);
             try {
                 if (!plaintextNames) {
                     fs.directoryManager.writeDirIV(store.root());
@@ -480,7 +1026,10 @@ public final class GocryptFs implements AutoCloseable {
             }
         } finally {
             if (!ok) {
-                Keys.wipe(masterKey);
+                if (masterKey != null) {
+                    Keys.wipe(masterKey);
+                }
+                closeQuietly(rootLock);
             }
         }
     }
@@ -538,46 +1087,56 @@ public final class GocryptFs implements AutoCloseable {
         Objects.requireNonNull(store, "store");
         Objects.requireNonNull(token, "token");
         Objects.requireNonNull(cipherType, "cipherType");
-        if (!store.list(store.root()).isEmpty()) {
-            throw new IOException("cipher dir is not empty: " + store.root());
-        }
-        List<String> options = assertOptions == null
-                ? Collections.<String>emptyList()
-                : new ArrayList<>(assertOptions);
-        String name = userName != null ? userName : PathResolver.baseName(store.root());
-
-        byte[] credentialId = token.registerCredential(name);
-        byte[] hmacSalt = Keys.randomBytes(Fido2Params.HMAC_SALT_LEN);
-        byte[] secret = token.hmacSecret(credentialId, hmacSalt, options);
+        CipherRootLock rootLock = CipherRootLock.acquire(store);
+        boolean ok = false;
         try {
-            checkFido2Secret(secret);
-            byte[] masterKey = Keys.randomBytes(Constants.KEY_LEN);
-            boolean ok = false;
+            if (!store.list(store.root()).isEmpty()) {
+                throw new IOException("cipher dir is not empty: " + store.root());
+            }
+            List<String> options = assertOptions == null
+                    ? Collections.<String>emptyList()
+                    : new ArrayList<>(assertOptions);
+            String name = userName != null ? userName : PathResolver.baseName(store.root());
+
+            byte[] credentialId = token.registerCredential(name);
+            byte[] hmacSalt = Keys.randomBytes(Fido2Params.HMAC_SALT_LEN);
+            byte[] secret = token.hmacSecret(credentialId, hmacSalt, options);
             try {
-                ConfigFile config = ConfigFile.create(masterKey, secret, plaintextNames, cipherType,
-                        new Fido2Params(credentialId, hmacSalt, options));
-                store.writeConfig(PathResolver.join(store.root(), Constants.CONF_DEFAULT_NAME),
-                        config.toBytes(), false);
-                GocryptFs fs = new GocryptFs(store, config, masterKey);
+                checkFido2Secret(secret);
+                byte[] masterKey = Keys.randomBytes(Constants.KEY_LEN);
+                boolean created = false;
                 try {
-                    if (!plaintextNames) {
-                        fs.directoryManager.writeDirIV(store.root());
+                    ConfigFile config = ConfigFile.create(masterKey, secret, plaintextNames,
+                            cipherType, new Fido2Params(credentialId, hmacSalt, options));
+                    store.writeConfig(PathResolver.join(store.root(),
+                            Constants.CONF_DEFAULT_NAME), config.toBytes(), false);
+                    GocryptFs fs = new GocryptFs(store, config, masterKey, false, false,
+                            rootLock);
+                    try {
+                        if (!plaintextNames) {
+                            fs.directoryManager.writeDirIV(store.root());
+                        }
+                        created = true;
+                        ok = true;
+                        return fs;
+                    } catch (IOException e) {
+                        fs.wipeSecrets();
+                        FileManager.deleteIfExists(store,
+                                PathResolver.join(store.root(), Constants.CONF_DEFAULT_NAME));
+                        throw e;
                     }
-                    ok = true;
-                    return fs;
-                } catch (IOException e) {
-                    fs.wipeSecrets();
-                    FileManager.deleteIfExists(store,
-                            PathResolver.join(store.root(), Constants.CONF_DEFAULT_NAME));
-                    throw e;
+                } finally {
+                    if (!created) {
+                        Keys.wipe(masterKey);
+                    }
                 }
             } finally {
-                if (!ok) {
-                    Keys.wipe(masterKey);
-                }
+                Keys.wipe(secret);
             }
         } finally {
-            Keys.wipe(secret);
+            if (!ok) {
+                closeQuietly(rootLock);
+            }
         }
     }
 
@@ -633,6 +1192,25 @@ public final class GocryptFs implements AutoCloseable {
     }
 
     /**
+     * Returns whether this filesystem was opened read-only.
+     *
+     * @return {@code true} if this filesystem is read-only
+     */
+    public boolean isReadOnly() {
+        ensureOpen();
+        return readOnly;
+    }
+
+    /**
+     * Returns whether this filesystem was opened read-only.
+     *
+     * @return {@code true} if this filesystem is read-only
+     */
+    public boolean readOnly() {
+        return isReadOnly();
+    }
+
+    /**
      * Returns the read lock guarding read operations (listing, stat, reads and
      * content writes to existing files).
      *
@@ -680,6 +1258,7 @@ public final class GocryptFs implements AutoCloseable {
         writeLock.lock();
         try {
             ensureOpen();
+            ensureWritable();
             ConfigFile updated = config.reencryptMasterKeyCopy(masterKey, password);
             store.writeConfig(PathResolver.join(rootName, Constants.CONF_DEFAULT_NAME),
                     updated.toBytes(), true);
@@ -822,7 +1401,36 @@ public final class GocryptFs implements AutoCloseable {
         writeLock.lock();
         try {
             ensureOpen();
+            if (writable) {
+                ensureWritable();
+            }
             return fileManager.openCipherFile(plainFile, writable);
+        } finally {
+            writeLock.unlock();
+        }
+    }
+
+    /**
+     * Opens a plaintext file for random access with an explicit sync policy.
+     *
+     * @param plainFile  the plaintext file path
+     * @param writable   whether to open for writing
+     * @param syncPolicy when buffered writes are flushed to storage
+     * @return the opened cipher file handle
+     * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code plainFile} or {@code syncPolicy} is {@code null}
+     */
+    public SharedCipherFile openCipherFile(String plainFile, boolean writable,
+                                           SyncPolicy syncPolicy) throws IOException {
+        Objects.requireNonNull(syncPolicy, "syncPolicy");
+        Lock writeLock = lock.writeLock();
+        writeLock.lock();
+        try {
+            ensureOpen();
+            if (writable) {
+                ensureWritable();
+            }
+            return fileManager.openCipherFile(plainFile, writable, syncPolicy);
         } finally {
             writeLock.unlock();
         }
@@ -902,7 +1510,30 @@ public final class GocryptFs implements AutoCloseable {
         writeLock.lock();
         try {
             ensureOpen();
+            ensureWritable();
             return fileManager.openWrite(plainFile);
+        } finally {
+            writeLock.unlock();
+        }
+    }
+
+    /**
+     * Opens a streaming, encrypting output stream with an explicit sync policy.
+     *
+     * @param plainFile  the plaintext file path
+     * @param syncPolicy when buffered writes are flushed to storage
+     * @return the encrypting output stream
+     * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code plainFile} or {@code syncPolicy} is {@code null}
+     */
+    public OutputStream openWrite(String plainFile, SyncPolicy syncPolicy) throws IOException {
+        Objects.requireNonNull(syncPolicy, "syncPolicy");
+        Lock writeLock = lock.writeLock();
+        writeLock.lock();
+        try {
+            ensureOpen();
+            ensureWritable();
+            return fileManager.openWrite(plainFile, syncPolicy);
         } finally {
             writeLock.unlock();
         }
@@ -923,7 +1554,34 @@ public final class GocryptFs implements AutoCloseable {
         readLock.lock();
         try {
             ensureOpen();
+            ensureWritable();
             fileManager.write(plainFile, offset, data);
+        } finally {
+            readLock.unlock();
+        }
+    }
+
+    /**
+     * Writes {@code data} at plaintext {@code offset} with an explicit sync
+     * policy.
+     *
+     * @param plainFile  the plaintext file path
+     * @param offset     the plaintext offset to write at
+     * @param data       the data to write
+     * @param syncPolicy when buffered writes are flushed to storage
+     * @throws IOException on filesystem or encryption errors
+     * @throws NullPointerException if {@code plainFile}, {@code data} or {@code syncPolicy} is {@code null}
+     * @throws IllegalArgumentException if {@code offset} is negative
+     */
+    public void write(String plainFile, long offset, byte[] data, SyncPolicy syncPolicy)
+            throws IOException {
+        Objects.requireNonNull(syncPolicy, "syncPolicy");
+        Lock readLock = lock.readLock();
+        readLock.lock();
+        try {
+            ensureOpen();
+            ensureWritable();
+            fileManager.write(plainFile, offset, data, syncPolicy);
         } finally {
             readLock.unlock();
         }
@@ -943,7 +1601,32 @@ public final class GocryptFs implements AutoCloseable {
         readLock.lock();
         try {
             ensureOpen();
+            ensureWritable();
             fileManager.truncate(plainFile, newSize);
+        } finally {
+            readLock.unlock();
+        }
+    }
+
+    /**
+     * Truncates a plaintext file with an explicit sync policy.
+     *
+     * @param plainFile  the plaintext file path
+     * @param newSize    the new plaintext size in bytes
+     * @param syncPolicy when buffered writes are flushed to storage
+     * @throws IOException on filesystem or encryption errors
+     * @throws NullPointerException if {@code plainFile} or {@code syncPolicy} is {@code null}
+     * @throws IllegalArgumentException if {@code newSize} is negative
+     */
+    public void truncate(String plainFile, long newSize, SyncPolicy syncPolicy)
+            throws IOException {
+        Objects.requireNonNull(syncPolicy, "syncPolicy");
+        Lock readLock = lock.readLock();
+        readLock.lock();
+        try {
+            ensureOpen();
+            ensureWritable();
+            fileManager.truncate(plainFile, newSize, syncPolicy);
         } finally {
             readLock.unlock();
         }
@@ -966,6 +1649,7 @@ public final class GocryptFs implements AutoCloseable {
         writeLock.lock();
         try {
             ensureOpen();
+            ensureWritable();
             fileManager.setTimes(plainPath, lastModifiedTime, lastAccessTime, createTime);
         } finally {
             writeLock.unlock();
@@ -987,6 +1671,14 @@ public final class GocryptFs implements AutoCloseable {
         readLock.lock();
         try {
             ensureOpen();
+            if (readOnly) {
+                for (AccessMode mode : modes) {
+                    if (mode == AccessMode.WRITE) {
+                        throw new AccessDeniedException(plainPath, null,
+                                "filesystem is read-only");
+                    }
+                }
+            }
             fileManager.checkAccess(plainPath, modes);
         } finally {
             readLock.unlock();
@@ -1027,6 +1719,7 @@ public final class GocryptFs implements AutoCloseable {
         writeLock.lock();
         try {
             ensureOpen();
+            ensureWritable();
             fileManager.setPosixPermissions(plainPath, permissions);
         } finally {
             writeLock.unlock();
@@ -1046,6 +1739,7 @@ public final class GocryptFs implements AutoCloseable {
         writeLock.lock();
         try {
             ensureOpen();
+            ensureWritable();
             fileManager.setPosixOwner(plainPath, owner);
         } finally {
             writeLock.unlock();
@@ -1065,6 +1759,7 @@ public final class GocryptFs implements AutoCloseable {
         writeLock.lock();
         try {
             ensureOpen();
+            ensureWritable();
             fileManager.setPosixGroup(plainPath, group);
         } finally {
             writeLock.unlock();
@@ -1087,6 +1782,7 @@ public final class GocryptFs implements AutoCloseable {
         writeLock.lock();
         try {
             ensureOpen();
+            ensureWritable();
             fileManager.createFile(plainFile);
         } finally {
             writeLock.unlock();
@@ -1105,6 +1801,7 @@ public final class GocryptFs implements AutoCloseable {
         writeLock.lock();
         try {
             ensureOpen();
+            ensureWritable();
             fileManager.mkdir(plainDir);
         } finally {
             writeLock.unlock();
@@ -1123,6 +1820,7 @@ public final class GocryptFs implements AutoCloseable {
         writeLock.lock();
         try {
             ensureOpen();
+            ensureWritable();
             fileManager.delete(plainPath);
         } finally {
             writeLock.unlock();
@@ -1158,6 +1856,7 @@ public final class GocryptFs implements AutoCloseable {
         writeLock.lock();
         try {
             ensureOpen();
+            ensureWritable();
             fileManager.rename(plainFrom, plainTo, replaceExisting);
         } finally {
             writeLock.unlock();
@@ -1177,6 +1876,7 @@ public final class GocryptFs implements AutoCloseable {
         writeLock.lock();
         try {
             ensureOpen();
+            ensureWritable();
             fileManager.createSymlink(plainPath, target);
         } finally {
             writeLock.unlock();
@@ -1252,6 +1952,17 @@ public final class GocryptFs implements AutoCloseable {
             try {
                 wipeSecrets();
             } finally {
+                if (rootLock != null) {
+                    try {
+                        rootLock.close();
+                    } catch (IOException e) {
+                        if (failure == null) {
+                            failure = e;
+                        } else {
+                            failure.addSuppressed(e);
+                        }
+                    }
+                }
                 if (ownsStore) {
                     try {
                         store.close();

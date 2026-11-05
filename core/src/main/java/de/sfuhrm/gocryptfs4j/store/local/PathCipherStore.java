@@ -146,6 +146,11 @@ public final class PathCipherStore implements CipherStore {
     }
 
     @Override
+    public AutoCloseable lockRoot() throws IOException {
+        return RootFileLock.acquire(root);
+    }
+
+    @Override
     public byte[] readSmall(String name, int maxBytes) throws IOException {
         return delegate.readSmall(name, maxBytes);
     }
