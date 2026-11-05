@@ -142,6 +142,35 @@ class CipherFileMockTest {
     }
 
     @Test
+    void truncateBlockAlignedDoesNotRewriteBlocks() throws Exception {
+        ContentEnc enc = enc();
+        byte[] header = FileHeader.random().pack();
+        CipherChannel channel = mock(CipherChannel.class);
+        when(channel.size()).thenReturn(Constants.HEADER_LEN + 2 * enc.cipherBS);
+        long[] pos = {0};
+        when(channel.position(anyLong())).thenAnswer(inv -> {
+            pos[0] = inv.getArgument(0);
+            return channel;
+        });
+        when(channel.read(any(ByteBuffer.class))).thenAnswer(inv -> {
+            ByteBuffer bb = inv.getArgument(0);
+            if (pos[0] >= header.length) {
+                return -1;
+            }
+            int n = (int) Math.min(bb.remaining(), header.length - pos[0]);
+            bb.put(header, (int) pos[0], n);
+            pos[0] += n;
+            return n;
+        });
+        CipherFile cf = newCipherFile(channel, enc);
+
+        cf.truncate(enc.plainBS);
+
+        verify(channel, never()).write(any(ByteBuffer.class));
+        verify(channel).truncate(enc.blockNoToCipherOff(1));
+    }
+
+    @Test
     void writeBlockBeyondEofLeavesHoleBlocks() throws Exception {
         ContentEnc enc = enc();
         CipherChannel channel = mock(CipherChannel.class);

@@ -165,6 +165,31 @@ class CipherFileTest {
     }
 
     @Test
+    void truncateToBlockBoundaryKeepsFullBlocks() throws IOException {
+        ContentEnc enc = enc();
+        int bs = (int) enc.plainBS;
+        byte[] data = new byte[bs * 2 + 500];
+        Arrays.fill(data, (byte) 0x44);
+
+        try (CipherFile cf = open(newFile(), enc, true)) {
+            cf.writeBlock(0, data, 0, bs);
+            cf.writeBlock(1, data, bs, bs);
+            cf.writeBlock(2, data, bs * 2, 500);
+            assertEquals(data.length, cf.plainSize());
+
+            cf.truncate(bs * 2L);
+
+            assertEquals(bs * 2L, cf.plainSize());
+            byte[] out = new byte[bs * 2];
+            int n = cf.readBlock(0, out, 0);
+            assertEquals(bs, n);
+            n += cf.readBlock(1, out, bs);
+            assertEquals(bs * 2, n);
+            assertArrayEquals(Arrays.copyOf(data, bs * 2), out);
+        }
+    }
+
+    @Test
     void tornTailThrowsIoExceptionNotUnchecked() throws IOException {
         ContentEnc enc = enc();
         Path p = newFile();

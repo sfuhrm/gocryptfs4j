@@ -209,6 +209,16 @@ public final class CipherFile implements AutoCloseable {
      * and truncation to empty are performed here; growing is handled by the
      * buffered channel.
      *
+     * <p>When the new size is block-aligned only the channel is truncated; no
+     * block is re-encrypted. Otherwise the final partial block is re-encrypted
+     * and written before the stale tail is truncated, so a crash in between can
+     * leave a tail that fails authentication but cannot silently lose kept
+     * bytes.</p>
+     *
+     * <p>Known limit: the ciphertext format has no atomic in-place block
+     * update. A write-ahead sidecar for the block being rewritten would close
+     * this window, but it would not be gocryptfs-compatible until cleaned up.</p>
+     *
      * @param newPlainSize the new plaintext size in bytes
      * @throws IOException on filesystem or encryption errors
      * @throws IllegalArgumentException if {@code newPlainSize} is negative
@@ -241,6 +251,12 @@ public final class CipherFile implements AutoCloseable {
         long blockNo = (newPlainSize - 1) / enc.plainBS;
         long blockStart = blockNo * enc.plainBS;
         int keep = (int) (newPlainSize - blockStart);
+        if (keep == enc.plainBS) {
+            // The new size ends on a block boundary, so no block has to be
+            // re-encrypted. Just drop the blocks that no longer belong to it.
+            channel.truncate(enc.blockNoToCipherOff(blockNo + 1));
+            return;
+        }
         int len = readBlock(blockNo, blockPlain, 0);
         byte[] truncated = Arrays.copyOf(blockPlain, Math.min(keep, len));
         byte[] cipherBlock = enc.encryptBlock(truncated, blockNo, id);
