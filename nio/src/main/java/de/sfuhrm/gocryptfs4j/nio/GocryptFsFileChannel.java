@@ -107,9 +107,9 @@ final class GocryptFsFileChannel implements SeekableByteChannel {
 
     /**
      * Writes a sequence of plaintext bytes from {@code src}. In append mode the
-     * bytes are written at the current end of the file, otherwise at the
-     * current position, advancing the position and forcing the update if a sync
-     * mode is active.
+     * bytes are written atomically at the current end of the file, otherwise at
+     * the current position, advancing the position and forcing the update if a
+     * sync mode is active.
      *
      * @param src the source buffer
      * @return the number of bytes written, possibly zero
@@ -121,15 +121,7 @@ final class GocryptFsFileChannel implements SeekableByteChannel {
         if (!writable) {
             throw new NonWritableChannelException();
         }
-        if (append) {
-            channel.position(channel.size());
-        }
-        int n = channel.write(src);
-        if (append) {
-            // Flush each append through so a later append (possibly on another
-            // channel) observes the updated end of file.
-            channel.flush();
-        }
+        int n = append ? channel.append(src) : channel.write(src);
         force();
         return n;
     }

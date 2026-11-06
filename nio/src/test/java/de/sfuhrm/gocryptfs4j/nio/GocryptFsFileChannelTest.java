@@ -18,7 +18,15 @@ import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -272,6 +280,57 @@ class GocryptFsFileChannelTest {
             a.write(ByteBuffer.wrap("CCC".getBytes(StandardCharsets.UTF_8)));
         }
         assertArrayEquals("AAABBBCCC".getBytes(StandardCharsets.UTF_8), Files.readAllBytes(file));
+    }
+
+    @Test
+    void concurrentAppendersDoNotOverwriteEachOther() throws Exception {
+        Path file = nio.getPath("/append-concurrent.txt");
+        Files.write(file, new byte[0]);
+
+        int threads = 8;
+        int rounds = 16;
+        int tokenLength = 8;
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        CyclicBarrier start = new CyclicBarrier(threads);
+        List<Future<?>> futures = new ArrayList<>();
+        try {
+            for (int t = 0; t < threads; t++) {
+                final int thread = t;
+                futures.add(pool.submit(() -> {
+                    try (SeekableByteChannel ch = Files.newByteChannel(file,
+                            EnumSet.of(StandardOpenOption.WRITE, StandardOpenOption.APPEND))) {
+                        for (int r = 0; r < rounds; r++) {
+                            start.await();
+                            String token = String.format("%03d-%03d-", thread, r);
+                            ByteBuffer buf = ByteBuffer.wrap(token.getBytes(StandardCharsets.UTF_8));
+                            while (buf.hasRemaining()) {
+                                ch.write(buf);
+                            }
+                        }
+                    }
+                    return null;
+                }));
+            }
+            for (Future<?> f : futures) {
+                f.get();
+            }
+        } finally {
+            pool.shutdown();
+        }
+
+        byte[] all = Files.readAllBytes(file);
+        assertEquals(threads * rounds * tokenLength, all.length);
+        Set<String> expected = new HashSet<>();
+        for (int t = 0; t < threads; t++) {
+            for (int r = 0; r < rounds; r++) {
+                expected.add(String.format("%03d-%03d-", t, r));
+            }
+        }
+        Set<String> actual = new HashSet<>();
+        for (int i = 0; i < all.length; i += tokenLength) {
+            actual.add(new String(all, i, tokenLength, StandardCharsets.UTF_8));
+        }
+        assertEquals(expected, actual);
     }
 
     private static void deleteRecursively(Path path) throws IOException {

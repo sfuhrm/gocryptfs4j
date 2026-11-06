@@ -30,7 +30,7 @@ public final class SharedCipherFile implements AutoCloseable {
     /** The shared state for one ciphertext path. */
     static final class Entry {
 
-        /** Serializes opening, upgrading and closing the shared file. */
+        /** Serializes opening, upgrading, appending and closing the shared file. */
         final Object lock = new Object();
 
         /** The shared file, or {@code null} when no handle is open. */
@@ -222,6 +222,17 @@ public final class SharedCipherFile implements AutoCloseable {
         BlockBufferedChannel ch = new BlockBufferedChannel(this, position, writable, cache,
                 SyncPolicy.orDefault(syncPolicy));
         return ch;
+    }
+
+    /**
+     * Returns the monitor that serializes append operations on this entry, so
+     * that looking up the end of the file and writing to it form one atomic
+     * step for all appenders on the same file.
+     *
+     * @return the append monitor
+     */
+    Object appendLock() {
+        return entry.lock;
     }
 
     /**

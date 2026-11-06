@@ -143,6 +143,38 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
     }
 
     /**
+     * Appends plaintext bytes at the current end of the file, advancing the
+     * position by the number of bytes written.
+     *
+     * <p>The size lookup, write and flush are serialized on the shared append
+     * monitor, so concurrent appenders on the same file cannot both observe the
+     * same end of file and overwrite each other.</p>
+     *
+     * @param src the source buffer
+     * @return the number of bytes written
+     * @throws NonWritableChannelException if the channel was opened read-only
+     * @throws ClosedChannelException if the channel is closed
+     * @throws IOException on filesystem or encryption errors
+     */
+    public int append(ByteBuffer src) throws IOException {
+        if (!writable) {
+            throw new NonWritableChannelException();
+        }
+        if (!open) {
+            throw new ClosedChannelException();
+        }
+        if (src.remaining() == 0) {
+            return 0;
+        }
+        synchronized (file.appendLock()) {
+            position(file.effectiveSize());
+            int n = write(src);
+            flush();
+            return n;
+        }
+    }
+
+    /**
      * Returns the current plaintext position.
      *
      * @return the current position
