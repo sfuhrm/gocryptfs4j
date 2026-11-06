@@ -41,8 +41,9 @@ class BlockBufferedChannelTest {
         entry.file = cf;
         entry.refs = 1;
         entry.writable = writable;
-        SharedCipherFile scf = new SharedCipherFile(entry);
-        return scf.newChannel(0, writable);
+        try (SharedCipherFile scf = new SharedCipherFile(entry)) {
+            return scf.newChannel(0, writable);
+        }
     }
 
     private static byte[] readAll(BlockBufferedChannel ch) throws IOException {
@@ -348,8 +349,8 @@ class BlockBufferedChannelTest {
         ManagerHarness h = ManagerHarness.encrypted();
         h.fileManager.createFile("/f.txt");
 
-        SharedCipherFile cf = h.fileManager.openCipherFile("/f.txt", true);
-        try (BlockBufferedChannel ch = cf.newChannel(0, true)) {
+        try (SharedCipherFile cf = h.fileManager.openCipherFile("/f.txt", true);
+             BlockBufferedChannel ch = cf.newChannel(0, true)) {
             // A single short block stays buffered and is not yet written
             // through, but size and stat must still report its plaintext size.
             ch.write(ByteBuffer.wrap(new byte[100]));

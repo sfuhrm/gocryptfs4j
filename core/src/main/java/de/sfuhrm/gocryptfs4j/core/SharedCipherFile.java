@@ -2,6 +2,7 @@ package de.sfuhrm.gocryptfs4j.core;
 
 import java.io.IOException;
 import java.nio.channels.ClosedChannelException;
+import java.util.Arrays;
 import java.util.Objects;
 
 import org.jspecify.annotations.Nullable;
@@ -140,32 +141,59 @@ public final class SharedCipherFile implements AutoCloseable {
         // later, resurrecting the truncated data. Flush the cache first so no
         // stale block outlives the truncation.
         flushEntry(entry);
+        CipherFile file = file();
         if (newPlainSize == 0) {
-            file().truncate(0);
+            file.truncate(0);
             return;
         }
-        long oldSize = file().plainSize();
+        long oldSize = file.plainSize();
         if (newPlainSize == oldSize) {
             return;
         }
         if (newPlainSize < oldSize) {
-            file().truncate(newPlainSize);
+            file.truncate(newPlainSize);
             return;
         }
-        // Grow: append zeros, completing the final partial block of the old
-        // content and zero-filling up to the new size.
-        long remaining = newPlainSize - oldSize;
-        try (BlockBufferedChannel ch = newChannel(oldSize, true)) {
-            byte[] zeros = new byte[blockSize()];
-            while (remaining > 0) {
-                int n = (int) Math.min(zeros.length, remaining);
-                int w = ch.write(java.nio.ByteBuffer.wrap(zeros, 0, n));
-                if (w <= 0) {
-                    throw new IOException("no progress growing file");
-                }
-                remaining -= w;
+        grow(file, oldSize, newPlainSize);
+    }
+
+    /**
+     * Grows the file sparsely by writing only the blocks that cannot stay as
+     * holes: the old final partial block is zero-padded, and the new final
+     * block is written with zeros. Everything in between remains a sparse hole,
+     * so growing to a huge size does not write the whole range.
+     *
+     * @param file         the shared file
+     * @param oldSize      the current plaintext size
+     * @param newPlainSize the target plaintext size
+     * @throws IOException on filesystem or encryption errors
+     */
+    private void grow(CipherFile file, long oldSize, long newPlainSize) throws IOException {
+        long blockSize = file.blockSize();
+        long oldBlock = oldSize / blockSize;
+        int oldOffset = (int) (oldSize % blockSize);
+        long lastBlock = (newPlainSize - 1) / blockSize;
+        int lastLength = (int) (newPlainSize - lastBlock * blockSize);
+
+        if (oldSize > 0 && oldOffset > 0) {
+            if (lastBlock == oldBlock) {
+                // The new end is in the same block as the old end: keep the
+                // existing bytes and zero-fill the rest of that block.
+                byte[] block = new byte[(int) blockSize];
+                int len = file.readBlock(oldBlock, block, 0);
+                Arrays.fill(block, len, lastLength, (byte) 0);
+                file.writeBlock(oldBlock, block, 0, lastLength);
+                return;
             }
+            // The hole would start after a partial ciphertext block, which
+            // cannot be authenticated when read back. Pad it to a full block.
+            file.zeroPad();
         }
+
+        // Write only the final block; the blocks before it stay sparse. This
+        // also mints the file header when the file was empty.
+        byte[] zeros = new byte[(int) blockSize];
+        file.writeBlock(lastBlock, zeros, 0, lastLength);
     }
 
     /**
@@ -181,8 +209,9 @@ public final class SharedCipherFile implements AutoCloseable {
 
     /**
      * Opens a buffered, random-access channel over this file at the given
-     * plaintext position. The returned channel owns this handle; closing it
-     * releases this handle's reference.
+     * plaintext position. The channel takes its own reference to the shared
+     * file; closing it does not close this handle, which the caller still has
+     * to close.
      *
      * @param position the initial plaintext position
      * @param writable whether the channel permits writes
@@ -196,8 +225,9 @@ public final class SharedCipherFile implements AutoCloseable {
 
     /**
      * Opens a buffered, random-access channel over this file at the given
-     * plaintext position, using the given sync policy. The returned channel
-     * owns this handle; closing it releases this handle's reference.
+     * plaintext position, using the given sync policy. The channel takes its
+     * own reference to the shared file; closing it does not close this handle,
+     * which the caller still has to close.
      *
      * @param position   the initial plaintext position
      * @param writable   whether the channel permits writes
@@ -212,16 +242,33 @@ public final class SharedCipherFile implements AutoCloseable {
             throw new IllegalArgumentException("negative position: " + position);
         }
         BlockCache cache;
+        SharedCipherFile channelFile;
         synchronized (entry.lock) {
+            CipherFile file = entry.file;
+            if (file == null) {
+                throw new ClosedChannelException();
+            }
             cache = entry.cache;
             if (cache == null) {
-                cache = new BlockCache(entry, blockSize());
+                cache = new BlockCache(entry, file.blockSize());
                 entry.cache = cache;
             }
+            // The channel owns its own reference, so closing it does not
+            // release the caller's handle (and vice versa).
+            entry.refs++;
+            channelFile = new SharedCipherFile(entry, syncPolicy);
         }
-        BlockBufferedChannel ch = new BlockBufferedChannel(this, position, writable, cache,
-                SyncPolicy.orDefault(syncPolicy));
-        return ch;
+        try {
+            return new BlockBufferedChannel(channelFile, position, writable, cache,
+                    SyncPolicy.orDefault(syncPolicy));
+        } catch (RuntimeException e) {
+            try {
+                channelFile.close();
+            } catch (IOException closeFailure) {
+                e.addSuppressed(closeFailure);
+            }
+            throw e;
+        }
     }
 
     /**

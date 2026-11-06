@@ -292,12 +292,8 @@ final class FileManager {
      */
     private SeekableByteChannel openChannel(String cipherFile, long position, boolean writable,
                                              SyncPolicy syncPolicy) throws IOException {
-        SharedCipherFile cf = openCipherFileByName(cipherFile, writable, syncPolicy);
-        try {
+        try (SharedCipherFile cf = openCipherFileByName(cipherFile, writable, syncPolicy)) {
             return cf.newChannel(position, writable, syncPolicy);
-        } catch (IOException | RuntimeException e) {
-            cf.close();
-            throw e;
         }
     }
 
@@ -545,13 +541,9 @@ final class FileManager {
         Objects.requireNonNull(plainFile, "plainFile");
         Objects.requireNonNull(syncPolicy, "syncPolicy");
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
-        SharedCipherFile cf = openCipherFileByName(r.cipherPath, true, syncPolicy);
-        try {
+        try (SharedCipherFile cf = openCipherFileByName(r.cipherPath, true, syncPolicy)) {
             cf.truncate(0);
             return Channels.newOutputStream(cf.newChannel(0, true, syncPolicy));
-        } catch (IOException | RuntimeException e) {
-            cf.close();
-            throw e;
         }
     }
 

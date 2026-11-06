@@ -549,8 +549,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
                 throw new NoSuchFileException(plain);
             }
 
-            SharedCipherFile cf = fs.openCipherFile(plain, write);
-            try {
+            try (SharedCipherFile cf = fs.openCipherFile(plain, write)) {
                 if (truncate && write) {
                     cf.truncate(0);
                 }
@@ -574,9 +573,6 @@ public final class GocryptFsProvider extends FileSystemProvider {
                         : null;
                 return new GocryptFsFileChannel(cf.newChannel(position, write),
                         read, write, append, sync, onClose);
-            } catch (IOException | RuntimeException e) {
-                cf.close();
-                throw e;
             }
         } finally {
             writeLock.unlock();

@@ -18,8 +18,8 @@ import java.nio.channels.SeekableByteChannel;
  * is flushed. Partial-block writes are merged by loading the whole block,
  * patching it and writing it back.</p>
  *
- * <p>The channel owns the {@link SharedCipherFile} it was created from; closing
- * it releases the handle's reference.</p>
+ * <p>The channel owns its own reference to the {@link SharedCipherFile};
+ * closing it releases that reference without closing the caller's handle.</p>
  */
 public final class BlockBufferedChannel implements SeekableByteChannel {
 

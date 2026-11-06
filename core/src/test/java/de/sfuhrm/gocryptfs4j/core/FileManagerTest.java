@@ -84,6 +84,38 @@ class FileManagerTest {
     }
 
     @Test
+    void truncateGrowKeepsHandleUsable() throws IOException {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.fileManager.createFile("/f.txt");
+
+        try (SharedCipherFile cf = h.fileManager.openCipherFile("/f.txt", true)) {
+            cf.truncate(10_000);
+            assertEquals(10_000, cf.plainSize());
+
+            // Growing must not close this handle; a channel opened afterwards
+            // still works, and closing it leaves the handle alive.
+            try (BlockBufferedChannel ch = cf.newChannel(10_000, true)) {
+                assertEquals(1, ch.write(ByteBuffer.wrap(new byte[]{0x42})));
+            }
+            assertEquals(10_001, cf.plainSize());
+
+            try (BlockBufferedChannel ch = cf.newChannel(0, false)) {
+                byte[] read = new byte[10_001];
+                int pos = 0;
+                while (pos < read.length) {
+                    int n = ch.read(ByteBuffer.wrap(read, pos, read.length - pos));
+                    if (n < 0) {
+                        break;
+                    }
+                    pos += n;
+                }
+                assertEquals(read.length, pos);
+                assertEquals(0x42, read[10_000]);
+            }
+        }
+    }
+
+    @Test
     void truncateByOtherHandleDropsBufferedWriteBack() throws IOException {
         ManagerHarness h = ManagerHarness.encrypted();
         h.fileManager.createFile("/f.txt");

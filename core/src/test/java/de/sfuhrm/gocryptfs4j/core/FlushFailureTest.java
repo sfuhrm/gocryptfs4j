@@ -36,6 +36,7 @@ class FlushFailureTest {
 
         store.failWrites = true;
         assertThrows(IOException.class, ch::close);
+        assertThrows(IOException.class, cf::close);
 
         assertFalse(store.channels.get(0).isOpen(), "the file descriptor must be closed");
         for (byte b : blockOf(cache)) {

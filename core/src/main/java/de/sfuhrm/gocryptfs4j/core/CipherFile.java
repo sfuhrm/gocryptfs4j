@@ -206,8 +206,8 @@ public final class CipherFile implements AutoCloseable {
 
     /**
      * Truncates the file to {@code newPlainSize} plaintext bytes. Only shrinking
-     * and truncation to empty are performed here; growing is handled by the
-     * buffered channel.
+     * and truncation to empty are performed here; growing is handled by
+     * {@link SharedCipherFile}.
      *
      * <p>When the new size is block-aligned only the channel is truncated; no
      * block is re-encrypted. Otherwise the final partial block is re-encrypted
