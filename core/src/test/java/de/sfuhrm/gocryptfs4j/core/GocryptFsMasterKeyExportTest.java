@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -80,15 +81,34 @@ class GocryptFsMasterKeyExportTest {
     }
 
     @Test
-    void changePasswordKeepsABackupOfTheOldConfig() throws IOException {
+    void changePasswordDoesNotKeepABackupByDefault() throws IOException {
+        PathCipherStore store = new PathCipherStore(tmp);
+        try (GocryptFs fs = GocryptFs.create(store, "old".toCharArray())) {
+            fs.changePassword("new".toCharArray());
+        }
+
+        assertFalse(Files.exists(tmp.resolve("gocryptfs.conf.bak")),
+                "a password change must not keep the old password usable by default");
+        assertThrows(IOException.class,
+                () -> GocryptFs.open(store, "old".toCharArray()));
+        try (GocryptFs fs = GocryptFs.open(store, "new".toCharArray())) {
+            assertTrue(fs.list("/").isEmpty());
+        }
+    }
+
+    @Test
+    void changePasswordCanKeepABackupOfTheOldConfig() throws IOException {
         PathCipherStore store = new PathCipherStore(tmp);
         try (GocryptFs fs = GocryptFs.create(store, "old".toCharArray())) {
             fs.createFile("/f.txt");
-            fs.changePassword("new".toCharArray());
+            fs.changePassword("new".toCharArray(), true);
         }
 
         Path backup = tmp.resolve("gocryptfs.conf.bak");
         assertTrue(Files.exists(backup));
+        assertEquals(PosixFilePermissions.fromString("r--------"),
+                Files.getPosixFilePermissions(backup),
+                "the backup contains the old encrypted master key and must be 0400");
         byte[] oldKey = ConfigFile.fromBytes(Files.readAllBytes(backup))
                 .decryptMasterKey("old".toCharArray());
         assertFalse(Arrays.equals(new byte[oldKey.length], oldKey));

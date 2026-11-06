@@ -1381,9 +1381,15 @@ public final class GocryptFs implements AutoCloseable {
      * <p>This is the equivalent of gocryptfs's {@code -passwd}. The master key
      * itself is unchanged, so the ciphertext of every existing file remains
      * valid; only the scrypt salt and the encrypted master-key blob are
-     * rewritten. The supplied password is read but neither retained nor wiped
-     * by this class, so the caller should clear it when it is no longer
-     * needed.</p>
+     * rewritten. The scrypt cost is upgraded to at least the current default.
+     * The supplied password is read but neither retained nor wiped by this
+     * class, so the caller should clear it when it is no longer needed.</p>
+     *
+     * <p>No {@code gocryptfs.conf.bak} is written. A backup would keep the old
+     * password working, which defeats a password change after the old password
+     * leaked. Use {@link #changePassword(char[], boolean)} with
+     * {@code keepBackup = true} only when the backup is needed to recover from
+     * a mistyped new password, and delete it after verifying the new one.</p>
      *
      * @param password the new password, encoded as UTF-8; read but neither
      *                 retained nor wiped by this class
@@ -1395,6 +1401,103 @@ public final class GocryptFs implements AutoCloseable {
      *                               changed to a password
      */
     public void changePassword(char[] password) throws IOException {
+        changePassword(password, false);
+    }
+
+    /**
+     * Changes the password protecting this filesystem's master key, optionally
+     * keeping a backup of the old {@code gocryptfs.conf}.
+     *
+     * <p>When {@code keepBackup} is {@code true}, the previous config is
+     * written to {@code gocryptfs.conf.bak} with mode {@code 0400} before the
+     * new config replaces it. The backup is still protected by the old
+     * password, so anyone who knows a leaked old password can still unlock the
+     * master key through it. Delete the backup after verifying that the new
+     * password works; never keep it when the password change was prompted by a
+     * leak.</p>
+     *
+     * @param password   the new password, encoded as UTF-8; read but neither
+     *                   retained nor wiped by this class
+     * @param keepBackup whether to keep the old config as
+     *                   {@code gocryptfs.conf.bak}
+     * @throws IOException on filesystem errors, or if the config cannot be
+     *                     written atomically
+     * @throws NullPointerException if {@code password} is {@code null}
+     * @throws IllegalStateException if this filesystem is protected by a FIDO2
+     *                               token, whose key protection cannot be
+     *                               changed to a password
+     */
+    public void changePassword(char[] password, boolean keepBackup) throws IOException {
+        changePassword(password, keepBackup, 0);
+    }
+
+    /**
+     * Changes the password protecting this filesystem's master key with an
+     * explicit scrypt cost, without keeping a backup of the old config.
+     *
+     * <p>{@code scryptCost} is either a scrypt {@code logN} value (for example
+     * {@code 16}) or an actual power-of-two {@code N} value. A value of
+     * {@code 0} keeps the automatic upgrade to at least the current default.
+     * See {@link #changePassword(char[], boolean)} for the backup warning.</p>
+     *
+     * @param password   the new password, encoded as UTF-8; read but neither
+     *                   retained nor wiped by this class
+     * @param scryptCost the scrypt {@code logN} or {@code N} value, or {@code 0}
+     *                   to use the automatic upgrade
+     * @throws IOException on filesystem errors, or if the config cannot be
+     *                     written atomically
+     * @throws NullPointerException if {@code password} is {@code null}
+     * @throws IllegalArgumentException if {@code scryptCost} is invalid
+     * @throws IllegalStateException if this filesystem is protected by a FIDO2
+     *                               token, whose key protection cannot be
+     *                               changed to a password
+     */
+    public void changePassword(char[] password, int scryptCost) throws IOException {
+        changePassword(password, false, scryptCost);
+    }
+
+    /**
+     * Changes the password protecting this filesystem's master key with an
+     * explicit scrypt cost and optional backup.
+     *
+     * @param password   the new password, encoded as UTF-8; read but neither
+     *                   retained nor wiped by this class
+     * @param scryptCost the scrypt {@code logN} or {@code N} value, or {@code 0}
+     *                   to use the automatic upgrade
+     * @param keepBackup whether to keep the old config as
+     *                   {@code gocryptfs.conf.bak}
+     * @throws IOException on filesystem errors, or if the config cannot be
+     *                     written atomically
+     * @throws NullPointerException if {@code password} is {@code null}
+     * @throws IllegalArgumentException if {@code scryptCost} is invalid
+     * @throws IllegalStateException if this filesystem is protected by a FIDO2
+     *                               token, whose key protection cannot be
+     *                               changed to a password
+     */
+    public void changePassword(char[] password, int scryptCost, boolean keepBackup)
+            throws IOException {
+        changePassword(password, keepBackup, scryptCost);
+    }
+
+    /**
+     * Changes the password protecting this filesystem's master key, with an
+     * optional old-config backup and an explicit scrypt cost.
+     *
+     * @param password   the new password, encoded as UTF-8
+     * @param keepBackup whether to write the old config to
+     *                   {@code gocryptfs.conf.bak}
+     * @param scryptCost the scrypt {@code logN} or {@code N} value, or {@code 0}
+     *                   to use the automatic upgrade
+     * @throws IOException on filesystem errors, or if the config cannot be
+     *                     written atomically
+     * @throws NullPointerException if {@code password} is {@code null}
+     * @throws IllegalArgumentException if {@code scryptCost} is invalid
+     * @throws IllegalStateException if this filesystem is protected by a FIDO2
+     *                               token, whose key protection cannot be
+     *                               changed to a password
+     */
+    public void changePassword(char[] password, boolean keepBackup, int scryptCost)
+            throws IOException {
         Objects.requireNonNull(password, "password");
         Lock writeLock = lock.writeLock();
         writeLock.lock();
@@ -1402,12 +1505,17 @@ public final class GocryptFs implements AutoCloseable {
             ensureOpen();
             ensureWritable();
             String configName = PathResolver.join(rootName, Constants.CONF_DEFAULT_NAME);
-            // Keep the old config, like gocryptfs does when resetting a
-            // password with -masterkey, so a typo in the new password does not
-            // lock the user out before the new config has been verified.
-            byte[] previous = store.readSmall(configName, Constants.CONFIG_MAX_SIZE);
-            store.writeSmall(configName + ".bak", previous, true);
-            ConfigFile updated = config.reencryptMasterKeyCopy(masterKey, password);
+            // Compute the new config before touching the store. In particular,
+            // a FIDO2 filesystem must fail here without leaving a stray .bak.
+            ConfigFile updated = scryptCost == 0
+                    ? config.reencryptMasterKeyCopy(masterKey, password)
+                    : config.reencryptMasterKeyCopy(masterKey, password, scryptCost);
+            if (keepBackup) {
+                // The old config still unlocks with the old password. Write it
+                // with the same 0400 permissions as gocryptfs.conf.
+                byte[] previous = store.readSmall(configName, Constants.CONFIG_MAX_SIZE);
+                store.writeConfig(configName + ".bak", previous, true);
+            }
             store.writeConfig(configName, updated.toBytes(), true);
             config = updated;
         } finally {

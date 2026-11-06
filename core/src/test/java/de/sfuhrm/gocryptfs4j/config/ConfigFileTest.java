@@ -159,6 +159,32 @@ class ConfigFileTest {
     }
 
     @Test
+    void reencryptMasterKeyCopyUpgradesWeakScryptParameters() throws Exception {
+        Path dir = Files.createTempDirectory("gocryptfs4j-");
+        try {
+            String salt = Base64.getEncoder().encodeToString(new byte[32]);
+            CipherStore store = writeConf(dir, salt, 1 << 10, 8, 1, 32,
+                    "[\"HKDF\",\"GCMIV128\",\"EMENames\"]", null);
+            ConfigFile cf = ConfigFile.load(store);
+            byte[] masterKey = Keys.randomBytes(Constants.KEY_LEN);
+
+            ConfigFile upgraded = cf.reencryptMasterKeyCopy(
+                    masterKey, "new-password".toCharArray());
+
+            assertArrayEquals(masterKey,
+                    upgraded.decryptMasterKey("new-password".toCharArray()));
+            assertEquals(Constants.SCRYPT_DEFAULT_N, upgraded.scryptObject().n(),
+                    "a password change must upgrade a weak scrypt cost");
+            assertEquals(8, upgraded.scryptObject().r());
+            assertEquals(1, upgraded.scryptObject().p());
+            assertNotEquals(salt, upgraded.scryptObject().salt());
+        } finally {
+            Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
     void reencryptMasterKeyRejectsWrongLength() {
         ConfigFile cf = ConfigFile.create(Keys.randomBytes(Constants.KEY_LEN), PASSWORD, false,
                 ContentCipherType.AES_GCM);

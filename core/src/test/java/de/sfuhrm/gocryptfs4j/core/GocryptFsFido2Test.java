@@ -19,6 +19,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -88,6 +89,21 @@ class GocryptFsFido2Test {
         Fido2Token other = new FakeToken("seed-d".getBytes(StandardCharsets.UTF_8));
         IOException e = assertThrows(IOException.class, () -> GocryptFs.open(new PathCipherStore(cipherDir), other));
         assertTrue(e.getMessage().contains("FIDO2"), e.getMessage());
+    }
+
+    @Test
+    void changePasswordIsRejectedWithoutLeavingABackup() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        Fido2Token token = new FakeToken("seed-g".getBytes(StandardCharsets.UTF_8));
+
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), token)) {
+            assertThrows(IllegalStateException.class,
+                    () -> fs.changePassword("new".toCharArray(), true));
+        }
+
+        assertFalse(Files.exists(cipherDir.resolve(Constants.CONF_DEFAULT_NAME + ".bak")),
+                "a rejected FIDO2 password change must not leave a backup behind");
     }
 
     @Test

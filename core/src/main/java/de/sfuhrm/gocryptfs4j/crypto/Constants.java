@@ -115,10 +115,23 @@ public final class Constants {
     public static final String FLAG_XCHACHA = "XChaCha20Poly1305";
 
     // ------------------------------------------------------------------
-    // Bounds for attacker-controlled scrypt parameters (gocryptfs.conf).
+    // Scrypt defaults and bounds (gocryptfs.conf).
+    // ------------------------------------------------------------------
+
+    /** Default scrypt logN for new or re-encrypted keys (2^16), matching gocryptfs. */
+    public static final int SCRYPT_DEFAULT_LOG_N = 16;
+
+    /** Default scrypt CPU/memory cost parameter for new or re-encrypted keys. */
+    public static final int SCRYPT_DEFAULT_N = 1 << SCRYPT_DEFAULT_LOG_N;
+
+    /** Default scrypt block-size parameter for new or re-encrypted keys. */
+    public static final int SCRYPT_DEFAULT_R = 8;
+
+    /** Default scrypt parallelization parameter for new or re-encrypted keys. */
+    public static final int SCRYPT_DEFAULT_P = 1;
+
     // gocryptfs only validates minimums, so a rogue config could otherwise
     // force an unbounded memory/CPU load when the filesystem is opened.
-    // ------------------------------------------------------------------
 
     /** Minimum accepted scrypt logN (2^10), matching gocryptfs. */
     public static final int SCRYPT_MIN_LOG_N = 10;

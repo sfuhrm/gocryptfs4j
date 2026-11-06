@@ -535,10 +535,12 @@ public final class ConfigFile {
      *
      * <p>This is the equivalent of gocryptfs's {@code -passwd}. Because it takes
      * the master key directly, it also supports changing the password without
-     * knowing the previous one (gocryptfs's {@code -passwd -masterkey}). The
-     * scrypt cost parameters ({@code N}, {@code R}, {@code P}, {@code KeyLen}) and
-     * all feature flags are preserved; only the salt is regenerated. Serialize the
-     * returned config with {@link #toBytes()} to persist the change.</p>
+     * knowing the previous one (gocryptfs's {@code -passwd -masterkey}). All
+     * feature flags are preserved and the salt is regenerated. The scrypt cost
+     * is upgraded to at least the current default ({@code N=2^16}, {@code R=8},
+     * {@code P=1}); stronger parameters already present in this config are
+     * kept. Serialize the returned config with {@link #toBytes()} to persist
+     * the change.</p>
      *
      * @param masterKey the 32-byte master key
      * @param password  the new password, encoded as UTF-8
@@ -549,6 +551,42 @@ public final class ConfigFile {
      *                               cannot be changed to a password
      */
     public ConfigFile reencryptMasterKeyCopy(byte[] masterKey, char[] password) {
+        Objects.requireNonNull(masterKey, "masterKey");
+        Objects.requireNonNull(password, "password");
+        ScryptKdf s = scryptObject;
+        if (s == null) {
+            throw new IllegalStateException("config has no scrypt object");
+        }
+        int logN = Math.max(Integer.numberOfTrailingZeros(s.n()),
+                Constants.SCRYPT_DEFAULT_LOG_N);
+        return reencryptMasterKeyCopy(masterKey, password, logN);
+    }
+
+    /**
+     * Re-encrypts the master key with a new password and an explicit scrypt
+     * cost, returning a copy of this config that carries the updated
+     * {@link #encryptedKey} and scrypt salt. This config is left unchanged.
+     *
+     * <p>The {@code scryptCost} argument is either a scrypt {@code logN} value
+     * (for example {@code 16}) or an actual power-of-two {@code N} value (for
+     * example {@code 1 << 16}). Values below {@code 2^10} are interpreted as
+     * {@code logN}. {@code R} and {@code P} are never lowered below the current
+     * defaults. All feature flags are preserved and the salt is regenerated.
+     * Serialize the returned config with {@link #toBytes()} to persist the
+     * change.</p>
+     *
+     * @param masterKey  the 32-byte master key
+     * @param password   the new password, encoded as UTF-8
+     * @param scryptCost the scrypt {@code logN} or {@code N} value
+     * @return a copy of this config with the re-encrypted master key
+     * @throws NullPointerException if {@code masterKey} or {@code password} is {@code null}
+     * @throws IllegalArgumentException if {@code masterKey} is not 32 bytes long,
+     *                                  or {@code scryptCost} is not a valid cost
+     * @throws IllegalStateException if the config uses FIDO2 key protection, which
+     *                               cannot be changed to a password
+     */
+    public ConfigFile reencryptMasterKeyCopy(byte[] masterKey, char[] password,
+                                             int scryptCost) {
         Objects.requireNonNull(masterKey, "masterKey");
         Objects.requireNonNull(password, "password");
         if (masterKey.length != Constants.KEY_LEN) {
@@ -564,9 +602,14 @@ public final class ConfigFile {
             throw new IllegalStateException("config has no scrypt object");
         }
 
+        int logN = normalizeScryptLogN(scryptCost);
+        int n = 1 << logN;
+        int r = Math.max(s.r(), Constants.SCRYPT_DEFAULT_R);
+        int p = Math.max(s.p(), Constants.SCRYPT_DEFAULT_P);
+
         byte[] passwordBytes = charsToBytes(password);
         byte[] salt = Keys.randomBytes(Constants.KEY_LEN);
-        byte[] scryptHash = Keys.scrypt(passwordBytes, salt, s.n(), s.r(), s.p(), s.keyLen());
+        byte[] scryptHash = Keys.scrypt(passwordBytes, salt, n, r, p, Constants.KEY_LEN);
         byte[] contentKey = null;
         try {
             // The master key is always protected with AES-256-GCM; the content
@@ -598,7 +641,7 @@ public final class ConfigFile {
             copy.fido2 = fido2;
             copy.encryptedKey = Base64.getEncoder().encodeToString(encrypted);
             copy.scryptObject = new ScryptKdf(Base64.getEncoder().encodeToString(salt),
-                    s.n(), s.r(), s.p(), s.keyLen());
+                    n, r, p, Constants.KEY_LEN);
             return copy;
         } finally {
             Keys.wipe(contentKey);
@@ -609,15 +652,39 @@ public final class ConfigFile {
     }
 
     /**
+     * Accepts either a scrypt {@code logN} value or a power-of-two {@code N}
+     * value and returns the corresponding {@code logN}.
+     *
+     * @param scryptCost the scrypt {@code logN} or {@code N} value
+     * @return the validated scrypt {@code logN}
+     * @throws IllegalArgumentException if the value is not a valid cost
+     */
+    private static int normalizeScryptLogN(int scryptCost) {
+        int logN = scryptCost;
+        if (scryptCost >= (1 << Constants.SCRYPT_MIN_LOG_N)) {
+            if ((scryptCost & (scryptCost - 1)) != 0) {
+                throw new IllegalArgumentException(
+                        "scrypt N must be a power of two: " + scryptCost);
+            }
+            logN = Integer.numberOfTrailingZeros(scryptCost);
+        }
+        if (logN < Constants.SCRYPT_MIN_LOG_N || logN > Constants.SCRYPT_MAX_LOG_N) {
+            throw new IllegalArgumentException("scrypt logN out of range: " + logN);
+        }
+        return logN;
+    }
+
+    /**
      * Re-encrypts the master key with a new password, updating {@link #encryptedKey}
      * and the scrypt salt in place.
      *
      * <p>This is the equivalent of gocryptfs's {@code -passwd}. Because it takes
      * the master key directly, it also supports changing the password without
-     * knowing the previous one (gocryptfs's {@code -passwd -masterkey}). The
-     * scrypt cost parameters ({@code N}, {@code R}, {@code P}, {@code KeyLen}) and
-     * all feature flags are preserved; only the salt is regenerated. Serialize the
-     * updated config with {@link #toBytes()} afterwards to persist the change.</p>
+     * knowing the previous one (gocryptfs's {@code -passwd -masterkey}). All
+     * feature flags are preserved and the salt is regenerated. The scrypt cost
+     * is upgraded to at least the current default; stronger parameters already
+     * present in this config are kept. Serialize the updated config with
+     * {@link #toBytes()} afterwards to persist the change.</p>
      *
      * @param masterKey the 32-byte master key
      * @param password  the new password, encoded as UTF-8
@@ -628,6 +695,30 @@ public final class ConfigFile {
      */
     public void reencryptMasterKey(byte[] masterKey, char[] password) {
         ConfigFile updated = reencryptMasterKeyCopy(masterKey, password);
+        encryptedKey = updated.encryptedKey;
+        scryptObject = updated.scryptObject;
+    }
+
+    /**
+     * Re-encrypts the master key with a new password and an explicit scrypt
+     * cost, updating {@link #encryptedKey} and the scrypt salt in place.
+     *
+     * <p>{@code scryptCost} is either a scrypt {@code logN} value or an actual
+     * power-of-two {@code N} value. All feature flags are preserved and the
+     * salt is regenerated. Serialize the updated config with
+     * {@link #toBytes()} afterwards to persist the change.</p>
+     *
+     * @param masterKey  the 32-byte master key
+     * @param password   the new password, encoded as UTF-8
+     * @param scryptCost the scrypt {@code logN} or {@code N} value
+     * @throws NullPointerException if {@code masterKey} or {@code password} is {@code null}
+     * @throws IllegalArgumentException if {@code masterKey} is not 32 bytes long,
+     *                                  or {@code scryptCost} is not a valid cost
+     * @throws IllegalStateException if the config uses FIDO2 key protection, which
+     *                               cannot be changed to a password
+     */
+    public void reencryptMasterKey(byte[] masterKey, char[] password, int scryptCost) {
+        ConfigFile updated = reencryptMasterKeyCopy(masterKey, password, scryptCost);
         encryptedKey = updated.encryptedKey;
         scryptObject = updated.scryptObject;
     }
@@ -899,7 +990,8 @@ public final class ConfigFile {
 
         ScryptKdf sk = new ScryptKdf(
                 Base64.getEncoder().encodeToString(Keys.randomBytes(Constants.KEY_LEN)),
-                1 << 16, 8, 1, Constants.KEY_LEN);
+                Constants.SCRYPT_DEFAULT_N, Constants.SCRYPT_DEFAULT_R,
+                Constants.SCRYPT_DEFAULT_P, Constants.KEY_LEN);
         cf.scryptObject = sk;
 
         byte[] scryptHash = Keys.scrypt(
