@@ -8,11 +8,14 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 
 import java.io.IOException;
+import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.channels.SeekableByteChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.FileSystem;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
@@ -237,6 +240,39 @@ class PathCipherStoreTest {
 
         assertArrayEquals("old".getBytes(StandardCharsets.UTF_8), Files.readAllBytes(conf));
         assertNoTempFiles(dir);
+    }
+
+    @Test
+    void writeSmallFallsBackWhenHardLinksAreUnsupported() throws Exception {
+        Path zip = tmp.resolve("vault.zip");
+        try (FileSystem fs = FileSystems.newFileSystem(
+                URI.create("jar:" + zip.toUri()),
+                Collections.singletonMap("create", "true"))) {
+            Path dir = fs.getPath("/cipher");
+            Files.createDirectory(dir);
+            PathCipherStore store = new PathCipherStore(dir);
+            Path conf = dir.resolve("gocryptfs.conf");
+            byte[] data = "hello".getBytes(StandardCharsets.UTF_8);
+
+            store.writeSmall(conf.toString(), data, false);
+            assertArrayEquals(data, Files.readAllBytes(conf));
+            assertThrows(FileAlreadyExistsException.class,
+                    () -> store.writeSmall(conf.toString(),
+                            "new".getBytes(StandardCharsets.UTF_8), false));
+            assertArrayEquals(data, Files.readAllBytes(conf));
+            assertNoTempFiles(dir);
+
+            Path sub = dir.resolve("sub");
+            store.mkdir(sub.toString());
+            Path diriv = sub.resolve("gocryptfs.diriv");
+            store.writeSmall(diriv.toString(), data, false);
+            assertArrayEquals(data, Files.readAllBytes(diriv));
+            assertNoTempFiles(sub);
+
+            store.writeConfig(conf.toString(), data, true);
+            assertArrayEquals(data, Files.readAllBytes(conf));
+            assertNoTempFiles(dir);
+        }
     }
 
     @Test

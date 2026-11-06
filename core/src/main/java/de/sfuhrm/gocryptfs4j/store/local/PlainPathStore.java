@@ -13,6 +13,7 @@ import java.nio.channels.FileChannel;
 import java.nio.file.AccessMode;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.DirectoryStream;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
@@ -48,6 +49,15 @@ final class PlainPathStore implements CipherStore {
     private final Path root;
 
     /**
+     * Whether the backing filesystem supports hard links, or {@code null} while
+     * it has not been probed yet. The capability is probed once per store, on
+     * the first create-new write. Filesystems without hard links (FAT/exFAT,
+     * some SMB/FUSE mounts, cloud-sync folders) then use a temporary file plus
+     * a non-replacing move instead.
+     */
+    private volatile @Nullable Boolean hardLinksSupported;
+
+    /**
      * Creates a store over the given ciphertext root.
      *
      * @param root the ciphertext root directory
@@ -74,7 +84,7 @@ final class PlainPathStore implements CipherStore {
      * @throws IOException if the name resolves outside the root directory
      */
     private Path resolve(String name) throws IOException {
-        Path p = Paths.get(name);
+        Path p = root.getFileSystem().getPath(name);
         if (!p.isAbsolute()) {
             p = root.resolve(p);
         }
@@ -139,15 +149,14 @@ final class PlainPathStore implements CipherStore {
      * @throws IOException if the file cannot be written, or it exists and
      *                     {@code overwrite} is {@code false}
      */
-    private static void writeAtomically(Path p, byte[] data, boolean overwrite,
-                                        @Nullable Set<PosixFilePermission> permissions)
+    private void writeAtomically(Path p, byte[] data, boolean overwrite,
+                                 @Nullable Set<PosixFilePermission> permissions)
             throws IOException {
         Path dir = p.getParent();
         if (dir == null) {
             throw new IOException("cannot determine parent directory of " + p);
         }
         Path temp = Files.createTempFile(dir, ".gocryptfs-", ".tmp");
-        boolean moved = false;
         try {
             try (FileChannel channel = FileChannel.open(temp,
                     StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
@@ -167,26 +176,117 @@ final class PlainPathStore implements CipherStore {
             if (overwrite) {
                 Files.move(temp, p, StandardCopyOption.ATOMIC_MOVE,
                         StandardCopyOption.REPLACE_EXISTING);
-                moved = true;
+            } else if (supportsHardLinks()) {
+                publishWithHardLink(temp, p);
             } else {
-                // Publish the temporary file by hard-linking it at the target
-                // and then unlinking the temporary name. link(2) atomically
-                // fails with FileAlreadyExistsException if the target exists,
-                // so the create-new contract holds under concurrency. A plain
-                // Files.move without REPLACE_EXISTING cannot provide this: on
-                // Linux the JDK only stats the target before calling rename(2),
-                // which then replaces it, so a target created in between would
-                // be silently overwritten.
-                Files.createLink(p, temp);
-                moved = true;
-                Files.delete(temp);
+                // The filesystem cannot create hard links. Move the temporary
+                // file into place without REPLACE_EXISTING: an existing target
+                // still raises FileAlreadyExistsException, but a target created
+                // between the move's existence check and rename(2) may be
+                // replaced. The content itself is still written crash-safely.
+                Files.move(temp, p);
             }
         } finally {
-            if (!moved) {
-                Files.deleteIfExists(temp);
-            }
+            // After a move the temporary name is gone; after a hard link it is
+            // a second name for the published file and must be unlinked.
+            Files.deleteIfExists(temp);
         }
         fsyncDirectory(dir);
+    }
+
+    /**
+     * Publishes a fully written temporary file at the target name by
+     * hard-linking it and then unlinking the temporary name. link(2) atomically
+     * fails with {@link FileAlreadyExistsException} if the target exists, so the
+     * create-new contract holds under concurrency. A plain {@link Files#move}
+     * without {@code REPLACE_EXISTING} cannot provide this: on Linux the JDK
+     * only stats the target before calling rename(2), which then replaces it, so
+     * a target created in between would be silently overwritten.
+     *
+     * <p>If the probe said hard links work but this particular directory still
+     * cannot create one (for example because it is a different mount), the
+     * capability is remembered as unsupported and the temporary file is moved
+     * into place instead.</p>
+     *
+     * @param temp the fully written temporary file
+     * @param p    the target path
+     * @throws IOException if the target exists or the file cannot be published
+     */
+    private void publishWithHardLink(Path temp, Path p) throws IOException {
+        try {
+            Files.createLink(p, temp);
+        } catch (FileAlreadyExistsException e) {
+            throw e;
+        } catch (IOException | UnsupportedOperationException e) {
+            disableHardLinks();
+            Files.move(temp, p);
+        }
+    }
+
+    /**
+     * Returns whether the backing filesystem supports hard links, probing it
+     * once per store on first use. The probe runs in the store root; a
+     * directory on a different mount that still refuses a hard link is caught
+     * by {@link #publishWithHardLink} and switches to the fallback too.
+     *
+     * @return whether hard links are supported
+     */
+    private boolean supportsHardLinks() {
+        Boolean supported = hardLinksSupported;
+        if (supported != null) {
+            return supported;
+        }
+        synchronized (this) {
+            Boolean probed = hardLinksSupported;
+            if (probed == null) {
+                probed = probeHardLinks(root);
+                hardLinksSupported = probed;
+            }
+            return probed;
+        }
+    }
+
+    /**
+     * Probes whether hard links can be created in {@code dir} by creating and
+     * removing a temporary file and a hard link to it.
+     *
+     * @param dir the directory to probe
+     * @return whether hard links work there
+     */
+    private static boolean probeHardLinks(Path dir) {
+        Path source = null;
+        Path link = null;
+        try {
+            source = Files.createTempFile(dir, ".gocryptfs-probe-", ".tmp");
+            link = dir.resolve(source.getFileName().toString() + ".link");
+            Files.createLink(link, source);
+            return true;
+        } catch (IOException | UnsupportedOperationException | SecurityException e) {
+            return false;
+        } finally {
+            if (link != null) {
+                try {
+                    Files.deleteIfExists(link);
+                } catch (IOException | UnsupportedOperationException | SecurityException e) {
+                    // Best effort: the probe file is only a temporary artifact.
+                }
+            }
+            if (source != null) {
+                try {
+                    Files.deleteIfExists(source);
+                } catch (IOException | UnsupportedOperationException | SecurityException e) {
+                    // Best effort cleanup.
+                }
+            }
+        }
+    }
+
+    /**
+     * Remembers that the backing filesystem cannot create hard links, so later
+     * create-new writes go straight to the non-replacing-move fallback.
+     */
+    private synchronized void disableHardLinks() {
+        hardLinksSupported = Boolean.FALSE;
     }
 
     /**

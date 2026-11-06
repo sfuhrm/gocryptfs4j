@@ -132,9 +132,11 @@ final class SecurePathStore implements CipherStore {
             // meantime (for example a gocryptfs.diriv) would be silently
             // replaced, leaving every name in the directory undecryptable.
             // Delegate to the path-based store, which publishes the temporary
-            // file with a hard link so the create-new contract is enforced
-            // atomically. The parent is still verified through the secure
-            // traversal first; see verifyParent for the residual window.
+            // file with a hard link where the filesystem supports one, so the
+            // create-new contract is enforced atomically. On filesystems
+            // without hard links it falls back to a non-replacing move. The
+            // parent is still verified through the secure traversal first; see
+            // verifyParent for the residual window.
             verifyParent(name);
             delegate.writeSmall(name, data, false);
             return;
@@ -442,7 +444,7 @@ final class SecurePathStore implements CipherStore {
      * @throws IOException if the name is not within the root
      */
     private List<Path> components(String name) throws IOException {
-        Path p = Paths.get(name);
+        Path p = root.getFileSystem().getPath(name);
         if (!p.isAbsolute()) {
             p = root.resolve(p);
         }
