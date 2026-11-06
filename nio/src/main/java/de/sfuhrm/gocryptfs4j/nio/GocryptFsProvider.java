@@ -416,17 +416,31 @@ public final class GocryptFsProvider extends FileSystemProvider {
     }
 
     /**
-     * Returns the absolute form of a gocryptfs path with {@code ".."} segments
-     * resolved lexically. Used for operations that do not follow symbolic links
-     * (so a {@code ".."} segment cannot be resolved relative to a link target)
-     * but must still hand a {@code ".."}-free path to the core, which rejects
-     * {@code ".."}.
+     * Resolves the parent of {@code path} like {@link GocryptFsPath#toRealPathLenient()}
+     * and appends the final name without following it.
+     *
+     * <p>Mutating operations must not follow the final name (a symbolic link is
+     * deleted, moved, read or replaced as a link), but the path leading to it
+     * must be resolved like POSIX does: symbolic-link intermediates are
+     * followed and {@code ".."} is applied after them. Resolving the parent
+     * here also means the core never has to handle a symbolic-link intermediate
+     * itself.</p>
      *
      * @param path the path
-     * @return the lexically normalized absolute path
+     * @return the absolute path with the parent resolved and the final name kept
+     * @throws IOException on filesystem errors while resolving symbolic links
      */
-    private static GocryptFsPath toNormalizedAbsolute(Path path) {
-        return (GocryptFsPath) toAbsolute(path).normalize();
+    private static GocryptFsPath resolveParent(Path path) throws IOException {
+        GocryptFsPath abs = toAbsolute(path);
+        Path name = abs.getFileName();
+        if (name == null || name.toString().equals("..")) {
+            // The root, or a directory reference with no final name that could
+            // be kept unresolved.
+            return abs.toRealPathLenient();
+        }
+        GocryptFsPath parent = (GocryptFsPath) abs.getParent();
+        GocryptFsPath resolvedParent = parent == null ? abs : parent.toRealPathLenient();
+        return (GocryptFsPath) resolvedParent.resolve(name);
     }
 
     /**
@@ -642,7 +656,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
     @Override
     public void createDirectory(Path dir, FileAttribute<?>... attrs) throws IOException {
         Objects.requireNonNull(dir, "dir");
-        GocryptFsPath d = toNormalizedAbsolute(dir);
+        GocryptFsPath d = resolveParent(dir);
         core(d).mkdir(d.toString());
         applyAttributes(d, attrs);
     }
@@ -657,7 +671,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
     @Override
     public void delete(Path path) throws IOException {
         Objects.requireNonNull(path, "path");
-        GocryptFsPath p = toNormalizedAbsolute(path);
+        GocryptFsPath p = resolveParent(path);
         core(p).delete(p.toString());
     }
 
@@ -682,7 +696,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
             throws IOException {
         Objects.requireNonNull(link, "link");
         Objects.requireNonNull(target, "target");
-        GocryptFsPath l = toNormalizedAbsolute(link);
+        GocryptFsPath l = resolveParent(link);
         core(l).createSymlink(l.toString(), target.toString());
     }
 
@@ -698,7 +712,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
     @Override
     public Path readSymbolicLink(Path link) throws IOException {
         Objects.requireNonNull(link, "link");
-        GocryptFsPath l = toNormalizedAbsolute(link);
+        GocryptFsPath l = resolveParent(link);
         String target = core(l).readSymlinkTarget(l.toString());
         return l.getFileSystem().getPath(target);
     }
@@ -737,10 +751,10 @@ public final class GocryptFsProvider extends FileSystemProvider {
         if (!opts.contains(LinkOption.NOFOLLOW_LINKS)) {
             s = s.toRealPathLenient();
         } else {
-            s = (GocryptFsPath) s.normalize();
+            s = resolveParent(source);
         }
-        GocryptFsPath t = toNormalizedAbsolute(target);
-        if (s.equals(t) || toNormalizedAbsolute(source).equals(t)) {
+        GocryptFsPath t = resolveParent(target);
+        if (s.equals(t) || resolveParent(source).equals(t)) {
             return;
         }
         copyEntry(s, t, opts);
@@ -966,8 +980,8 @@ public final class GocryptFsProvider extends FileSystemProvider {
             throw new AtomicMoveNotSupportedException(source.toString(), target.toString(),
                     "atomic moves are not supported");
         }
-        GocryptFsPath s = toNormalizedAbsolute(source);
-        GocryptFsPath t = toNormalizedAbsolute(target);
+        GocryptFsPath s = resolveParent(source);
+        GocryptFsPath t = resolveParent(target);
         if (core(s) != core(t)) {
             throw new FileSystemException(s.toString(), t.toString(),
                     "cannot move between different encrypted filesystems");

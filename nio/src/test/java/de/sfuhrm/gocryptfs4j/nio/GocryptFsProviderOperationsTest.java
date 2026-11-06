@@ -588,6 +588,63 @@ class GocryptFsProviderOperationsTest {
     }
 
     @Test
+    void mutatingOperationsResolveDotDotAfterSymbolicLink() throws IOException {
+        Files.createDirectories(nio.getPath("/a5/deep/dir"));
+        Path file = nio.getPath("/a5/deep/file");
+        Files.write(file, "deep".getBytes(StandardCharsets.UTF_8));
+        Path lexical = nio.getPath("/a5/file");
+        Files.write(lexical, "lexical".getBytes(StandardCharsets.UTF_8));
+        Files.createSymbolicLink(nio.getPath("/a5/deepLink"), nio.getPath("/a5/deep/dir"));
+
+        Files.createDirectory(nio.getPath("/a5/deepLink/../created"));
+        assertTrue(Files.isDirectory(nio.getPath("/a5/deep/created")));
+        assertFalse(Files.exists(nio.getPath("/a5/created")));
+
+        Files.createSymbolicLink(nio.getPath("/a5/deepLink/../newlink"), file);
+        assertTrue(Files.isSymbolicLink(nio.getPath("/a5/deep/newlink")));
+        assertFalse(Files.exists(nio.getPath("/a5/newlink"), LinkOption.NOFOLLOW_LINKS));
+        assertEquals(file, Files.readSymbolicLink(nio.getPath("/a5/deepLink/../newlink")));
+
+        Files.copy(lexical, nio.getPath("/a5/deepLink/../copied"));
+        assertTrue(Files.exists(nio.getPath("/a5/deep/copied")));
+        assertFalse(Files.exists(nio.getPath("/a5/copied")));
+
+        Files.delete(nio.getPath("/a5/deepLink/../file"));
+        assertFalse(Files.exists(file));
+        assertTrue(Files.exists(lexical));
+
+        Files.write(file, "moved".getBytes(StandardCharsets.UTF_8));
+        Files.move(nio.getPath("/a5/deepLink/../file"),
+                nio.getPath("/a5/deepLink/../moved"));
+        assertFalse(Files.exists(file));
+        assertEquals("moved", new String(
+                Files.readAllBytes(nio.getPath("/a5/deep/moved")), StandardCharsets.UTF_8));
+        assertFalse(Files.exists(nio.getPath("/a5/moved")));
+    }
+
+    @Test
+    void mutatingOperationsFollowDirectorySymbolicLinks() throws IOException {
+        Files.createDirectories(nio.getPath("/a5sym/deep/dir"));
+        Files.createSymbolicLink(nio.getPath("/a5sym/deepLink"),
+                nio.getPath("/a5sym/deep/dir"));
+
+        Files.createDirectory(nio.getPath("/a5sym/deepLink/child"));
+        assertTrue(Files.isDirectory(nio.getPath("/a5sym/deep/dir/child")));
+
+        Files.createSymbolicLink(nio.getPath("/a5sym/deepLink/link2"),
+                nio.getPath("/a5sym/deep/dir/child"));
+        assertEquals(nio.getPath("/a5sym/deep/dir/child"),
+                Files.readSymbolicLink(nio.getPath("/a5sym/deepLink/link2")));
+
+        Files.write(nio.getPath("/a5sym/deepLink/file"),
+                "x".getBytes(StandardCharsets.UTF_8));
+        Files.move(nio.getPath("/a5sym/deepLink/file"),
+                nio.getPath("/a5sym/deepLink/moved"));
+        assertTrue(Files.exists(nio.getPath("/a5sym/deep/dir/moved")));
+        assertFalse(Files.exists(nio.getPath("/a5sym/deep/dir/file")));
+    }
+
+    @Test
     void copyFileAttributes() throws IOException {
         Path source = nio.getPath("/attr-src.txt");
         Files.write(source, "data".getBytes(StandardCharsets.UTF_8));
