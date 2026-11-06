@@ -10,6 +10,7 @@ import de.sfuhrm.gocryptfs4j.crypto.Hkdf;
 import de.sfuhrm.gocryptfs4j.crypto.Keys;
 import de.sfuhrm.gocryptfs4j.fido2.Fido2Token;
 import de.sfuhrm.gocryptfs4j.names.NameTransform;
+import de.sfuhrm.gocryptfs4j.store.CipherNode;
 import de.sfuhrm.gocryptfs4j.store.CipherStore;
 import de.sfuhrm.gocryptfs4j.store.CipherStores;
 import org.jspecify.annotations.Nullable;
@@ -20,6 +21,7 @@ import java.io.OutputStream;
 import java.net.URI;
 import java.nio.file.AccessDeniedException;
 import java.nio.file.AccessMode;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.attribute.FileTime;
 import java.nio.file.attribute.GroupPrincipal;
 import java.nio.file.attribute.PosixFileAttributes;
@@ -235,9 +237,52 @@ public final class GocryptFs implements AutoCloseable {
         if (closeable != null) {
             try {
                 closeable.close();
-            } catch (Exception ignored) {
+            } catch (Throwable ignored) {
                 // Best-effort cleanup on a failure path.
             }
+        }
+    }
+
+    /**
+     * Deletes a partially created filesystem's control files, ignoring any
+     * failure. The config is removed first because it is the commit marker:
+     * once it is gone the directory can be created again even if a stale diriv
+     * is left behind.
+     *
+     * @param store       the ciphertext-side store
+     * @param configName  the ciphertext path of the config file
+     * @param removeDirIV whether a diriv may have been written during creation
+     */
+    private static void cleanupCreate(CipherStore store, String configName, boolean removeDirIV) {
+        try {
+            FileManager.deleteIfExists(store, configName);
+        } catch (Throwable ignored) {
+            // Best-effort cleanup on a failure path.
+        }
+        if (removeDirIV) {
+            try {
+                FileManager.deleteIfExists(store,
+                        PathResolver.join(store.root(), Constants.DIR_IV_FILENAME));
+            } catch (Throwable ignored) {
+                // Best-effort cleanup on a failure path.
+            }
+        }
+    }
+
+    /**
+     * Returns whether {@code name} exists in the store.
+     *
+     * @param store the ciphertext-side store
+     * @param name  the ciphertext path
+     * @return {@code true} if the entry exists
+     * @throws IOException if presence cannot be determined
+     */
+    private static boolean exists(CipherStore store, String name) throws IOException {
+        try {
+            store.stat(name);
+            return true;
+        } catch (NoSuchFileException e) {
+            return false;
         }
     }
 
@@ -1004,25 +1049,28 @@ public final class GocryptFs implements AutoCloseable {
         byte[] masterKey = null;
         boolean ok = false;
         try {
-            if (!store.list(store.root()).isEmpty()) {
+            if (!isCreateRootEmpty(store, plaintextNames)) {
                 throw new IOException("cipher dir is not empty: " + store.root());
             }
             masterKey = Keys.randomBytes(Constants.KEY_LEN);
             ConfigFile config = ConfigFile.create(masterKey, password, plaintextNames, cipherType);
-            store.writeConfig(PathResolver.join(store.root(), Constants.CONF_DEFAULT_NAME),
-                    config.toBytes(), false);
+            byte[] configBytes = config.toBytes();
+            String configName = PathResolver.join(store.root(), Constants.CONF_DEFAULT_NAME);
             GocryptFs fs = new GocryptFs(store, config, masterKey, ownsStore, false, rootLock);
             try {
+                // Write the diriv first and the config last: the config is the
+                // commit marker, so a crash before it leaves only an orphan
+                // diriv that a later create can replace.
                 if (!plaintextNames) {
-                    fs.directoryManager.writeDirIV(store.root());
+                    fs.directoryManager.writeDirIV(store.root(), true);
                 }
+                store.writeConfig(configName, configBytes, false);
                 ok = true;
                 return fs;
-            } catch (IOException e) {
+            } catch (Throwable t) {
                 fs.wipeSecrets();
-                FileManager.deleteIfExists(store,
-                        PathResolver.join(store.root(), Constants.CONF_DEFAULT_NAME));
-                throw e;
+                cleanupCreate(store, configName, !plaintextNames);
+                throw t;
             }
         } finally {
             if (!ok) {
@@ -1032,6 +1080,38 @@ public final class GocryptFs implements AutoCloseable {
                 closeQuietly(rootLock);
             }
         }
+    }
+
+    /**
+     * Returns whether a cipher store's root is empty enough to create a new
+     * filesystem in.
+     *
+     * <p>A config file always makes the root non-empty because it is the commit
+     * marker of a completed create. An orphan {@code gocryptfs.diriv} is
+     * ignored in encrypted-name mode: it can only be left behind by a create
+     * that crashed before writing the config, and the new create replaces it.
+     * The config is also checked directly, so a stale (eventually consistent)
+     * directory listing cannot hide a committed filesystem and cause its diriv
+     * to be replaced.</p>
+     *
+     * @param store          the ciphertext-side store
+     * @param plaintextNames whether the new filesystem stores names unencrypted
+     * @return {@code true} if the root can be used for a new filesystem
+     * @throws IOException on storage errors
+     */
+    private static boolean isCreateRootEmpty(CipherStore store, boolean plaintextNames)
+            throws IOException {
+        String root = store.root();
+        if (exists(store, PathResolver.join(root, Constants.CONF_DEFAULT_NAME))) {
+            return false;
+        }
+        for (CipherNode node : store.list(root)) {
+            if (!plaintextNames && node.name().equals(Constants.DIR_IV_FILENAME)) {
+                continue;
+            }
+            return false;
+        }
+        return true;
     }
 
     /**
@@ -1090,7 +1170,7 @@ public final class GocryptFs implements AutoCloseable {
         CipherRootLock rootLock = CipherRootLock.acquire(store);
         boolean ok = false;
         try {
-            if (!store.list(store.root()).isEmpty()) {
+            if (!isCreateRootEmpty(store, plaintextNames)) {
                 throw new IOException("cipher dir is not empty: " + store.root());
             }
             List<String> options = assertOptions == null
@@ -1108,22 +1188,26 @@ public final class GocryptFs implements AutoCloseable {
                 try {
                     ConfigFile config = ConfigFile.create(masterKey, secret, plaintextNames,
                             cipherType, new Fido2Params(credentialId, hmacSalt, options));
-                    store.writeConfig(PathResolver.join(store.root(),
-                            Constants.CONF_DEFAULT_NAME), config.toBytes(), false);
+                    byte[] configBytes = config.toBytes();
+                    String configName = PathResolver.join(store.root(),
+                            Constants.CONF_DEFAULT_NAME);
                     GocryptFs fs = new GocryptFs(store, config, masterKey, false, false,
                             rootLock);
                     try {
+                        // Write the diriv first and the config last: the config
+                        // is the commit marker, so a crash before it leaves only
+                        // an orphan diriv that a later create can replace.
                         if (!plaintextNames) {
-                            fs.directoryManager.writeDirIV(store.root());
+                            fs.directoryManager.writeDirIV(store.root(), true);
                         }
+                        store.writeConfig(configName, configBytes, false);
                         created = true;
                         ok = true;
                         return fs;
-                    } catch (IOException e) {
+                    } catch (Throwable t) {
                         fs.wipeSecrets();
-                        FileManager.deleteIfExists(store,
-                                PathResolver.join(store.root(), Constants.CONF_DEFAULT_NAME));
-                        throw e;
+                        cleanupCreate(store, configName, !plaintextNames);
+                        throw t;
                     }
                 } finally {
                     if (!created) {

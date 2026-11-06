@@ -130,6 +130,19 @@ class DirectoryManagerTest {
     }
 
     @Test
+    void readDirIVDoesNotRepairOnInconsistentListing() throws IOException {
+        ReadOnlyStore store = new ReadOnlyStore();
+        ManagerHarness h = ManagerHarness.encrypted(store);
+        h.store.mkdir("sub");
+        store.listingConsistent = false;
+
+        assertThrows(IOException.class, () -> h.directoryManager.readDirIV("sub", true));
+        assertThrows(NoSuchFileException.class, () -> store.readSmall(
+                        PathResolver.join("sub", Constants.DIR_IV_FILENAME), Constants.DIR_IV_LEN),
+                "a repair must not mint and persist a diriv from a stale listing");
+    }
+
+    @Test
     void readDirIVListsEmptyOnReadOnlyStoreWithoutPersistingDirIV() throws IOException {
         ReadOnlyStore store = new ReadOnlyStore();
         ManagerHarness h = ManagerHarness.encrypted(store);
@@ -293,10 +306,16 @@ class DirectoryManagerTest {
 
         private final MapCipherStore delegate = new MapCipherStore();
         boolean readOnly;
+        boolean listingConsistent = true;
 
         @Override
         public String root() {
             return delegate.root();
+        }
+
+        @Override
+        public boolean isListingConsistent() {
+            return listingConsistent;
         }
 
         @Override

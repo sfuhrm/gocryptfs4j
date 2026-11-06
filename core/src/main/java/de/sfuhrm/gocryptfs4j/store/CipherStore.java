@@ -157,6 +157,25 @@ public interface CipherStore extends AutoCloseable {
     List<CipherNode> list(String dir) throws IOException;
 
     /**
+     * Returns whether {@link #list(String)} is strongly consistent, that is,
+     * whether it reflects every entry that was created or deleted before this
+     * call.
+     *
+     * <p>This is a capability used to decide whether an empty listing can be
+     * trusted when repairing a missing {@code gocryptfs.diriv}. Minting a
+     * fresh IV for a directory that is actually populated would make every
+     * name in it undecryptable. A local filesystem is strongly consistent; an
+     * eventually consistent object store should override this method and
+     * return {@code false}. The default is {@code true} so existing and
+     * in-memory stores keep their current behaviour.</p>
+     *
+     * @return {@code true} if directory listings are strongly consistent
+     */
+    default boolean isListingConsistent() {
+        return true;
+    }
+
+    /**
      * Creates an empty ciphertext file, failing if it already exists.
      *
      * @param name the ciphertext path to create

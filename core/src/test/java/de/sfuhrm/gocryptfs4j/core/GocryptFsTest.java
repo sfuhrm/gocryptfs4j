@@ -290,6 +290,65 @@ class GocryptFsTest {
     }
 
     @Test
+    void createReplacesOrphanRootDirIV() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        // Simulate a crash after the diriv was written but before the config
+        // commit marker.
+        Files.write(cipherDir.resolve("gocryptfs.diriv"), new byte[16]);
+
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir),
+                "pw".toCharArray())) {
+            fs.createFile("/a.txt");
+        }
+
+        try (GocryptFs fs = GocryptFs.open(new PathCipherStore(cipherDir),
+                "pw".toCharArray())) {
+            assertEquals(DirEntry.Kind.FILE, fs.stat("/a.txt").kind());
+        }
+    }
+
+    @Test
+    void createFailureRemovesDirIVAndConfig() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        FailingStore store = new FailingStore(new PathCipherStore(cipherDir));
+        store.failWriteConfig = true;
+
+        assertThrows(IOException.class, () -> GocryptFs.create(store, "pw".toCharArray()));
+
+        assertFalse(Files.exists(cipherDir.resolve("gocryptfs.conf")),
+                "a failed create must not leave a config commit marker");
+        assertFalse(Files.exists(cipherDir.resolve("gocryptfs.diriv")),
+                "a failed create must remove its orphan diriv");
+    }
+
+    @Test
+    void openRepairsConfigOnlyRootWithoutDirIV() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        try (GocryptFs ignored = GocryptFs.create(new PathCipherStore(cipherDir),
+                "pw".toCharArray())) {
+            // A completed create, then simulate an older version's crash that
+            // left only the config behind.
+        }
+        Files.delete(cipherDir.resolve("gocryptfs.diriv"));
+
+        try (GocryptFs fs = GocryptFs.open(new PathCipherStore(cipherDir),
+                "pw".toCharArray())) {
+            assertTrue(fs.list("/").isEmpty());
+            fs.createFile("/a.txt");
+        }
+
+        assertTrue(Files.exists(cipherDir.resolve("gocryptfs.diriv")),
+                "a write must repair a config-only root");
+        try (GocryptFs fs = GocryptFs.open(new PathCipherStore(cipherDir),
+                "pw".toCharArray())) {
+            assertEquals(DirEntry.Kind.FILE, fs.stat("/a.txt").kind());
+        }
+    }
+
+    @Test
     void openWriteStreaming() throws IOException {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);

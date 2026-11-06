@@ -169,6 +169,14 @@ final class DirectoryManager {
      * encrypted under an IV that is no longer available, so minting a fresh IV
      * would make those names undecryptable; it is rejected instead.</p>
      *
+     * <p>Control files do not count as entries here: the root's
+     * {@code gocryptfs.conf} and the directory's own (missing) diriv are not
+     * encrypted user names, so a root left with only a config file can still
+     * be repaired. The repair also requires a strongly consistent listing (see
+     * {@link CipherStore#isListingConsistent()}); on an eventually consistent
+     * store a stale empty listing must not be trusted to mint a new IV, so the
+     * repair is refused instead.</p>
+     *
      * @param cipherDir the ciphertext directory name
      * @param create    whether to mint and persist a missing diriv for an empty
      *                  directory
@@ -176,19 +184,24 @@ final class DirectoryManager {
      *         empty and no diriv is available (because {@code create} is false,
      *         or because a fresh IV could not be persisted on a read-only
      *         medium)
-     * @throws IOException on filesystem errors, a corrupt diriv, or a missing
-     *                     diriv in a non-empty directory
+     * @throws IOException on filesystem errors, a corrupt diriv, a missing
+     *                     diriv in a non-empty directory, or a repair attempt
+     *                     on a store with an inconsistent listing
      */
     private byte @Nullable [] readDirIVInternal(String cipherDir, boolean create) throws IOException {
         String path = PathResolver.join(cipherDir, Constants.DIR_IV_FILENAME);
         try {
             return store.readSmall(path, Constants.DIR_IV_LEN);
         } catch (NoSuchFileException e) {
-            if (!store.list(cipherDir).isEmpty()) {
+            if (hasNonControlEntries(cipherDir)) {
                 throw new IOException("directory has entries but no gocryptfs.diriv: " + cipherDir);
             }
             if (!create) {
                 return null;
+            }
+            if (!store.isListingConsistent()) {
+                throw new IOException("cannot repair missing gocryptfs.diriv in " + cipherDir
+                        + ": the store does not provide a consistent directory listing");
             }
             byte[] iv = Keys.randomBytes(Constants.DIR_IV_LEN);
             try {
@@ -207,6 +220,35 @@ final class DirectoryManager {
     }
 
     /**
+     * Returns whether {@code cipherDir} contains any entry that is not a
+     * control file.
+     *
+     * <p>The per-directory {@code gocryptfs.diriv} is a control file when this
+     * filesystem uses one, and the root's {@code gocryptfs.conf} is a control
+     * file as well. Neither represents a name encrypted under the directory
+     * IV, so neither prevents a missing diriv from being repaired. Long-name
+     * support files are deliberately counted: they belong to user entries.</p>
+     *
+     * @param cipherDir the ciphertext directory name
+     * @return {@code true} if a non-control entry exists
+     * @throws IOException on filesystem errors
+     */
+    private boolean hasNonControlEntries(String cipherDir) throws IOException {
+        boolean isRoot = cipherDir.equals(rootName);
+        for (CipherNode node : store.list(cipherDir)) {
+            String name = node.name();
+            if (usesDirIV() && name.equals(Constants.DIR_IV_FILENAME)) {
+                continue;
+            }
+            if (isRoot && name.equals(Constants.CONF_DEFAULT_NAME)) {
+                continue;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /**
      * Returns whether the filesystem uses per-directory {@code gocryptfs.diriv}
      * files. This is false in plaintext-names mode and in deterministic-names
      * mode, where an entry named {@code gocryptfs.diriv} is an ordinary user
@@ -219,19 +261,38 @@ final class DirectoryManager {
     }
 
     /**
-     * Creates a {@code gocryptfs.diriv} in {@code cipherDir}.
+     * Creates a {@code gocryptfs.diriv} in {@code cipherDir}, failing if one
+     * already exists.
      *
      * @param cipherDir the ciphertext directory name
      * @throws IOException on filesystem errors
      * @throws NullPointerException if {@code cipherDir} is {@code null}
      */
     void writeDirIV(String cipherDir) throws IOException {
+        writeDirIV(cipherDir, false);
+    }
+
+    /**
+     * Creates a {@code gocryptfs.diriv} in {@code cipherDir}.
+     *
+     * <p>During filesystem creation the config file is the commit marker and
+     * is written after the diriv, so a crash can leave an orphan diriv behind.
+     * Creation passes {@code overwrite = true} to replace such an orphan; all
+     * other callers keep the exclusive-create behaviour that protects a live
+     * directory's IV.</p>
+     *
+     * @param cipherDir the ciphertext directory name
+     * @param overwrite whether to replace an existing diriv
+     * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code cipherDir} is {@code null}
+     */
+    void writeDirIV(String cipherDir, boolean overwrite) throws IOException {
         Objects.requireNonNull(cipherDir, "cipherDir");
         if (!usesDirIV()) {
             return;
         }
         store.writeSmall(PathResolver.join(cipherDir, Constants.DIR_IV_FILENAME),
-                Keys.randomBytes(Constants.DIR_IV_LEN), false);
+                Keys.randomBytes(Constants.DIR_IV_LEN), overwrite);
         dirIvCache.remove(cipherDir);
     }
 
