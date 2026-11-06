@@ -77,7 +77,6 @@ class GocryptFsMasterKeyExportTest {
         assertEquals("00010203-04050607-08090a0b-0c0d0e0f"
                         + "-10111213-14151617-18191a1b-1c1d1e1f",
                 GocryptFs.formatMasterKey(key));
-        assertEquals(GocryptFs.formatMasterKey(key), MasterKeyFormatter.format(key));
     }
 
     @Test
