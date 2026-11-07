@@ -137,6 +137,39 @@ public final class CipherFile implements AutoCloseable {
         if (id == null) {
             return 0;
         }
+        try {
+            return readBlockWithId(blockNo, out, off, id);
+        } catch (GeneralSecurityException e) {
+            // The cached id may be stale: another handle or process could have
+            // truncated the file to empty and rewritten it, minting a new id.
+            // Re-read the header once and retry before declaring corruption.
+            byte[] reloaded = reloadFileId();
+            if (reloaded == null) {
+                return 0;
+            }
+            try {
+                return readBlockWithId(blockNo, out, off, reloaded);
+            } catch (GeneralSecurityException | IllegalArgumentException e2) {
+                throw new IOException("corrupt block in file", e2);
+            }
+        } catch (IllegalArgumentException e) {
+            throw new IOException("corrupt block in file", e);
+        }
+    }
+
+    /**
+     * Reads and decrypts a whole plaintext block using the given file id.
+     *
+     * @param blockNo the block number
+     * @param out     the destination buffer
+     * @param off     the destination offset
+     * @param id      the file id to authenticate with
+     * @return the number of valid plaintext bytes, or zero past EOF
+     * @throws IOException on filesystem errors
+     * @throws GeneralSecurityException on authentication failure
+     */
+    private int readBlockWithId(long blockNo, byte[] out, int off, byte[] id)
+            throws IOException, GeneralSecurityException {
         long cipherOffset = enc.blockNoToCipherOff(blockNo);
         long cipherSize = channel.size();
         if (cipherOffset >= cipherSize) {
@@ -144,11 +177,7 @@ public final class CipherFile implements AutoCloseable {
         }
         int len = (int) Math.min(enc.cipherBS, cipherSize - cipherOffset);
         int read = readCipherRange(cipherOffset, blockCipher, len);
-        try {
-            return enc.decryptBlocks(blockCipher, 0, read, blockNo, id, out, off);
-        } catch (GeneralSecurityException | IllegalArgumentException e) {
-            throw new IOException("corrupt block in file", e);
-        }
+        return enc.decryptBlocks(blockCipher, 0, read, blockNo, id, out, off);
     }
 
     /**
@@ -237,7 +266,9 @@ public final class CipherFile implements AutoCloseable {
             // must truncate the channel so the file is actually repaired.
             channel.truncate(0);
             fileId = null;
-            fileIdLoaded = true;
+            // Do not cache an empty file: another handle or process may write
+            // a new header later, and reads must observe it.
+            fileIdLoaded = false;
             return;
         }
         long oldSize = plainSize();
@@ -319,21 +350,36 @@ public final class CipherFile implements AutoCloseable {
         if (!fileIdLoaded) {
             long size = channel.size();
             if (size == 0) {
+                // Do not cache an empty file. Another handle or process may
+                // mint a header at any time, so the size has to be re-checked
+                // on the next call.
                 fileId = null;
-            } else {
-                byte[] hdr = readCipherRange(0, Constants.HEADER_LEN);
-                if (hdr.length < Constants.HEADER_LEN) {
-                    throw new IOException("corrupt file header");
-                }
-                try {
-                    fileId = FileHeader.parse(hdr).id();
-                } catch (IllegalArgumentException e) {
-                    throw new IOException("corrupt file header", e);
-                }
+                return null;
+            }
+            byte[] hdr = readCipherRange(0, Constants.HEADER_LEN);
+            if (hdr.length < Constants.HEADER_LEN) {
+                throw new IOException("corrupt file header");
+            }
+            try {
+                fileId = FileHeader.parse(hdr).id();
+            } catch (IllegalArgumentException e) {
+                throw new IOException("corrupt file header", e);
             }
             fileIdLoaded = true;
         }
         return fileId;
+    }
+
+    /**
+     * Forces a fresh read of the file header, discarding any cached id.
+     *
+     * @return the current 16-byte file id, or {@code null} if the file is empty
+     * @throws IOException on filesystem errors or a corrupt header
+     */
+    private byte @Nullable [] reloadFileId() throws IOException {
+        fileId = null;
+        fileIdLoaded = false;
+        return loadFileId();
     }
 
     /**
@@ -362,6 +408,7 @@ public final class CipherFile implements AutoCloseable {
             FileHeader h = FileHeader.random();
             writeCipherRange(0, h.pack());
             fileId = h.id();
+            fileIdLoaded = true;
             id = fileId;
         }
         return id;

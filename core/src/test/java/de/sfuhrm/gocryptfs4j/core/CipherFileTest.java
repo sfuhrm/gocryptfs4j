@@ -324,4 +324,58 @@ class CipherFileTest {
             assertEquals(2 * enc.plainBS, h1.plainSize());
         }
     }
+
+    @Test
+    void emptyFileHandleObservesExternalWrite() throws IOException {
+        ContentEnc enc = enc();
+        Path p = newFile();
+        byte[] data = new byte[100];
+        Arrays.fill(data, (byte) 0x21);
+
+        try (CipherFile reader = open(p, enc, true);
+             CipherFile writer = open(p, enc, true)) {
+            assertNull(reader.fileId(), "an empty file has no file id");
+            assertEquals(0, reader.plainSize());
+
+            writer.writeBlock(0, data, 0, data.length);
+
+            // The reader must not have cached the empty state forever.
+            assertNotNull(reader.fileId());
+            assertEquals(data.length, reader.plainSize());
+            byte[] out = new byte[(int) enc.plainBS];
+            assertEquals(data.length, reader.readBlock(0, out, 0));
+            assertArrayEquals(data, Arrays.copyOf(out, data.length));
+        }
+    }
+
+    @Test
+    void readRetriesAfterExternalTruncateAndRewrite() throws IOException {
+        ContentEnc enc = enc();
+        Path p = newFile();
+        byte[] oldData = new byte[100];
+        Arrays.fill(oldData, (byte) 0x11);
+        byte[] newData = new byte[100];
+        Arrays.fill(newData, (byte) 0x22);
+
+        try (CipherFile h1 = open(p, enc, true)) {
+            h1.writeBlock(0, oldData, 0, oldData.length);
+            byte[] out = new byte[(int) enc.plainBS];
+            assertEquals(oldData.length, h1.readBlock(0, out, 0));
+            byte[] oldId = h1.fileId();
+
+            byte[] newId;
+            try (CipherFile h2 = open(p, enc, true)) {
+                h2.truncate(0);
+                h2.writeBlock(0, newData, 0, newData.length);
+                newId = h2.fileId();
+            }
+            assertFalse(Arrays.equals(oldId, newId), "rewrite must mint a new id");
+
+            // h1 still has the old id cached. The read must re-read the header
+            // once and retry instead of reporting every block as corrupt.
+            assertEquals(newData.length, h1.readBlock(0, out, 0));
+            assertArrayEquals(newData, Arrays.copyOf(out, newData.length));
+            assertArrayEquals(newId, h1.fileId());
+        }
+    }
 }
