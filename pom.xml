@@ -57,6 +57,8 @@
         <nullaway.version>0.14.3</nullaway.version>
         <!-- Name of the module being built; overridden by each subproject. -->
         <module.name>de.sfuhrm.gocryptfs4j</module.name>
+        <!-- Empty default so forked tests still start when JaCoCo is skipped. -->
+        <jacoco.argLine/>
     </properties>
 
     <dependencyManagement>
