@@ -5,13 +5,17 @@ import de.sfuhrm.gocryptfs4j.crypto.Keys;
 import de.sfuhrm.gocryptfs4j.store.CipherChannel;
 import de.sfuhrm.gocryptfs4j.store.CipherNode;
 import de.sfuhrm.gocryptfs4j.store.CipherStore;
+import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
 import de.sfuhrm.gocryptfs4j.store.memory.MapCipherStore;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
+import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -29,6 +33,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * ciphertext-directory listing.
  */
 class DirectoryManagerTest {
+
+    @TempDir
+    Path tmp;
 
     private static String repeat(char c, int n) {
         StringBuilder sb = new StringBuilder(n);
@@ -78,20 +85,35 @@ class DirectoryManagerTest {
     }
 
     @Test
-    void readDirIVCachesUntilInvalidated() throws IOException {
+    void readDirIVObservesExternalRewriteWithoutFileKeys() throws IOException {
         ManagerHarness h = ManagerHarness.encrypted();
-        byte[] first = h.directoryManager.readDirIV(h.store.root());
+        h.directoryManager.readDirIV(h.store.root());
 
         byte[] changed = new byte[Constants.DIR_IV_LEN];
         Arrays.fill(changed, (byte) 0x5a);
         h.store.writeSmall(PathResolver.join(h.store.root(), Constants.DIR_IV_FILENAME),
                 changed, true);
 
-        assertArrayEquals(first, h.directoryManager.readDirIV(h.store.root()),
-                "cached IV must survive an external rewrite");
+        assertArrayEquals(changed, h.directoryManager.readDirIV(h.store.root()),
+                "a store without file keys must not serve a stale cached IV");
+    }
 
-        h.directoryManager.invalidateDirIvCache(h.store.root());
-        assertArrayEquals(changed, h.directoryManager.readDirIV(h.store.root()));
+    @Test
+    void readDirIVRefreshesWhenDirIVFileIsReplaced() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        ManagerHarness h = ManagerHarness.encrypted(new PathCipherStore(cipherDir));
+        String root = h.store.root();
+        h.directoryManager.readDirIV(root);
+
+        byte[] changed = new byte[Constants.DIR_IV_LEN];
+        Arrays.fill(changed, (byte) 0x5a);
+        Path diriv = cipherDir.resolve(Constants.DIR_IV_FILENAME);
+        Files.write(diriv, changed);
+        Files.setLastModifiedTime(diriv, FileTime.fromMillis(123456789000L));
+
+        assertArrayEquals(changed, h.directoryManager.readDirIV(root),
+                "a replaced diriv must invalidate the cached IV");
     }
 
     @Test

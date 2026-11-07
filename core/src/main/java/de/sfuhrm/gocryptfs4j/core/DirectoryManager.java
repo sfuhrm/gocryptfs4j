@@ -64,11 +64,23 @@ final class DirectoryManager {
      */
     private @Nullable FileManager fileManager;
 
-    /** Cache of per-directory IVs, keyed by cipher directory name. */
-    private final Map<String, byte[]> dirIvCache = new ConcurrentHashMap<>();
+    /**
+     * Cache of per-directory IVs, keyed by cipher directory name. Each entry
+     * remembers the metadata of the diriv file it was read from so a later read
+     * can detect that the file was replaced.
+     */
+    private final Map<String, CachedDirIV> dirIvCache = new ConcurrentHashMap<>();
 
     /**
-     * Creates a directory manager.
+     * Whether directory IVs may be cached. Read-only instances bypass the
+     * cache because a concurrent writer (or a separate gocryptfs mount) can
+     * replace a diriv at any time without this instance being able to
+     * invalidate its entry.
+     */
+    private final boolean cacheDirIVs;
+
+    /**
+     * Creates a directory manager that caches directory IVs.
      *
      * @param store              the ciphertext-side store
      * @param rootName           the ciphertext root name
@@ -82,6 +94,26 @@ final class DirectoryManager {
     DirectoryManager(CipherStore store, String rootName, boolean plaintextNames,
                      boolean deterministicNames, NameTransform nameTransform,
                      ContentEnc contentEnc, NameManager nameManager) {
+        this(store, rootName, plaintextNames, deterministicNames, nameTransform,
+                contentEnc, nameManager, false);
+    }
+
+    /**
+     * Creates a directory manager.
+     *
+     * @param store              the ciphertext-side store
+     * @param rootName           the ciphertext root name
+     * @param plaintextNames     whether file names are stored unencrypted
+     * @param deterministicNames whether deterministic name encryption is used
+     * @param nameTransform      the name-transform helper
+     * @param contentEnc         the content-encryption helper
+     * @param nameManager        the name manager
+     * @param readOnly           whether the filesystem is read-only
+     * @throws NullPointerException if a required argument is {@code null}
+     */
+    DirectoryManager(CipherStore store, String rootName, boolean plaintextNames,
+                     boolean deterministicNames, NameTransform nameTransform,
+                     ContentEnc contentEnc, NameManager nameManager, boolean readOnly) {
         this.store = Objects.requireNonNull(store, "store");
         this.rootName = Objects.requireNonNull(rootName, "rootName");
         this.plaintextNames = plaintextNames;
@@ -89,6 +121,7 @@ final class DirectoryManager {
         this.nameTransform = Objects.requireNonNull(nameTransform, "nameTransform");
         this.contentEnc = Objects.requireNonNull(contentEnc, "contentEnc");
         this.nameManager = Objects.requireNonNull(nameManager, "nameManager");
+        this.cacheDirIVs = !readOnly;
     }
 
     /**
@@ -137,9 +170,25 @@ final class DirectoryManager {
         if (deterministicNames) {
             return nameTransform.zeroDirIV();
         }
-        byte[] cached = dirIvCache.get(cipherDir);
-        if (cached != null) {
-            return cached.clone();
+        CipherNode stamp = null;
+        if (cacheDirIVs) {
+            String path = PathResolver.join(cipherDir, Constants.DIR_IV_FILENAME);
+            try {
+                stamp = store.stat(path);
+            } catch (NoSuchFileException ignored) {
+                // A missing diriv is handled below; it must not be served from
+                // the cache either.
+            }
+            CachedDirIV cached = dirIvCache.get(cipherDir);
+            if (cached != null) {
+                if (stamp != null && cached.matches(stamp)) {
+                    return cached.data.clone();
+                }
+                // The diriv was replaced (for example a directory was deleted
+                // and recreated at the same cipher path, or another gocryptfs
+                // instance minted a new one). Drop the stale IV.
+                dirIvCache.remove(cipherDir, cached);
+            }
         }
         byte[] data = readDirIVInternal(cipherDir, create);
         if (data == null) {
@@ -155,7 +204,12 @@ final class DirectoryManager {
         }
         for (byte b : data) {
             if (b != 0) {
-                dirIvCache.put(cipherDir, data);
+                // Only cache an IV whose file can be identified later. A store
+                // without file keys cannot cheaply prove that the bytes it
+                // would serve are still current.
+                if (cacheDirIVs && stamp != null && stamp.fileKey() != null) {
+                    dirIvCache.put(cipherDir, new CachedDirIV(data, stamp));
+                }
                 return data.clone();
             }
         }
@@ -495,6 +549,26 @@ final class DirectoryManager {
      * @throws NullPointerException if {@code cipherDir} or {@code iv} is {@code null}
      */
     List<DirEntry> listCipherDir(String cipherDir, byte[] iv) throws IOException {
+        return listCipherDir(cipherDir, iv, null);
+    }
+
+    /**
+     * Lists a cipher-side directory, decrypting names and resolving long names.
+     *
+     * <p>Corrupt entries are skipped by default. When {@code listener} is
+     * non-{@code null} it is told about every entry that is skipped and why;
+     * the listener may throw an {@link IOException} to abort the listing, which
+     * implements an opt-in strict mode.</p>
+     *
+     * @param cipherDir the ciphertext directory name
+     * @param iv        the 16-byte directory IV
+     * @param listener  the callback for skipped entries, or {@code null}
+     * @return the directory entries
+     * @throws IOException on filesystem errors or when the listener aborts
+     * @throws NullPointerException if {@code cipherDir} or {@code iv} is {@code null}
+     */
+    List<DirEntry> listCipherDir(String cipherDir, byte[] iv,
+                                 @Nullable SkippedEntryListener listener) throws IOException {
         Objects.requireNonNull(cipherDir, "cipherDir");
         Objects.requireNonNull(iv, "iv");
         List<DirEntry> out = new ArrayList<>();
@@ -523,6 +597,7 @@ final class DirectoryManager {
                     } catch (IOException e) {
                         // A missing, oversized or otherwise unreadable .name
                         // file is treated like a corrupt name: skip it.
+                        reportSkipped(listener, cName, e);
                         continue;
                     }
                 }
@@ -533,11 +608,15 @@ final class DirectoryManager {
                 plainName = nameManager.plainNameFor(cipherName, iv);
             } catch (IllegalArgumentException e) {
                 // Skip undecryptable (corrupt) entries.
+                reportSkipped(listener, cipherName,
+                        new IOException("cannot decrypt name", e));
                 continue;
             }
             if (!NameManager.isValidPlainName(plainName)) {
                 // Skip names that would escape the directory in plaintext
                 // space (e.g. "..", "/" or a NUL byte).
+                reportSkipped(listener, cipherName,
+                        new IOException("name is unsafe in plaintext space"));
                 continue;
             }
 
@@ -555,6 +634,10 @@ final class DirectoryManager {
                 } catch (IOException | IllegalArgumentException e) {
                     // A corrupt (undecodable or undecryptable) symlink target
                     // is treated like a corrupt name: skip it.
+                    reportSkipped(listener, cName,
+                            e instanceof IOException
+                                    ? (IOException) e
+                                    : new IOException("corrupt symlink target", e));
                     continue;
                 }
                 size = target.getBytes(StandardCharsets.UTF_8).length;
@@ -576,5 +659,59 @@ final class DirectoryManager {
                     node.creationTime(), node.fileKey()));
         }
         return out;
+    }
+
+    /**
+     * Reports an entry that a listing skipped, if a listener was supplied.
+     *
+     * @param listener   the listener, or {@code null}
+     * @param cipherName the ciphertext name of the skipped entry
+     * @param reason     why the entry was skipped
+     * @throws IOException if the listener aborts the listing
+     */
+    private static void reportSkipped(@Nullable SkippedEntryListener listener,
+                                      String cipherName, IOException reason) throws IOException {
+        if (listener != null) {
+            listener.onSkippedEntry(cipherName, reason);
+        }
+    }
+
+    /**
+     * A cached directory IV together with the metadata of the diriv file it was
+     * read from. The metadata lets a later read notice that the file was
+     * replaced and must not serve the stale IV.
+     */
+    private static final class CachedDirIV {
+
+        /** The cached 16-byte IV. */
+        private final byte[] data;
+
+        /** The diriv file metadata observed when {@link #data} was read. */
+        private final CipherNode stamp;
+
+        /**
+         * Creates a cached directory IV.
+         *
+         * @param data  the IV bytes
+         * @param stamp the diriv file metadata
+         */
+        CachedDirIV(byte[] data, CipherNode stamp) {
+            this.data = data;
+            this.stamp = stamp;
+        }
+
+        /**
+         * Returns whether {@code current} still describes the file this IV was
+         * read from.
+         *
+         * @param current the current diriv file metadata
+         * @return {@code true} if the cached IV is still current
+         */
+        boolean matches(CipherNode current) {
+            return stamp.size() == current.size()
+                    && stamp.lastModifiedTime().equals(current.lastModifiedTime())
+                    && stamp.creationTime().equals(current.creationTime())
+                    && Objects.equals(stamp.fileKey(), current.fileKey());
+        }
     }
 }

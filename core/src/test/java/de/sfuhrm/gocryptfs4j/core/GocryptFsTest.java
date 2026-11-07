@@ -960,6 +960,62 @@ class GocryptFsTest {
     }
 
     @Test
+    void listingReportsAndCanFailOnSkippedEntries() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
+            fs.createFile("/ok.txt");
+
+            byte[] iv = fs.readDirIV(cipherDir.toAbsolutePath().normalize().toString());
+            Path root = cipherDir.toAbsolutePath().normalize();
+            String badName = fs.encryptNameRaw("..", iv);
+            Files.write(root.resolve(badName), new byte[0]);
+
+            Set<String> skipped = new HashSet<>();
+            List<DirEntry> entries = fs.list("/", (cipherName, reason) -> skipped.add(cipherName));
+            assertEquals(1, entries.size());
+            assertEquals("ok.txt", entries.get(0).plainName());
+            assertEquals(new HashSet<>(Arrays.asList(badName)), skipped);
+
+            // Strict mode must surface the damage instead of truncating.
+            assertThrows(IOException.class, () -> fs.list("/", true));
+        }
+    }
+
+    @Test
+    void readOnlyInstanceObservesRecreatedDirectoryIV() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        try (GocryptFs writer = GocryptFs.create(new PathCipherStore(cipherDir),
+                "pw".toCharArray())) {
+            writer.mkdir("/A");
+            writer.createFile("/A/before.txt");
+        }
+
+        try (GocryptFs reader = GocryptFs.openReadOnly(new PathCipherStore(cipherDir),
+                "pw".toCharArray())) {
+            assertEquals(1, reader.list("/A").size());
+
+            // Replace /A externally, minting a new diriv at the same cipher
+            // path while the read-only instance is open.
+            try (GocryptFs writer = GocryptFs.open(new PathCipherStore(cipherDir),
+                    "pw".toCharArray())) {
+                writer.delete("/A/before.txt");
+                writer.delete("/A");
+                writer.mkdir("/A");
+                writer.createFile("/A/after.txt");
+            }
+
+            List<DirEntry> entries = reader.list("/A");
+            assertEquals(1, entries.size(),
+                    "a read-only instance must not serve the old cached diriv");
+            assertEquals("after.txt", entries.get(0).plainName());
+        }
+    }
+
+    @Test
     void backslashNameIsListedAndReadable() throws IOException {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);

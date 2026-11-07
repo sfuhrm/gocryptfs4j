@@ -364,7 +364,7 @@ public final class GocryptFs implements AutoCloseable {
             this.contentEnc = contentEncHelper;
             this.nameManager = new NameManager(nameTransformHelper, plainNames, store);
             this.directoryManager = new DirectoryManager(store, root, plainNames, deterministic,
-                    nameTransformHelper, contentEncHelper, this.nameManager);
+                    nameTransformHelper, contentEncHelper, this.nameManager, readOnly);
             this.pathResolver = new PathResolver(store, root, plainNames,
                     this.nameManager, this.directoryManager);
             this.fileManager = new FileManager(store, contentEncHelper, nameTransformHelper,
@@ -1669,12 +1669,72 @@ public final class GocryptFs implements AutoCloseable {
     /**
      * Lists a plaintext directory path, returning entries sorted by name.
      *
+     * <p>Entries that cannot be decrypted or resolved are silently skipped, as
+     * in a gocryptfs mount. Use {@link #list(String, SkippedEntryListener)} to
+     * observe them or {@link #list(String, boolean)} to fail instead.</p>
+     *
      * @param plainDir the plaintext directory path
      * @return the directory entries sorted by plaintext name
      * @throws IOException on filesystem errors
      * @throws NullPointerException if {@code plainDir} is {@code null}
      */
     public List<DirEntry> list(String plainDir) throws IOException {
+        return list(plainDir, (SkippedEntryListener) null);
+    }
+
+    /**
+     * Lists a plaintext directory path, optionally failing instead of skipping
+     * corrupt entries.
+     *
+     * @param plainDir the plaintext directory path
+     * @param strict   whether to fail with an {@link IOException} when an entry
+     *                 cannot be decrypted or resolved
+     * @return the directory entries sorted by plaintext name
+     * @throws IOException on filesystem errors, or in strict mode when an entry
+     *                     would have been skipped
+     * @throws NullPointerException if {@code plainDir} is {@code null}
+     */
+    public List<DirEntry> list(String plainDir, boolean strict) throws IOException {
+        if (!strict) {
+            return list(plainDir, (SkippedEntryListener) null);
+        }
+        return list(plainDir, (cipherName, reason) -> {
+            throw new IOException("cannot list " + plainDir + ": skipped entry "
+                    + cipherName + ": " + reason.getMessage(), reason);
+        });
+    }
+
+    /**
+     * Lists a plaintext directory path, failing instead of skipping corrupt
+     * entries.
+     *
+     * <p>This is a convenience alias for {@code list(plainDir, true)}.</p>
+     *
+     * @param plainDir the plaintext directory path
+     * @return the directory entries sorted by plaintext name
+     * @throws IOException on filesystem errors or when an entry cannot be
+     *                     decrypted or resolved
+     * @throws NullPointerException if {@code plainDir} is {@code null}
+     */
+    public List<DirEntry> listStrict(String plainDir) throws IOException {
+        return list(plainDir, true);
+    }
+
+    /**
+     * Lists a plaintext directory path, reporting entries that are skipped.
+     *
+     * <p>The listener is called for each corrupt entry; if it throws, the
+     * listing is aborted with that exception. A {@code null} listener preserves
+     * the default silent-skip behaviour.</p>
+     *
+     * @param plainDir the plaintext directory path
+     * @param listener the callback for skipped entries, or {@code null}
+     * @return the directory entries sorted by plaintext name
+     * @throws IOException on filesystem errors, or when the listener aborts
+     * @throws NullPointerException if {@code plainDir} is {@code null}
+     */
+    public List<DirEntry> list(String plainDir,
+                               @Nullable SkippedEntryListener listener) throws IOException {
         Objects.requireNonNull(plainDir, "plainDir");
         Lock readLock = lock.readLock();
         readLock.lock();
@@ -1682,7 +1742,7 @@ public final class GocryptFs implements AutoCloseable {
             ensureOpen();
             PathResolver.Resolved r = pathResolver.resolve(plainDir);
             byte[] iv = directoryManager.readDirIV(r.cipherPath);
-            List<DirEntry> entries = directoryManager.listCipherDir(r.cipherPath, iv);
+            List<DirEntry> entries = directoryManager.listCipherDir(r.cipherPath, iv, listener);
             entries.sort(Comparator.comparing(DirEntry::plainName));
             return entries;
         } finally {
