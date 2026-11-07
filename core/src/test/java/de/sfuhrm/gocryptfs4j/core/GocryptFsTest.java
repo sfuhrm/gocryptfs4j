@@ -1,6 +1,7 @@
 package de.sfuhrm.gocryptfs4j.core;
 
 import de.sfuhrm.gocryptfs4j.config.ConfigFile;
+import de.sfuhrm.gocryptfs4j.crypto.Constants;
 import de.sfuhrm.gocryptfs4j.store.CipherChannel;
 import de.sfuhrm.gocryptfs4j.store.CipherNode;
 import de.sfuhrm.gocryptfs4j.store.CipherStore;
@@ -321,6 +322,43 @@ class GocryptFsTest {
                 "a failed create must not leave a config commit marker");
         assertFalse(Files.exists(cipherDir.resolve("gocryptfs.diriv")),
                 "a failed create must remove its orphan diriv");
+    }
+
+    @Test
+    void createRechecksConfigBeforeWritingDirIV() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        FailingStore store = new FailingStore(new PathCipherStore(cipherDir));
+        byte[] winnerConfig = "winner".getBytes(StandardCharsets.UTF_8);
+        store.injectedConfig = winnerConfig;
+        store.injectConfigAfterList = true;
+
+        assertThrows(IOException.class, () -> GocryptFs.create(store, "pw".toCharArray()));
+
+        assertArrayEquals(winnerConfig,
+                Files.readAllBytes(cipherDir.resolve("gocryptfs.conf")),
+                "the concurrent creator's config must survive");
+        assertFalse(Files.exists(cipherDir.resolve("gocryptfs.diriv")),
+                "the diriv must not be written after a config appeared");
+    }
+
+    @Test
+    void createDoesNotDeleteWinnerConfigOnFileAlreadyExists() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        FailingStore store = new FailingStore(new PathCipherStore(cipherDir));
+        byte[] winnerConfig = "winner".getBytes(StandardCharsets.UTF_8);
+        store.injectedConfig = winnerConfig;
+        store.injectConfigBeforeWriteConfig = true;
+
+        assertThrows(FileAlreadyExistsException.class,
+                () -> GocryptFs.create(store, "pw".toCharArray()));
+
+        assertArrayEquals(winnerConfig,
+                Files.readAllBytes(cipherDir.resolve("gocryptfs.conf")),
+                "the winning creator's config must not be deleted");
+        assertTrue(Files.exists(cipherDir.resolve("gocryptfs.diriv")),
+                "the diriv created before the race must be left for the winner");
     }
 
     @Test
@@ -1164,6 +1202,9 @@ class GocryptFsTest {
         boolean failDeleteDir;
         boolean failWriteSmall;
         boolean failWriteConfig;
+        byte[] injectedConfig;
+        boolean injectConfigAfterList;
+        boolean injectConfigBeforeWriteConfig;
 
         FailingStore(CipherStore delegate) {
             this.delegate = delegate;
@@ -1189,6 +1230,10 @@ class GocryptFsTest {
 
         @Override
         public void writeConfig(String name, byte[] data, boolean overwrite) throws IOException {
+            if (injectConfigBeforeWriteConfig) {
+                injectConfigBeforeWriteConfig = false;
+                delegate.writeConfig(name, injectedConfig, false);
+            }
             if (failWriteConfig) {
                 throw new IOException("writeConfig failed");
             }
@@ -1202,7 +1247,14 @@ class GocryptFsTest {
 
         @Override
         public List<CipherNode> list(String dir) throws IOException {
-            return delegate.list(dir);
+            List<CipherNode> entries = delegate.list(dir);
+            if (injectConfigAfterList) {
+                injectConfigAfterList = false;
+                delegate.writeConfig(
+                        PathResolver.join(delegate.root(), Constants.CONF_DEFAULT_NAME),
+                        injectedConfig, false);
+            }
+            return entries;
         }
 
         @Override

@@ -21,6 +21,7 @@ import java.io.OutputStream;
 import java.net.URI;
 import java.nio.file.AccessDeniedException;
 import java.nio.file.AccessMode;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.attribute.FileTime;
 import java.nio.file.attribute.GroupPrincipal;
@@ -244,22 +245,27 @@ public final class GocryptFs implements AutoCloseable {
     }
 
     /**
-     * Deletes a partially created filesystem's control files, ignoring any
-     * failure. The config is removed first because it is the commit marker:
-     * once it is gone the directory can be created again even if a stale diriv
-     * is left behind.
+     * Deletes the control files this create call actually created, ignoring any
+     * failure. Files that already existed (in particular a config written by a
+     * concurrent creator that won the race) are never removed. The config is
+     * removed first because it is the commit marker: once it is gone the
+     * directory can be created again even if a stale diriv is left behind.
      *
-     * @param store       the ciphertext-side store
-     * @param configName  the ciphertext path of the config file
-     * @param removeDirIV whether a diriv may have been written during creation
+     * @param store         the ciphertext-side store
+     * @param configName    the ciphertext path of the config file
+     * @param configCreated whether this call created the config file
+     * @param dirIVCreated  whether this call created the diriv file
      */
-    private static void cleanupCreate(CipherStore store, String configName, boolean removeDirIV) {
-        try {
-            FileManager.deleteIfExists(store, configName);
-        } catch (Throwable ignored) {
-            // Best-effort cleanup on a failure path.
+    private static void cleanupCreate(CipherStore store, String configName,
+                                      boolean configCreated, boolean dirIVCreated) {
+        if (configCreated) {
+            try {
+                FileManager.deleteIfExists(store, configName);
+            } catch (Throwable ignored) {
+                // Best-effort cleanup on a failure path.
+            }
         }
-        if (removeDirIV) {
+        if (dirIVCreated) {
             try {
                 FileManager.deleteIfExists(store,
                         PathResolver.join(store.root(), Constants.DIR_IV_FILENAME));
@@ -1057,19 +1063,27 @@ public final class GocryptFs implements AutoCloseable {
             byte[] configBytes = config.toBytes();
             String configName = PathResolver.join(store.root(), Constants.CONF_DEFAULT_NAME);
             GocryptFs fs = new GocryptFs(store, config, masterKey, ownsStore, false, rootLock);
+            boolean configCreated = false;
+            boolean dirIVCreated = false;
             try {
                 // Write the diriv first and the config last: the config is the
                 // commit marker, so a crash before it leaves only an orphan
                 // diriv that a later create can replace.
                 if (!plaintextNames) {
-                    fs.directoryManager.writeDirIV(store.root(), true);
+                    dirIVCreated = writeRootDirIVForCreate(store, fs.directoryManager,
+                            configName);
                 }
                 store.writeConfig(configName, configBytes, false);
+                configCreated = true;
                 ok = true;
                 return fs;
+            } catch (FileAlreadyExistsException e) {
+                // Another creator won the config race. Never remove its files.
+                fs.wipeSecrets();
+                throw e;
             } catch (Throwable t) {
                 fs.wipeSecrets();
-                cleanupCreate(store, configName, !plaintextNames);
+                cleanupCreate(store, configName, configCreated, dirIVCreated);
                 throw t;
             }
         } finally {
@@ -1123,6 +1137,46 @@ public final class GocryptFs implements AutoCloseable {
             return false;
         }
         return true;
+    }
+
+    /**
+     * Writes the root diriv for a new filesystem with create-new semantics.
+     *
+     * <p>An already existing diriv may be an orphan left by a create that
+     * crashed before writing the config, so it is replaced. Before that, the
+     * absence of a config is re-checked immediately before the diriv is
+     * touched, and the directory is verified to contain no other entries. A
+     * diriv that belongs to a concurrent creator is therefore not overwritten
+     * once that creator has committed its config.</p>
+     *
+     * @param store            the ciphertext-side store
+     * @param directoryManager the directory manager that writes the diriv
+     * @param configName       the ciphertext path of the config file
+     * @return {@code true} if this call created the diriv file, {@code false}
+     *         if an existing orphan was replaced
+     * @throws IOException on storage errors or if a config or user entry
+     *                     already exists
+     */
+    private static boolean writeRootDirIVForCreate(CipherStore store,
+                                                   DirectoryManager directoryManager,
+                                                   String configName) throws IOException {
+        // Re-check the commit marker immediately before touching the diriv.
+        if (exists(store, configName)) {
+            throw new IOException("cipher dir is not empty: " + store.root());
+        }
+        try {
+            directoryManager.writeDirIV(store.root(), false);
+            return true;
+        } catch (FileAlreadyExistsException e) {
+            // Only replace the diriv if it is a verified orphan: no config and
+            // no other user entries. The check includes the config again, so a
+            // concurrent creator that has committed in the meantime wins.
+            if (!isCreateRootEmpty(store, false)) {
+                throw new IOException("cipher dir is not empty: " + store.root(), e);
+            }
+            directoryManager.writeDirIV(store.root(), true);
+            return false;
+        }
     }
 
     /**
@@ -1204,20 +1258,28 @@ public final class GocryptFs implements AutoCloseable {
                             Constants.CONF_DEFAULT_NAME);
                     GocryptFs fs = new GocryptFs(store, config, masterKey, false, false,
                             rootLock);
+                    boolean configCreated = false;
+                    boolean dirIVCreated = false;
                     try {
                         // Write the diriv first and the config last: the config
                         // is the commit marker, so a crash before it leaves only
                         // an orphan diriv that a later create can replace.
                         if (!plaintextNames) {
-                            fs.directoryManager.writeDirIV(store.root(), true);
+                            dirIVCreated = writeRootDirIVForCreate(store,
+                                    fs.directoryManager, configName);
                         }
                         store.writeConfig(configName, configBytes, false);
+                        configCreated = true;
                         created = true;
                         ok = true;
                         return fs;
+                    } catch (FileAlreadyExistsException e) {
+                        // Another creator won the config race. Never remove its files.
+                        fs.wipeSecrets();
+                        throw e;
                     } catch (Throwable t) {
                         fs.wipeSecrets();
-                        cleanupCreate(store, configName, !plaintextNames);
+                        cleanupCreate(store, configName, configCreated, dirIVCreated);
                         throw t;
                     }
                 } finally {
