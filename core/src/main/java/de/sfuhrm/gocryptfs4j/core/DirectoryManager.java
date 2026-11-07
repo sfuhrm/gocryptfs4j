@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.NoSuchFileException;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -28,6 +29,12 @@ import java.util.concurrent.ConcurrentHashMap;
  * the filesystem, resolving long names and skipping corrupt entries.</p>
  */
 final class DirectoryManager {
+
+    /**
+     * Prefix of the temporary name a {@code gocryptfs.diriv} is moved to in its
+     * parent directory while its directory is being removed or replaced.
+     */
+    private static final String DIRIV_ASIDE_PREFIX = Constants.DIR_IV_FILENAME + ".rmdir.";
 
     /** The ciphertext-side store. */
     private final CipherStore store;
@@ -302,23 +309,88 @@ final class DirectoryManager {
     }
 
     /**
-     * Writes {@code iv} as the {@code gocryptfs.diriv} of {@code cipherDir},
-     * replacing any existing file. Used to restore the directory IV after a
-     * failed directory removal so the names in the directory stay decryptable.
+     * Moves the {@code gocryptfs.diriv} of {@code cipherDir} to a temporary
+     * name in its parent directory.
+     *
+     * <p>This makes the directory empty without destroying its IV: the file is
+     * renamed, never read, rewritten or re-encrypted. If the subsequent removal
+     * or rename fails, {@link #restoreDirIV(String, String)} moves it back. A
+     * concurrent external writer that mints a fresh diriv in the meantime is
+     * never overwritten.</p>
      *
      * @param cipherDir the ciphertext directory name
-     * @param iv        the 16-byte directory IV
+     * @return the ciphertext path of the moved-aside diriv
+     * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code cipherDir} is {@code null}
+     */
+    String moveDirIVAside(String cipherDir) throws IOException {
+        Objects.requireNonNull(cipherDir, "cipherDir");
+        String dirIV = PathResolver.join(cipherDir, Constants.DIR_IV_FILENAME);
+        String parent = parentOf(cipherDir);
+        for (;;) {
+            String aside = PathResolver.join(parent, DIRIV_ASIDE_PREFIX
+                    + Base64.getUrlEncoder().withoutPadding()
+                            .encodeToString(Keys.randomBytes(8)));
+            try {
+                store.rename(dirIV, aside, false);
+                return aside;
+            } catch (FileAlreadyExistsException collision) {
+                // The random name is already taken; try another one.
+            }
+        }
+    }
+
+    /**
+     * Moves a diriv previously moved aside by {@link #moveDirIVAside(String)}
+     * back to {@code cipherDir}.
+     *
+     * <p>The move uses create-new semantics. If an external writer has minted a
+     * fresh diriv while the old one was aside, that new diriv wins: it is kept
+     * and the stale aside copy is deleted. Overwriting it would make every name
+     * created under it undecryptable. The cached IV is dropped in that case so a
+     * later read observes the new file.</p>
+     *
+     * @param cipherDir the ciphertext directory name
+     * @param aside     the ciphertext path returned by {@link #moveDirIVAside(String)}
      * @throws IOException on filesystem errors
      * @throws NullPointerException if an argument is {@code null}
      */
-    void restoreDirIV(String cipherDir, byte[] iv) throws IOException {
+    void restoreDirIV(String cipherDir, String aside) throws IOException {
         Objects.requireNonNull(cipherDir, "cipherDir");
-        Objects.requireNonNull(iv, "iv");
-        if (!usesDirIV()) {
-            return;
+        Objects.requireNonNull(aside, "aside");
+        String dirIV = PathResolver.join(cipherDir, Constants.DIR_IV_FILENAME);
+        try {
+            store.rename(aside, dirIV, false);
+        } catch (FileAlreadyExistsException ignored) {
+            // Keep the externally created diriv and discard the stale one.
+            dirIvCache.remove(cipherDir);
+            deleteIfExists(aside);
         }
-        store.writeSmall(PathResolver.join(cipherDir, Constants.DIR_IV_FILENAME), iv.clone(), true);
-        dirIvCache.put(cipherDir, iv.clone());
+    }
+
+    /**
+     * Returns the parent of a ciphertext path.
+     *
+     * @param cipherName the ciphertext path
+     * @return the parent path, or the store root for a top-level entry
+     */
+    private static String parentOf(String cipherName) {
+        int slash = cipherName.lastIndexOf('/');
+        return slash < 0 ? "" : cipherName.substring(0, slash);
+    }
+
+    /**
+     * Deletes a ciphertext entry, ignoring an already-absent entry.
+     *
+     * @param name the ciphertext path to delete
+     * @throws IOException on storage errors other than the entry being absent
+     */
+    private void deleteIfExists(String name) throws IOException {
+        try {
+            store.delete(name);
+        } catch (NoSuchFileException ignored) {
+            // Already gone.
+        }
     }
 
     /**

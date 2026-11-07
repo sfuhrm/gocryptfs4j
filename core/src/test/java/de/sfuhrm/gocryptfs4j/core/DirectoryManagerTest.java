@@ -1,6 +1,7 @@
 package de.sfuhrm.gocryptfs4j.core;
 
 import de.sfuhrm.gocryptfs4j.crypto.Constants;
+import de.sfuhrm.gocryptfs4j.crypto.Keys;
 import de.sfuhrm.gocryptfs4j.store.CipherChannel;
 import de.sfuhrm.gocryptfs4j.store.CipherNode;
 import de.sfuhrm.gocryptfs4j.store.CipherStore;
@@ -105,6 +106,47 @@ class DirectoryManagerTest {
         assertThrows(NoSuchFileException.class, () -> h.store.readSmall(
                         PathResolver.join("sub", Constants.DIR_IV_FILENAME), Constants.DIR_IV_LEN),
                 "a read must not create a missing diriv");
+    }
+
+    @Test
+    void restoreDirIVMovesAsideBackWhenNoNewDirIVAppeared() throws IOException {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.fileManager.mkdir("/dir");
+        String cipherDir = h.pathResolver.resolve("/dir").cipherPath;
+        String dirIV = PathResolver.join(cipherDir, Constants.DIR_IV_FILENAME);
+        byte[] before = h.store.readSmall(dirIV, Constants.DIR_IV_LEN);
+
+        String aside = h.directoryManager.moveDirIVAside(cipherDir);
+        assertThrows(NoSuchFileException.class,
+                () -> h.store.readSmall(dirIV, Constants.DIR_IV_LEN));
+
+        h.directoryManager.restoreDirIV(cipherDir, aside);
+
+        assertArrayEquals(before, h.store.readSmall(dirIV, Constants.DIR_IV_LEN));
+        assertThrows(NoSuchFileException.class, () -> h.store.stat(aside));
+    }
+
+    @Test
+    void restoreDirIVKeepsExternallyCreatedDirIV() throws IOException {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.fileManager.mkdir("/dir");
+        String cipherDir = h.pathResolver.resolve("/dir").cipherPath;
+        String dirIV = PathResolver.join(cipherDir, Constants.DIR_IV_FILENAME);
+        // Populate the cache with the old IV before moving it aside.
+        h.directoryManager.readDirIV(cipherDir);
+
+        String aside = h.directoryManager.moveDirIVAside(cipherDir);
+        byte[] fresh = Keys.randomBytes(Constants.DIR_IV_LEN);
+        h.store.writeSmall(dirIV, fresh, false);
+
+        h.directoryManager.restoreDirIV(cipherDir, aside);
+
+        assertArrayEquals(fresh, h.store.readSmall(dirIV, Constants.DIR_IV_LEN),
+                "the externally minted diriv must not be overwritten");
+        assertThrows(NoSuchFileException.class, () -> h.store.stat(aside),
+                "the stale aside copy must be discarded");
+        assertArrayEquals(fresh, h.directoryManager.readDirIV(cipherDir),
+                "the cached old IV must not be served after keeping the new diriv");
     }
 
     @Test

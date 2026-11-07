@@ -1,5 +1,6 @@
 package de.sfuhrm.gocryptfs4j.core;
 
+import de.sfuhrm.gocryptfs4j.crypto.Constants;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -183,6 +184,18 @@ class FileManagerTest {
         h.fileManager.createFile("/dir/f.txt");
 
         assertThrows(DirectoryNotEmptyException.class, () -> h.fileManager.delete("/dir"));
+    }
+
+    @Test
+    void deleteEmptyDirectoryRemovesAsideDirIV() throws IOException {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.fileManager.mkdir("/dir");
+
+        h.fileManager.delete("/dir");
+
+        assertTrue(h.store.list(h.store.root()).stream()
+                        .noneMatch(e -> e.name().startsWith(Constants.DIR_IV_FILENAME + ".rmdir.")),
+                "a successful delete must not leave the moved-aside diriv behind");
     }
 
     @Test

@@ -931,7 +931,7 @@ final class FileManager {
             throw new IOException("cannot move " + plainFrom + " into its own subtree: " + plainTo);
         }
         PathResolver.Resolved to = pathResolver.resolveParent(plainTo, true);
-        byte @Nullable [] replacedDirIV = null;
+        String movedDirIV = null;
         if (exists(to.cipherPath)) {
             if (!replaceExisting) {
                 throw new FileAlreadyExistsException(plainTo);
@@ -947,13 +947,12 @@ final class FileManager {
                             "cannot replace a directory with a non-directory");
                 }
                 // An atomic rename cannot replace a directory that still
-                // contains its gocryptfs.diriv, so remove just the diriv,
-                // leaving the now-truly-empty directory in place for the store
-                // to replace atomically. The diriv is restored if the rename
-                // fails.
+                // contains its gocryptfs.diriv, so move the diriv aside in the
+                // parent, leaving the now-truly-empty directory in place for
+                // the store to replace atomically. The diriv is moved back if
+                // the rename fails.
                 if (directoryManager.usesDirIV()) {
-                    replacedDirIV = directoryManager.readDirIV(to.cipherPath);
-                    deleteIfExists(store, PathResolver.join(to.cipherPath, Constants.DIR_IV_FILENAME));
+                    movedDirIV = directoryManager.moveDirIVAside(to.cipherPath);
                 }
             }
             // A non-directory target is replaced atomically by the rename below.
@@ -965,9 +964,9 @@ final class FileManager {
         } catch (IOException | RuntimeException e) {
             // Restore the target's diriv so a failed directory replace leaves
             // the target directory intact.
-            if (replacedDirIV != null) {
+            if (movedDirIV != null) {
                 try {
-                    directoryManager.restoreDirIV(to.cipherPath, replacedDirIV);
+                    directoryManager.restoreDirIV(to.cipherPath, movedDirIV);
                 } catch (IOException restore) {
                     e.addSuppressed(restore);
                 }
@@ -979,6 +978,13 @@ final class FileManager {
                 nameManager.removeLongName(to);
             }
             throw e;
+        }
+        if (movedDirIV != null) {
+            try {
+                deleteIfExists(store, movedDirIV);
+            } catch (IOException cleanup) {
+                // The replace succeeded; only the moved-aside diriv is left.
+            }
         }
         nameManager.removeLongName(from);
         moveSharedFile(from.cipherPath, to.cipherPath);
@@ -1100,10 +1106,10 @@ final class FileManager {
      * {@code gocryptfs.diriv}, if one is used.
      *
      * <p>The directory is verified empty first so a rejected removal leaves it
-     * intact. In per-directory-IV mode the directory IV is read before its
-     * file is removed; if removing the directory itself then fails (for
-     * example because an entry appeared concurrently, a permission error, or a
-     * remote store), the IV is written back so the names in the directory stay
+     * intact. In per-directory-IV mode the diriv is moved aside in the parent
+     * before the directory itself is removed; if that fails (for example
+     * because an entry appeared concurrently, a permission error, or a remote
+     * store), the diriv is moved back so the names in the directory stay
      * decryptable.</p>
      *
      * <p>In plaintext-names and deterministic-names mode there is no
@@ -1152,25 +1158,29 @@ final class FileManager {
      * Removes a ciphertext directory (already verified empty by
      * {@link #verifyEmptyDir(String)}) together with its {@code gocryptfs.diriv}.
      *
-     * <p>The directory IV is read before its file is removed; if removing the
-     * directory itself then fails, the IV is written back so the names in the
-     * directory stay decryptable.</p>
+     * <p>The diriv is moved aside in the parent before the directory is
+     * removed and moved back if the removal fails, so a concurrent external
+     * writer that mints a fresh diriv is never overwritten.</p>
      *
      * @param cipherDir the ciphertext directory to remove
      * @throws IOException on filesystem errors
      */
     private void removeEmptyDirWithDirIV(String cipherDir) throws IOException {
-        byte[] iv = directoryManager.readDirIV(cipherDir);
-        deleteIfExists(store, PathResolver.join(cipherDir, Constants.DIR_IV_FILENAME));
+        String aside = directoryManager.moveDirIVAside(cipherDir);
         try {
             store.delete(cipherDir);
         } catch (IOException | RuntimeException e) {
             try {
-                directoryManager.restoreDirIV(cipherDir, iv);
+                directoryManager.restoreDirIV(cipherDir, aside);
             } catch (IOException restore) {
                 e.addSuppressed(restore);
             }
             throw e;
+        }
+        try {
+            deleteIfExists(store, aside);
+        } catch (IOException cleanup) {
+            // The directory is gone; only the moved-aside diriv is left.
         }
     }
 
