@@ -65,21 +65,24 @@ final class FileManager {
     /** The path resolver. */
     private final PathResolver pathResolver;
 
+    /** The number of stripes used to serialize whole-file operations. */
+    private static final int FILE_LOCK_STRIPES = 64;
+
     /**
-     * Per-file locks serializing whole-file operations so that two handles to
+     * Striped locks serializing whole-file operations so that two handles to
      * the same cipher file cannot interleave header creation or size bookkeeping
-     * and corrupt each other. Entries are removed when a file is deleted and
-     * moved when it is renamed, so the map does not grow without bound and the
-     * lock follows the file across renames.
+     * and corrupt each other. A fixed stripe table bounds the memory used for
+     * locks no matter how many different paths are ever opened.
      */
-    private final Map<String, Object> fileLocks = new ConcurrentHashMap<>();
+    private final Object[] fileLocks = createFileLocks();
 
     /**
      * Per-cipher-path shared {@link CipherFile} entries, so that concurrently
      * open channels and streams on the same file share a single backing
      * {@link CipherFile} (with its single file-id cache) instead of each
-     * holding stale state that could overwrite another handle's data. Entries
-     * are retained for the lifetime of the manager.
+     * holding stale state that could overwrite another handle's data. An entry
+     * is removed again as soon as its last handle is released, so walking many
+     * files does not accumulate idle entries.
      */
     private final Map<String, SharedCipherFile.Entry> sharedFiles = new ConcurrentHashMap<>();
 
@@ -242,30 +245,59 @@ final class FileManager {
                                           SyncPolicy syncPolicy) throws IOException {
         Objects.requireNonNull(cipherFile, "cipherFile");
         Objects.requireNonNull(syncPolicy, "syncPolicy");
-        SharedCipherFile.Entry entry =
-                sharedFiles.computeIfAbsent(cipherFile, key -> new SharedCipherFile.Entry());
-        synchronized (entry.lock) {
-            if (entry.file == null) {
-                entry.file = CipherFile.open(store.open(cipherFile, writable), contentEnc, writable);
-                entry.failure = null;
-                entry.writable = writable;
-            } else if (writable && !entry.writable) {
-                // A read-only shared file is already open (other read-only
-                // handles hold it). Upgrade to a writable channel; the old one
-                // never buffered a write, so it can be retired safely. Keep it
-                // open until the entry is fully released: a reader may already
-                // have captured it and would otherwise see a closed channel.
-                CipherFile upgraded = CipherFile.open(store.open(cipherFile, true), contentEnc, true);
-                CipherFile old = entry.file;
-                entry.file = upgraded;
-                entry.writable = true;
-                if (old != null) {
-                    entry.retired.add(old);
+        IOException[] ioFailure = new IOException[1];
+        RuntimeException[] runtimeFailure = new RuntimeException[1];
+        SharedCipherFile.Entry[] opened = new SharedCipherFile.Entry[1];
+        sharedFiles.compute(cipherFile, (key, existing) -> {
+            SharedCipherFile.Entry entry = existing;
+            if (entry == null) {
+                entry = new SharedCipherFile.Entry();
+                entry.releaseAction = this::pruneSharedFile;
+            }
+            synchronized (entry.lock) {
+                entry.key = cipherFile;
+                try {
+                    if (entry.file == null) {
+                        entry.file = CipherFile.open(store.open(cipherFile, writable),
+                                contentEnc, writable);
+                        entry.failure = null;
+                        entry.writable = writable;
+                    } else if (writable && !entry.writable) {
+                        // A read-only shared file is already open (other
+                        // read-only handles hold it). Upgrade to a writable
+                        // channel; the old one never buffered a write, so it
+                        // can be retired safely. Keep it open until the entry
+                        // is fully released: a reader may already have
+                        // captured it and would otherwise see a closed channel.
+                        CipherFile upgraded = CipherFile.open(store.open(cipherFile, true),
+                                contentEnc, true);
+                        CipherFile old = entry.file;
+                        entry.file = upgraded;
+                        entry.writable = true;
+                        if (old != null) {
+                            entry.retired.add(old);
+                        }
+                    }
+                    entry.refs++;
+                    opened[0] = entry;
+                    return entry;
+                } catch (IOException e) {
+                    ioFailure[0] = e;
+                    // Do not retain an entry that a failed open created.
+                    return entry.refs == 0 ? null : entry;
+                } catch (RuntimeException e) {
+                    runtimeFailure[0] = e;
+                    return entry.refs == 0 ? null : entry;
                 }
             }
-            entry.refs++;
+        });
+        if (runtimeFailure[0] != null) {
+            throw runtimeFailure[0];
         }
-        return new SharedCipherFile(entry, syncPolicy);
+        if (ioFailure[0] != null) {
+            throw ioFailure[0];
+        }
+        return new SharedCipherFile(opened[0], syncPolicy);
     }
 
     /**
@@ -302,23 +334,28 @@ final class FileManager {
     }
 
     /**
-     * Returns the monitor used to serialize whole-file operations on a
-     * ciphertext file, creating it on first use.
+     * Creates the fixed table of locks used to serialize whole-file operations.
      *
-     * @param cipherFile the ciphertext file name
-     * @return the per-file lock
+     * @return the lock stripe table
      */
-    private Object fileLock(String cipherFile) {
-        return fileLocks.computeIfAbsent(cipherFile, key -> new Object());
+    private static Object[] createFileLocks() {
+        Object[] locks = new Object[FILE_LOCK_STRIPES];
+        for (int i = 0; i < locks.length; i++) {
+            locks[i] = new Object();
+        }
+        return locks;
     }
 
     /**
-     * Removes the per-file lock for a ciphertext file that no longer exists.
+     * Returns the striped monitor used to serialize whole-file operations on a
+     * ciphertext file. Different files may share a stripe, which only reduces
+     * concurrency; operations on the same file always use the same stripe.
      *
      * @param cipherFile the ciphertext file name
+     * @return the lock stripe for the file
      */
-    private void releaseFileLock(String cipherFile) {
-        fileLocks.remove(cipherFile);
+    private Object fileLock(String cipherFile) {
+        return fileLocks[Math.floorMod(cipherFile.hashCode(), fileLocks.length)];
     }
 
     /**
@@ -334,33 +371,34 @@ final class FileManager {
     }
 
     /**
-     * Moves the per-file lock for a ciphertext file from one path to another, so
-     * a rename neither leaves a stale lock behind nor lets the lock drift away
-     * from the file it protects. A lock that already exists at the target (from
-     * a replaced entry) is dropped. A directory rename also relocates the locks
-     * of every file below it.
+     * Removes a shared entry after its last handle has been released, unless a
+     * concurrent open already acquired it again. The entry remembers its
+     * current key because a rename may move it while handles are open.
      *
-     * @param from the source ciphertext path
-     * @param to   the target ciphertext path
+     * @param entry the entry to prune
      */
-    private void moveFileLock(String from, String to) {
-        Object lock = fileLocks.remove(from);
-        if (lock != null) {
-            fileLocks.put(to, lock);
-        } else {
-            fileLocks.remove(to);
-        }
-        String prefix = from + "/";
-        List<String> keys = new ArrayList<>();
-        for (String key : fileLocks.keySet()) {
-            if (key.startsWith(prefix)) {
-                keys.add(key);
+    private void pruneSharedFile(SharedCipherFile.Entry entry) {
+        for (;;) {
+            String key = entry.key;
+            if (key == null) {
+                return;
             }
-        }
-        for (String key : keys) {
-            Object descendant = fileLocks.remove(key);
-            if (descendant != null) {
-                fileLocks.put(to + key.substring(from.length()), descendant);
+            boolean[] removed = new boolean[1];
+            sharedFiles.compute(key, (k, current) -> {
+                if (current != entry) {
+                    return current;
+                }
+                synchronized (entry.lock) {
+                    if (entry.refs != 0) {
+                        return current;
+                    }
+                    entry.key = null;
+                    removed[0] = true;
+                    return null;
+                }
+            });
+            if (removed[0] || Objects.equals(key, entry.key)) {
+                return;
             }
         }
     }
@@ -376,12 +414,7 @@ final class FileManager {
      * @param to   the target ciphertext path
      */
     private void moveSharedFile(String from, String to) {
-        SharedCipherFile.Entry entry = sharedFiles.remove(from);
-        if (entry != null) {
-            sharedFiles.put(to, entry);
-        } else {
-            sharedFiles.remove(to);
-        }
+        moveSharedFileEntry(from, to);
         String prefix = from + "/";
         List<String> keys = new ArrayList<>();
         for (String key : sharedFiles.keySet()) {
@@ -390,11 +423,47 @@ final class FileManager {
             }
         }
         for (String key : keys) {
-            SharedCipherFile.Entry descendant = sharedFiles.remove(key);
-            if (descendant != null) {
-                sharedFiles.put(to + key.substring(from.length()), descendant);
-            }
+            moveSharedFileEntry(key, to + key.substring(from.length()));
         }
+    }
+
+    /**
+     * Moves a single shared entry, dropping it instead when it has no live
+     * handles any more.
+     *
+     * @param from the source ciphertext path
+     * @param to   the target ciphertext path
+     */
+    private void moveSharedFileEntry(String from, String to) {
+        SharedCipherFile.Entry[] moved = new SharedCipherFile.Entry[1];
+        sharedFiles.compute(from, (key, entry) -> {
+            if (entry == null) {
+                return null;
+            }
+            synchronized (entry.lock) {
+                if (entry.refs == 0) {
+                    entry.key = null;
+                    return null;
+                }
+                entry.key = to;
+                moved[0] = entry;
+                return null;
+            }
+        });
+        SharedCipherFile.Entry entry = moved[0];
+        if (entry == null) {
+            sharedFiles.remove(to);
+            return;
+        }
+        sharedFiles.compute(to, (key, existing) -> {
+            synchronized (entry.lock) {
+                if (entry.refs == 0) {
+                    entry.key = null;
+                    return null;
+                }
+                return entry;
+            }
+        });
     }
 
     /**
@@ -808,7 +877,6 @@ final class FileManager {
         } else {
             store.delete(r.cipherPath);
         }
-        releaseFileLock(r.cipherPath);
         releaseSharedFile(r.cipherPath);
         nameManager.removeLongName(r);
         directoryManager.invalidateDirIvCache(r.cipherPath);
@@ -913,7 +981,6 @@ final class FileManager {
             throw e;
         }
         nameManager.removeLongName(from);
-        moveFileLock(from.cipherPath, to.cipherPath);
         moveSharedFile(from.cipherPath, to.cipherPath);
         directoryManager.invalidateDirIvCache(from.cipherPath);
         directoryManager.invalidateDirIvCache(to.cipherPath);

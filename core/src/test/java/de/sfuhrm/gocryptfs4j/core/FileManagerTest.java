@@ -24,7 +24,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
-import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -415,52 +414,16 @@ class FileManagerTest {
     }
 
     @Test
-    void fileLocksShrinkOnDelete() throws Exception {
+    void sharedFilesEntryRemovedOnLastClose() throws Exception {
         ManagerHarness h = ManagerHarness.encrypted();
         h.fileManager.createFile("/f.txt");
-        h.fileManager.write("/f.txt", 0, "x".getBytes(StandardCharsets.UTF_8));
         String cipherPath = h.pathResolver.resolve("/f.txt").cipherPath;
 
-        assertTrue(fileLocks(h).containsKey(cipherPath));
-
-        h.fileManager.delete("/f.txt");
-
-        assertFalse(fileLocks(h).containsKey(cipherPath));
-    }
-
-    @Test
-    void fileLockFollowsRename() throws Exception {
-        ManagerHarness h = ManagerHarness.encrypted();
-        h.fileManager.createFile("/a.txt");
-        h.fileManager.write("/a.txt", 0, "x".getBytes(StandardCharsets.UTF_8));
-        String from = h.pathResolver.resolve("/a.txt").cipherPath;
-        String to = h.pathResolver.resolve("/b.txt").cipherPath;
-
-        Object lock = fileLocks(h).get(from);
-        assertNotNull(lock);
-
-        h.fileManager.rename("/a.txt", "/b.txt", false);
-
-        assertFalse(fileLocks(h).containsKey(from));
-        assertSame(lock, fileLocks(h).get(to));
-    }
-
-    @Test
-    void fileLockFollowsDirectoryRename() throws Exception {
-        ManagerHarness h = ManagerHarness.encrypted();
-        h.fileManager.mkdir("/dir");
-        h.fileManager.createFile("/dir/f.txt");
-        h.fileManager.write("/dir/f.txt", 0, "x".getBytes(StandardCharsets.UTF_8));
-        String from = h.pathResolver.resolve("/dir/f.txt").cipherPath;
-
-        Object lock = fileLocks(h).get(from);
-        assertNotNull(lock);
-
-        h.fileManager.rename("/dir", "/dir2", false);
-
-        String to = h.pathResolver.resolve("/dir2/f.txt").cipherPath;
-        assertFalse(fileLocks(h).containsKey(from));
-        assertSame(lock, fileLocks(h).get(to));
+        try (SharedCipherFile cf = h.fileManager.openCipherFile("/f.txt", true)) {
+            assertTrue(sharedFiles(h).containsKey(cipherPath));
+        }
+        assertFalse(sharedFiles(h).containsKey(cipherPath),
+                "an idle entry must be dropped when the last handle closes");
     }
 
     @Test
@@ -471,16 +434,16 @@ class FileManagerTest {
 
         try (SharedCipherFile cf = h.fileManager.openCipherFile("/f.txt", true)) {
             assertTrue(sharedFiles(h).containsKey(cipherPath));
-        }
-        assertTrue(sharedFiles(h).containsKey(cipherPath),
-                "the shared entry is retained while idle");
 
-        h.fileManager.delete("/f.txt");
-        assertFalse(sharedFiles(h).containsKey(cipherPath));
+            h.fileManager.delete("/f.txt");
+
+            assertFalse(sharedFiles(h).containsKey(cipherPath),
+                    "a deleted file's shared entry must be dropped");
+        }
     }
 
     @Test
-    void sharedFilesEntryMovedOnRename() throws Exception {
+    void sharedFilesEntryMovedOnRenameAndPrunedOnClose() throws Exception {
         ManagerHarness h = ManagerHarness.encrypted();
         h.fileManager.createFile("/a.txt");
         String from = h.pathResolver.resolve("/a.txt").cipherPath;
@@ -488,25 +451,43 @@ class FileManagerTest {
 
         try (SharedCipherFile cf = h.fileManager.openCipherFile("/a.txt", true)) {
             assertTrue(sharedFiles(h).containsKey(from));
+
+            h.fileManager.rename("/a.txt", "/b.txt", false);
+
+            assertFalse(sharedFiles(h).containsKey(from));
+            assertTrue(sharedFiles(h).containsKey(to));
         }
 
-        h.fileManager.rename("/a.txt", "/b.txt", false);
-
-        assertFalse(sharedFiles(h).containsKey(from));
-        assertTrue(sharedFiles(h).containsKey(to));
+        assertFalse(sharedFiles(h).containsKey(to),
+                "closing the last handle after a rename must prune the moved entry");
     }
 
-    /**
-     * Returns the private per-file lock map of a harness's file manager.
-     *
-     * @param h the harness
-     * @return the lock map keyed by cipher path
-     */
-    @SuppressWarnings("unchecked")
-    private static Map<String, Object> fileLocks(ManagerHarness h) throws Exception {
-        Field field = FileManager.class.getDeclaredField("fileLocks");
-        field.setAccessible(true);
-        return (Map<String, Object>) field.get(h.fileManager);
+    @Test
+    void failedOpenDoesNotRetainSharedEntry() throws Exception {
+        ManagerHarness h = ManagerHarness.encrypted();
+        String cipherPath = h.pathResolver.resolve("/missing.txt").cipherPath;
+
+        assertThrows(NoSuchFileException.class,
+                () -> h.fileManager.openCipherFile("/missing.txt", false));
+
+        assertFalse(sharedFiles(h).containsKey(cipherPath),
+                "a failed open must not leave an entry behind");
+    }
+
+    @Test
+    void walkingManyFilesDoesNotAccumulateSharedEntries() throws Exception {
+        ManagerHarness h = ManagerHarness.encrypted();
+        byte[] data = {0x42};
+
+        for (int i = 0; i < 200; i++) {
+            String name = "/f" + i + ".txt";
+            h.fileManager.createFile(name);
+            h.fileManager.write(name, 0, data);
+            assertArrayEquals(data, h.fileManager.readAll(name));
+        }
+
+        assertTrue(sharedFiles(h).isEmpty(),
+                "closed files must not stay in the shared-file registry");
     }
 
     /**

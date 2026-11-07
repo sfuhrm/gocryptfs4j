@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Consumer;
 
 import org.jspecify.annotations.Nullable;
 
@@ -59,6 +60,15 @@ public final class SharedCipherFile implements AutoCloseable {
         @Nullable volatile BlockCache cache;
 
         @Nullable volatile IOException failure;
+
+        /** The map key under which {@link FileManager} currently stores this entry. */
+        @Nullable volatile String key;
+
+        /**
+         * Called after the last handle is released so the owner can drop this
+         * entry from its registry. {@code null} for entries not kept in a map.
+         */
+        @Nullable Consumer<Entry> releaseAction;
     }
 
     /** The shared entry this handle references. */
@@ -393,6 +403,8 @@ public final class SharedCipherFile implements AutoCloseable {
      * @throws IOException on filesystem errors
      */
     private void release(SyncPolicy syncPolicy) throws IOException {
+        IOException failure;
+        Consumer<Entry> releaseAction;
         synchronized (entry.lock) {
             if (closed) {
                 return;
@@ -402,7 +414,7 @@ public final class SharedCipherFile implements AutoCloseable {
             boolean last = entry.refs == 0;
             CipherFile file = entry.file;
             BlockCache cache = entry.cache;
-            IOException failure = null;
+            failure = null;
             boolean wrote = false;
 
             // Flush on every channel close (the default policy), not only on
@@ -465,8 +477,16 @@ public final class SharedCipherFile implements AutoCloseable {
 
             if (failure != null) {
                 entry.failure = failure;
-                throw failure;
             }
+            releaseAction = last ? entry.releaseAction : null;
+        }
+        // The registry callback must run outside this entry's monitor: it
+        // takes the map's lock and then re-checks the entry under this lock.
+        if (releaseAction != null) {
+            releaseAction.accept(entry);
+        }
+        if (failure != null) {
+            throw failure;
         }
     }
 }
