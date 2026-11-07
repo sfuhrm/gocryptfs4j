@@ -652,9 +652,17 @@ public final class GocryptFsProvider extends FileSystemProvider {
     @Override
     public void createDirectory(Path dir, FileAttribute<?>... attrs) throws IOException {
         Objects.requireNonNull(dir, "dir");
-        GocryptFsPath d = resolveParent(dir);
-        core(d).mkdir(d.toString());
-        applyAttributes(d, attrs);
+        GocryptFsPath abs = toAbsolute(dir);
+        GocryptFs fs = core(abs);
+        Lock writeLock = fs.writeLock();
+        writeLock.lock();
+        try {
+            GocryptFsPath d = resolveParent(abs);
+            fs.mkdir(d.toString());
+            applyAttributes(d, attrs);
+        } finally {
+            writeLock.unlock();
+        }
     }
 
     /**
@@ -667,8 +675,16 @@ public final class GocryptFsProvider extends FileSystemProvider {
     @Override
     public void delete(Path path) throws IOException {
         Objects.requireNonNull(path, "path");
-        GocryptFsPath p = resolveParent(path);
-        core(p).delete(p.toString());
+        GocryptFsPath abs = toAbsolute(path);
+        GocryptFs fs = core(abs);
+        Lock writeLock = fs.writeLock();
+        writeLock.lock();
+        try {
+            GocryptFsPath p = resolveParent(abs);
+            fs.delete(p.toString());
+        } finally {
+            writeLock.unlock();
+        }
     }
 
     // ------------------------------------------------------------------
@@ -692,8 +708,16 @@ public final class GocryptFsProvider extends FileSystemProvider {
             throws IOException {
         Objects.requireNonNull(link, "link");
         Objects.requireNonNull(target, "target");
-        GocryptFsPath l = resolveParent(link);
-        core(l).createSymlink(l.toString(), target.toString());
+        GocryptFsPath abs = toAbsolute(link);
+        GocryptFs fs = core(abs);
+        Lock writeLock = fs.writeLock();
+        writeLock.lock();
+        try {
+            GocryptFsPath l = resolveParent(abs);
+            fs.createSymlink(l.toString(), target.toString());
+        } finally {
+            writeLock.unlock();
+        }
     }
 
     /**
@@ -708,9 +732,17 @@ public final class GocryptFsProvider extends FileSystemProvider {
     @Override
     public Path readSymbolicLink(Path link) throws IOException {
         Objects.requireNonNull(link, "link");
-        GocryptFsPath l = resolveParent(link);
-        String target = core(l).readSymlinkTarget(l.toString());
-        return l.getFileSystem().getPath(target);
+        GocryptFsPath abs = toAbsolute(link);
+        GocryptFs fs = core(abs);
+        Lock writeLock = fs.writeLock();
+        writeLock.lock();
+        try {
+            GocryptFsPath l = resolveParent(abs);
+            String target = fs.readSymlinkTarget(l.toString());
+            return l.getFileSystem().getPath(target);
+        } finally {
+            writeLock.unlock();
+        }
     }
 
     // ------------------------------------------------------------------
@@ -743,17 +775,26 @@ public final class GocryptFsProvider extends FileSystemProvider {
         Objects.requireNonNull(source, "source");
         Objects.requireNonNull(target, "target");
         Set<CopyOption> opts = toOptionSet(options);
-        GocryptFsPath s = toAbsolute(source);
-        if (!opts.contains(LinkOption.NOFOLLOW_LINKS)) {
-            s = s.toRealPathLenient();
-        } else {
-            s = resolveParent(source);
+        GocryptFsPath absSource = toAbsolute(source);
+        GocryptFsPath absTarget = toAbsolute(target);
+        GocryptFs fs = core(absSource);
+        Lock writeLock = fs.writeLock();
+        writeLock.lock();
+        try {
+            GocryptFsPath s = absSource;
+            if (!opts.contains(LinkOption.NOFOLLOW_LINKS)) {
+                s = s.toRealPathLenient();
+            } else {
+                s = resolveParent(absSource);
+            }
+            GocryptFsPath t = resolveParent(absTarget);
+            if (s.equals(t) || resolveParent(absSource).equals(t)) {
+                return;
+            }
+            copyEntry(s, t, opts);
+        } finally {
+            writeLock.unlock();
         }
-        GocryptFsPath t = resolveParent(target);
-        if (s.equals(t) || resolveParent(source).equals(t)) {
-            return;
-        }
-        copyEntry(s, t, opts);
     }
 
     private static Set<CopyOption> toOptionSet(CopyOption... options) {
@@ -976,14 +1017,23 @@ public final class GocryptFsProvider extends FileSystemProvider {
             throw new AtomicMoveNotSupportedException(source.toString(), target.toString(),
                     "atomic moves are not supported");
         }
-        GocryptFsPath s = resolveParent(source);
-        GocryptFsPath t = resolveParent(target);
-        if (core(s) != core(t)) {
-            throw new FileSystemException(s.toString(), t.toString(),
-                    "cannot move between different encrypted filesystems");
+        GocryptFsPath absSource = toAbsolute(source);
+        GocryptFsPath absTarget = toAbsolute(target);
+        GocryptFs fs = core(absSource);
+        Lock writeLock = fs.writeLock();
+        writeLock.lock();
+        try {
+            GocryptFsPath s = resolveParent(absSource);
+            GocryptFsPath t = resolveParent(absTarget);
+            if (fs != core(t)) {
+                throw new FileSystemException(s.toString(), t.toString(),
+                        "cannot move between different encrypted filesystems");
+            }
+            fs.rename(s.toString(), t.toString(),
+                    opts.contains(StandardCopyOption.REPLACE_EXISTING));
+        } finally {
+            writeLock.unlock();
         }
-        core(s).rename(s.toString(), t.toString(),
-                opts.contains(StandardCopyOption.REPLACE_EXISTING));
     }
 
     /**
