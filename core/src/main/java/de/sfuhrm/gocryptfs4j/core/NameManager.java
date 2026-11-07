@@ -54,6 +54,40 @@ final class NameManager {
     }
 
     /**
+     * Returns whether {@code name} is reserved for gocryptfs's own files and
+     * must not be exposed or overwritten as a user name.
+     *
+     * <p>Encrypted names are base64url and can never contain a dot, so there is
+     * no collision with control files in that mode. In plaintext-names mode the
+     * cipher name equals the user name, so the control-file namespace has to be
+     * reserved explicitly.</p>
+     *
+     * <p>At the root, any name starting with {@code gocryptfs.} is reserved
+     * (for example {@code gocryptfs.conf}, {@code gocryptfs.conf.bak} and
+     * {@code gocryptfs.diriv}). Hidden internal files starting with
+     * {@code .gocryptfs} (atomic-write temporaries and the root lock file) are
+     * reserved in every directory. The root-only reservation keeps an ordinary
+     * user entry named {@code gocryptfs.conf} or {@code gocryptfs.diriv} in a
+     * subdirectory possible; such an entry cannot collide with a control
+     * file.</p>
+     *
+     * @param name the plaintext (and, in plaintext-names mode, cipher) name
+     * @param root whether the name is directly in the ciphertext root
+     * @return {@code true} if the name is reserved
+     * @throws NullPointerException if {@code name} is {@code null}
+     */
+    boolean isReservedName(String name, boolean root) {
+        Objects.requireNonNull(name, "name");
+        if (!plaintextNames) {
+            return false;
+        }
+        if (name.startsWith(Constants.INTERNAL_NAME_PREFIX)) {
+            return true;
+        }
+        return root && name.startsWith(Constants.RESERVED_ROOT_PREFIX);
+    }
+
+    /**
      * Encrypts (and possibly hashes) a plaintext name using {@code dirIV}.
      *
      * @param plainName the plaintext name

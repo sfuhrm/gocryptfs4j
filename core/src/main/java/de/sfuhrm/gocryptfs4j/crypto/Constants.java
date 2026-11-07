@@ -41,6 +41,21 @@ public final class Constants {
     /** Default configuration file name. */
     public static final String CONF_DEFAULT_NAME = "gocryptfs.conf";
 
+    /**
+     * Prefix reserved for gocryptfs control files directly in the ciphertext
+     * root when plaintext names are used. Encrypted names are base64url and can
+     * never start with this prefix, so no reservation is needed there.
+     */
+    public static final String RESERVED_ROOT_PREFIX = "gocryptfs.";
+
+    /**
+     * Prefix of hidden internal files such as atomic-write temporaries and the
+     * root lock file. These names are reserved in every directory when
+     * plaintext names are used so they cannot be listed or overwritten as user
+     * files.
+     */
+    public static final String INTERNAL_NAME_PREFIX = ".gocryptfs";
+
     /** Per-file header: version (uint16 big endian) + 128-bit random file id. */
     public static final int HEADER_VERSION_LEN = 2;
 

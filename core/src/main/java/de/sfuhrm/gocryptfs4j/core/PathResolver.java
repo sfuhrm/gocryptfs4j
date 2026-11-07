@@ -1,6 +1,5 @@
 package de.sfuhrm.gocryptfs4j.core;
 
-import de.sfuhrm.gocryptfs4j.crypto.Constants;
 import de.sfuhrm.gocryptfs4j.store.CipherStore;
 import org.jspecify.annotations.Nullable;
 
@@ -96,7 +95,7 @@ final class PathResolver {
      * @throws IOException on filesystem errors
      * @throws NullPointerException if {@code plainPath} is {@code null}
      * @throws IllegalArgumentException if the path contains a {@code ..} component
-     *                                  or targets the reserved {@code gocryptfs.conf} control file
+     *                                  or targets a reserved gocryptfs name
      */
     Resolved resolve(String plainPath) throws IOException {
         return resolve(plainPath, false);
@@ -105,7 +104,7 @@ final class PathResolver {
     Resolved resolve(String plainPath, boolean create) throws IOException {
         Objects.requireNonNull(plainPath, "plainPath");
         List<String> comps = normalize(plainPath);
-        checkNotControlFile(comps);
+        checkNotReserved(comps);
         String cur = rootName;
         byte[] curIV = directoryManager.readDirIV(cur, create);
         for (int i = 0; i < comps.size() - 1; i++) {
@@ -135,7 +134,7 @@ final class PathResolver {
 
     Resolved resolveParent(String plainPath, boolean create) throws IOException {
         List<String> comps = normalize(plainPath);
-        checkNotControlFile(comps);
+        checkNotReserved(comps);
         if (comps.isEmpty()) {
             throw new IOException("invalid path: " + plainPath);
         }
@@ -169,21 +168,28 @@ final class PathResolver {
     }
 
     /**
-     * Rejects a plaintext path that would map to a reserved control file.
+     * Rejects a plaintext path that would map to a reserved gocryptfs name.
      *
      * <p>Encrypted file names are base64url and can never equal a control-file
      * name (which contains a dot), so the collision only exists in
      * plaintext-names mode, where the cipher name equals the plaintext name.
-     * Only the top-level {@code /gocryptfs.conf} is reserved; a same-named
-     * entry in a subdirectory is an ordinary file.</p>
+     * At the root the whole {@code gocryptfs.} prefix is reserved, which covers
+     * the config file, its backup, and the per-directory IV. Hidden internal
+     * names starting with {@code .gocryptfs} are reserved in every directory.
+     * Other same-named entries in a subdirectory remain ordinary files.</p>
      *
      * @param comps the normalized plaintext path components
-     * @throws IllegalArgumentException if the path targets the config file
+     * @throws IllegalArgumentException if the path targets a reserved name
      */
-    private void checkNotControlFile(List<String> comps) {
-        if (plaintextNames && !comps.isEmpty()
-                && comps.get(0).equals(Constants.CONF_DEFAULT_NAME)) {
-            throw new IllegalArgumentException("reserved control file: " + Constants.CONF_DEFAULT_NAME);
+    private void checkNotReserved(List<String> comps) {
+        if (!plaintextNames) {
+            return;
+        }
+        for (int i = 0; i < comps.size(); i++) {
+            String component = comps.get(i);
+            if (nameManager.isReservedName(component, i == 0)) {
+                throw new IllegalArgumentException("reserved gocryptfs name: " + component);
+            }
         }
     }
 

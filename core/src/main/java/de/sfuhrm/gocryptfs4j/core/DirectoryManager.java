@@ -241,6 +241,9 @@ final class DirectoryManager {
             if (usesDirIV() && name.equals(Constants.DIR_IV_FILENAME)) {
                 continue;
             }
+            if (nameManager.isReservedName(name, isRoot)) {
+                continue;
+            }
             if (isRoot && name.equals(Constants.CONF_DEFAULT_NAME)) {
                 continue;
             }
@@ -252,8 +255,9 @@ final class DirectoryManager {
     /**
      * Returns whether the filesystem uses per-directory {@code gocryptfs.diriv}
      * files. This is false in plaintext-names mode and in deterministic-names
-     * mode, where an entry named {@code gocryptfs.diriv} is an ordinary user
-     * entry rather than a control file.
+     * mode. The name {@code gocryptfs.diriv} is then an ordinary user entry in
+     * a subdirectory; directly in the root it is covered by the reserved
+     * {@code gocryptfs.} prefix in plaintext-names mode.
      *
      * @return {@code true} if a per-directory IV file is used
      */
@@ -360,6 +364,9 @@ final class DirectoryManager {
             if (usesDirIV() && storageName.equals(Constants.DIR_IV_FILENAME)) {
                 continue;
             }
+            if (nameManager.isReservedName(storageName, isRoot)) {
+                continue;
+            }
             if (isRoot && storageName.equals(Constants.CONF_DEFAULT_NAME)) {
                 continue;
             }
@@ -423,6 +430,9 @@ final class DirectoryManager {
         for (CipherNode node : store.list(cipherDir)) {
             String cName = node.name();
             if (usesDirIV() && cName.equals(Constants.DIR_IV_FILENAME)) {
+                continue;
+            }
+            if (nameManager.isReservedName(cName, isRoot)) {
                 continue;
             }
             if (isRoot && cName.equals(Constants.CONF_DEFAULT_NAME)) {

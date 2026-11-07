@@ -93,14 +93,49 @@ class PathResolverTest {
     }
 
     @Test
+    void resolveRejectsReservedRootPrefixInPlaintextMode() throws IOException {
+        ManagerHarness h = ManagerHarness.plaintext();
+
+        for (String name : Arrays.asList("gocryptfs.conf.bak", "gocryptfs.diriv",
+                "gocryptfs.anything")) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> h.pathResolver.resolve("/" + name), name);
+        }
+    }
+
+    @Test
+    void resolveRejectsHiddenInternalNamesInEveryDirectory() throws IOException {
+        ManagerHarness h = ManagerHarness.plaintext();
+        h.fileManager.mkdir("/sub");
+
+        for (String name : Arrays.asList(".gocryptfs-abc.tmp", ".gocryptfs.lock")) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> h.pathResolver.resolve("/" + name), name);
+            assertThrows(IllegalArgumentException.class,
+                    () -> h.pathResolver.resolve("/sub/" + name), name);
+        }
+    }
+
+    @Test
     void resolveAllowsControlFileNameInSubdirectory() throws IOException {
         ManagerHarness h = ManagerHarness.plaintext();
         h.fileManager.mkdir("/sub");
         h.fileManager.createFile("/sub/gocryptfs.conf");
+        h.fileManager.createFile("/sub/gocryptfs.conf.bak");
 
         PathResolver.Resolved r = h.pathResolver.resolve("/sub/gocryptfs.conf");
 
         assertEquals("gocryptfs.conf", r.plainName);
+    }
+
+    @Test
+    void resolveDoesNotReserveGocryptfsPrefixForEncryptedNames() throws IOException {
+        ManagerHarness h = ManagerHarness.encrypted();
+
+        PathResolver.Resolved r = h.pathResolver.resolve("/gocryptfs.conf");
+
+        assertEquals("gocryptfs.conf", r.plainName);
+        assertTrue(!r.cipherName.equals("gocryptfs.conf"));
     }
 
     @Test

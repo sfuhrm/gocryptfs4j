@@ -241,6 +241,41 @@ class DirectoryManagerTest {
     }
 
     @Test
+    void listCipherDirSkipsReservedNamesInPlaintextRoot() throws IOException {
+        ManagerHarness h = ManagerHarness.plaintext();
+        h.fileManager.createFile("/normal.txt");
+        for (String name : Arrays.asList("gocryptfs.conf.bak", "gocryptfs.diriv",
+                "gocryptfs.anything", ".gocryptfs-abc.tmp", ".gocryptfs.lock")) {
+            h.store.writeSmall(PathResolver.join(h.store.root(), name),
+                    new byte[]{1}, false);
+        }
+
+        byte[] iv = h.directoryManager.readDirIV(h.store.root());
+        List<DirEntry> entries = h.directoryManager.listCipherDir(h.store.root(), iv);
+
+        Set<String> names = entries.stream()
+                .map(DirEntry::plainName)
+                .collect(Collectors.toSet());
+        assertEquals(new HashSet<>(Arrays.asList("normal.txt")), names);
+    }
+
+    @Test
+    void listCipherDirSkipsHiddenInternalNamesInSubdirectories() throws IOException {
+        ManagerHarness h = ManagerHarness.plaintext();
+        h.fileManager.mkdir("/dir");
+        h.fileManager.createFile("/dir/gocryptfs.conf.bak");
+        h.store.writeSmall(PathResolver.join("dir", ".gocryptfs-abc.tmp"),
+                new byte[]{1}, false);
+
+        String cipherPath = h.pathResolver.resolve("/dir").cipherPath;
+        byte[] iv = h.directoryManager.readDirIV(cipherPath);
+        List<DirEntry> entries = h.directoryManager.listCipherDir(cipherPath, iv);
+
+        assertEquals(1, entries.size());
+        assertEquals("gocryptfs.conf.bak", entries.get(0).plainName());
+    }
+
+    @Test
     void listCipherDirIncludesDirivInDeterministicMode() throws IOException {
         ManagerHarness h = ManagerHarness.deterministic();
         h.fileManager.mkdir("/dir");

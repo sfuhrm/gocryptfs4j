@@ -1090,9 +1090,13 @@ public final class GocryptFs implements AutoCloseable {
      * marker of a completed create. An orphan {@code gocryptfs.diriv} is
      * ignored in encrypted-name mode: it can only be left behind by a create
      * that crashed before writing the config, and the new create replaces it.
-     * The config is also checked directly, so a stale (eventually consistent)
-     * directory listing cannot hide a committed filesystem and cause its diriv
-     * to be replaced.</p>
+     * Internal files (atomic-write temporaries and the root lock file) are also
+     * ignored: they are created by gocryptfs itself and are not user entries.
+     * In plaintext-names mode the whole {@code gocryptfs.} prefix is reserved
+     * at the root, so a leftover backup such as {@code gocryptfs.conf.bak} does
+     * not block creating a fresh filesystem. The config is also checked
+     * directly, so a stale (eventually consistent) directory listing cannot
+     * hide a committed filesystem and cause its diriv to be replaced.</p>
      *
      * @param store          the ciphertext-side store
      * @param plaintextNames whether the new filesystem stores names unencrypted
@@ -1106,7 +1110,14 @@ public final class GocryptFs implements AutoCloseable {
             return false;
         }
         for (CipherNode node : store.list(root)) {
-            if (!plaintextNames && node.name().equals(Constants.DIR_IV_FILENAME)) {
+            String name = node.name();
+            if (!plaintextNames && name.equals(Constants.DIR_IV_FILENAME)) {
+                continue;
+            }
+            if (name.startsWith(Constants.INTERNAL_NAME_PREFIX)) {
+                continue;
+            }
+            if (plaintextNames && name.startsWith(Constants.RESERVED_ROOT_PREFIX)) {
                 continue;
             }
             return false;

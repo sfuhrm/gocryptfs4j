@@ -529,6 +529,42 @@ class GocryptFsTest {
     }
 
     @Test
+    void plaintextNamesHidesAndRejectsReservedInternalNames() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        List<String> reserved = Arrays.asList("gocryptfs.conf.bak", "gocryptfs.diriv",
+                "gocryptfs.anything", ".gocryptfs-abc.tmp", ".gocryptfs.lock");
+
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray(), true)) {
+            for (String name : reserved) {
+                Files.write(cipherDir.resolve(name), new byte[]{1});
+            }
+            fs.createFile("/normal.txt");
+
+            Set<String> listed = fs.list("/").stream()
+                    .map(DirEntry::plainName)
+                    .collect(Collectors.toSet());
+            assertEquals(new HashSet<>(Arrays.asList("normal.txt")), listed);
+
+            for (String name : reserved) {
+                Path file = cipherDir.resolve(name);
+                assertThrows(IllegalArgumentException.class,
+                        () -> fs.readAll("/" + name), name);
+                assertThrows(IllegalArgumentException.class,
+                        () -> fs.write("/" + name, 0, new byte[]{2}), name);
+                assertThrows(IllegalArgumentException.class,
+                        () -> fs.delete("/" + name), name);
+                assertThrows(IllegalArgumentException.class,
+                        () -> fs.createFile("/" + name), name);
+                assertThrows(IllegalArgumentException.class,
+                        () -> fs.mkdir("/" + name), name);
+                assertArrayEquals(new byte[]{1}, Files.readAllBytes(file),
+                        "reserved file must not be overwritten: " + name);
+            }
+        }
+    }
+
+    @Test
     void resolveDoesNotFollowSymlinkOutOfRoot() throws IOException {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
