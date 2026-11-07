@@ -23,6 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -386,6 +387,29 @@ class FileManagerTest {
                 ByteBuffer buf = ByteBuffer.allocate(data.length);
                 assertEquals(data.length, r.read(buf));
                 assertArrayEquals(data, buf.array());
+            }
+        }
+    }
+
+    @Test
+    void readToWriteUpgradeKeepsCapturedReaderFileOpen() throws Exception {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.fileManager.createFile("/f.txt");
+        byte[] data = "hello".getBytes(StandardCharsets.UTF_8);
+        h.fileManager.write("/f.txt", 0, data);
+        String cipherPath = h.pathResolver.resolve("/f.txt").cipherPath;
+
+        try (SharedCipherFile reader = h.fileManager.openCipherFile("/f.txt", false)) {
+            SharedCipherFile.Entry entry =
+                    (SharedCipherFile.Entry) sharedFiles(h).get(cipherPath);
+            CipherFile old = entry.file;
+            assertNotNull(old);
+
+            try (SharedCipherFile writer = h.fileManager.openCipherFile("/f.txt", true)) {
+                assertNotSame(old, entry.file,
+                        "a read-to-write open must replace the read-only backing file");
+                assertEquals(data.length, old.plainSize(),
+                        "a reader that captured the old file must not see it closed");
             }
         }
     }

@@ -2,7 +2,9 @@ package de.sfuhrm.gocryptfs4j.core;
 
 import java.io.IOException;
 import java.nio.channels.ClosedChannelException;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Objects;
 
 import org.jspecify.annotations.Nullable;
@@ -42,6 +44,13 @@ public final class SharedCipherFile implements AutoCloseable {
 
         /** Whether {@link #file} is currently opened for writing. */
         boolean writable;
+
+        /**
+         * Read-only files replaced by a read-to-write upgrade. They stay open
+         * until the entry is fully released so a reader that already captured
+         * one cannot observe a closed channel.
+         */
+        final List<CipherFile> retired = new ArrayList<>();
 
         /**
          * The single shared block cache, created lazily by {@link #newChannel}.
@@ -311,12 +320,15 @@ public final class SharedCipherFile implements AutoCloseable {
      * @throws IOException on filesystem errors
      */
     static long effectiveSize(Entry entry) throws IOException {
-        long size = entry.file == null ? 0 : entry.file.plainSize();
-        BlockCache cache = entry.cache;
-        if (cache != null) {
-            size = Math.max(size, cache.writeBackSize());
+        synchronized (entry.lock) {
+            CipherFile file = entry.file;
+            long size = file == null ? 0 : file.plainSize();
+            BlockCache cache = entry.cache;
+            if (cache != null) {
+                size = Math.max(size, cache.writeBackSize());
+            }
+            return size;
         }
-        return size;
     }
 
     /**
@@ -433,6 +445,18 @@ public final class SharedCipherFile implements AutoCloseable {
                         }
                     }
                 }
+                for (CipherFile retired : entry.retired) {
+                    try {
+                        retired.close();
+                    } catch (IOException e) {
+                        if (failure == null) {
+                            failure = e;
+                        } else {
+                            failure.addSuppressed(e);
+                        }
+                    }
+                }
+                entry.retired.clear();
             } else if (failure != null) {
                 // Keep the dirty block so a later close or force on another
                 // still-open handle can retry the failed write.

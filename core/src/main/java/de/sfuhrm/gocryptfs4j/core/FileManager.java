@@ -252,12 +252,16 @@ final class FileManager {
             } else if (writable && !entry.writable) {
                 // A read-only shared file is already open (other read-only
                 // handles hold it). Upgrade to a writable channel; the old one
-                // never buffered a write, so it can be closed safely.
+                // never buffered a write, so it can be retired safely. Keep it
+                // open until the entry is fully released: a reader may already
+                // have captured it and would otherwise see a closed channel.
                 CipherFile upgraded = CipherFile.open(store.open(cipherFile, true), contentEnc, true);
                 CipherFile old = entry.file;
                 entry.file = upgraded;
                 entry.writable = true;
-                old.close();
+                if (old != null) {
+                    entry.retired.add(old);
+                }
             }
             entry.refs++;
         }
