@@ -1,6 +1,6 @@
 package de.sfuhrm.gocryptfs4j.nio;
 
-import de.sfuhrm.gocryptfs4j.core.DirEntry;
+import de.sfuhrm.gocryptfs4j.core.DirectorySnapshot;
 import de.sfuhrm.gocryptfs4j.core.GocryptFs;
 import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
 import de.sfuhrm.gocryptfs4j.store.memory.MapCipherStore;
@@ -17,7 +17,6 @@ import java.nio.file.PathMatcher;
 import java.nio.file.StandardWatchEventKinds;
 import java.nio.file.WatchEvent;
 import java.nio.file.WatchKey;
-import java.nio.file.attribute.FileTime;
 import java.nio.file.attribute.GroupPrincipal;
 import java.nio.file.attribute.UserPrincipal;
 import java.nio.file.attribute.UserPrincipalLookupService;
@@ -28,6 +27,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -205,12 +205,19 @@ class GocryptFsFeaturesTest {
     void watchServiceScanSurvivesRuntimeException() throws Exception {
         GocryptFs core = mock(GocryptFs.class);
         AtomicBoolean failing = new AtomicBoolean();
-        AtomicReference<List<DirEntry>> entries = new AtomicReference<>(Collections.emptyList());
-        when(core.list(anyString())).thenAnswer(inv -> {
+        DirectorySnapshot empty = mock(DirectorySnapshot.class);
+        DirectorySnapshot populated = mock(DirectorySnapshot.class);
+        DirectorySnapshot.Change created = mock(DirectorySnapshot.Change.class);
+        when(created.kind()).thenReturn(DirectorySnapshot.ChangeKind.CREATED);
+        when(created.plainName()).thenReturn("a.txt");
+        when(populated.changesSince(any(DirectorySnapshot.class)))
+                .thenReturn(Collections.singletonList(created));
+        AtomicReference<DirectorySnapshot> current = new AtomicReference<>(empty);
+        when(core.snapshotDirectory(anyString())).thenAnswer(inv -> {
             if (failing.get()) {
                 throw new RuntimeException("boom");
             }
-            return entries.get();
+            return current.get();
         });
 
         GocryptFsFileSystem fs = new GocryptFsFileSystem(
@@ -224,10 +231,7 @@ class GocryptFsFeaturesTest {
             assertDoesNotThrow(ws::scan, "scan must swallow a RuntimeException from a key");
 
             failing.set(false);
-            entries.set(Collections.singletonList(new DirEntry(
-                    "a.txt", null, null, DirEntry.Kind.FILE, 1,
-                    FileTime.fromMillis(0), FileTime.fromMillis(0),
-                    FileTime.fromMillis(0), null)));
+            current.set(populated);
             ws.scan();
 
             WatchKey key = ws.poll();
@@ -237,6 +241,66 @@ class GocryptFsFeaturesTest {
             ws.close();
         } finally {
             fs.close();
+        }
+    }
+
+    @Test
+    void watchServiceOverflowsLargeEventBatches() throws Exception {
+        try (FileSystem nio = open()) {
+            GocryptFsWatchService ws = new GocryptFsWatchService((GocryptFsFileSystem) nio, 60_000L);
+            Path root = nio.getPath("/");
+            WatchKey key = root.register(ws, StandardWatchEventKinds.ENTRY_CREATE);
+
+            for (int i = 0; i < 520; i++) {
+                Files.createFile(root.resolve("f" + i + ".txt"));
+            }
+            ws.scan();
+
+            WatchKey signalled = ws.poll(2, TimeUnit.SECONDS);
+            assertNotNull(signalled, "a large batch must still signal the key");
+            assertSame(key, signalled);
+            List<WatchEvent<?>> events = signalled.pollEvents();
+            assertEquals(1, events.size(), "the queue must be collapsed to a single event");
+            assertEquals(StandardWatchEventKinds.OVERFLOW, events.get(0).kind());
+            assertTrue(signalled.reset());
+
+            Files.createFile(root.resolve("after-overflow.txt"));
+            ws.scan();
+            WatchKey next = ws.poll(2, TimeUnit.SECONDS);
+            assertNotNull(next, "the service must remain usable after an overflow");
+            assertTrue(next.pollEvents().stream().anyMatch(
+                    e -> e.kind() == StandardWatchEventKinds.ENTRY_CREATE
+                            && "after-overflow.txt".equals(
+                                    ((Path) e.context()).getFileName().toString())));
+            ws.close();
+        }
+    }
+
+    @Test
+    void watchServiceReportsLongNameDeletion() throws Exception {
+        try (FileSystem nio = open()) {
+            GocryptFsWatchService ws = new GocryptFsWatchService((GocryptFsFileSystem) nio, 60_000L);
+            Path root = nio.getPath("/");
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < 200; i++) {
+                sb.append('a');
+            }
+            String longName = sb.toString();
+            Path longFile = root.resolve(longName);
+            Files.write(longFile, new byte[] {1});
+
+            WatchKey key = root.register(ws, StandardWatchEventKinds.ENTRY_DELETE);
+            Files.delete(longFile);
+            ws.scan();
+
+            WatchKey signalled = ws.poll(2, TimeUnit.SECONDS);
+            assertNotNull(signalled, "deleting a long-name entry must signal the key");
+            assertSame(key, signalled);
+            assertTrue(signalled.pollEvents().stream().anyMatch(
+                    e -> e.kind() == StandardWatchEventKinds.ENTRY_DELETE
+                            && longName.equals(
+                                    ((Path) e.context()).getFileName().toString())));
+            ws.close();
         }
     }
 

@@ -1617,6 +1617,35 @@ public final class GocryptFs implements AutoCloseable {
         }
     }
 
+    /**
+     * Captures a ciphertext-side snapshot of a plaintext directory for change
+     * detection.
+     *
+     * <p>Unlike {@link #list(String)}, this does not decrypt every entry name.
+     * It records the ciphertext names and metadata, and the returned snapshot's
+     * {@link DirectorySnapshot#changesSince(DirectorySnapshot)} decrypts only
+     * the names of entries that actually changed. This is intended for polling
+     * watchers, which can remain cheap on large, mostly unchanged
+     * directories.</p>
+     *
+     * @param plainDir the plaintext directory path
+     * @return the snapshot of the directory
+     * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code plainDir} is {@code null}
+     */
+    public DirectorySnapshot snapshotDirectory(String plainDir) throws IOException {
+        Objects.requireNonNull(plainDir, "plainDir");
+        Lock readLock = lock.readLock();
+        readLock.lock();
+        try {
+            ensureOpen();
+            PathResolver.Resolved r = pathResolver.resolve(plainDir);
+            return directoryManager.snapshotDirectory(r.cipherPath);
+        } finally {
+            readLock.unlock();
+        }
+    }
+
     // ------------------------------------------------------------------
     // Content access (delegated)
     // ------------------------------------------------------------------

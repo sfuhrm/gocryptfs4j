@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.NoSuchFileException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -333,6 +334,72 @@ final class DirectoryManager {
      */
     void clearDirIvCache() {
         dirIvCache.clear();
+    }
+
+    /**
+     * Captures the ciphertext listing of a directory without decrypting any
+     * entry name.
+     *
+     * <p>Long names are resolved to their full ciphertext name so that a later
+     * change can still be decrypted after the long-name support file is gone.
+     * Control files (the per-directory {@code gocryptfs.diriv} and the root's
+     * {@code gocryptfs.conf}) and long-name support files are excluded, just as
+     * in {@link #listCipherDir(String, byte[])}.</p>
+     *
+     * @param cipherDir the ciphertext directory name
+     * @return the snapshot of the directory
+     * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code cipherDir} is {@code null}
+     */
+    DirectorySnapshot snapshotDirectory(String cipherDir) throws IOException {
+        Objects.requireNonNull(cipherDir, "cipherDir");
+        Map<String, DirectorySnapshot.Entry> entries = new HashMap<>();
+        boolean isRoot = cipherDir.equals(rootName);
+        for (CipherNode node : store.list(cipherDir)) {
+            String storageName = node.name();
+            if (usesDirIV() && storageName.equals(Constants.DIR_IV_FILENAME)) {
+                continue;
+            }
+            if (isRoot && storageName.equals(Constants.CONF_DEFAULT_NAME)) {
+                continue;
+            }
+
+            String cipherName = storageName;
+            if (!plaintextNames) {
+                int type = nameManager.nameType(storageName);
+                if (type == NameTransform.LONG_NAME_FILENAME) {
+                    continue;
+                }
+                if (type == NameTransform.LONG_NAME_CONTENT) {
+                    try {
+                        cipherName = nameManager.resolveLongName(cipherDir, storageName);
+                    } catch (IOException e) {
+                        // Treat an unreadable long-name support file like the
+                        // listing does: skip the corrupt entry.
+                        continue;
+                    }
+                }
+            }
+            entries.put(storageName, new DirectorySnapshot.Entry(storageName, cipherName,
+                    node.kind(), node.size(), node.lastModifiedTime()));
+        }
+        return new DirectorySnapshot(this, cipherDir, entries);
+    }
+
+    /**
+     * Decrypts a single ciphertext name using the directory IV.
+     *
+     * @param cipherDir  the ciphertext directory name
+     * @param cipherName the ciphertext name
+     * @return the plaintext name
+     * @throws IOException on filesystem errors
+     * @throws IllegalArgumentException if the name cannot be decrypted
+     * @throws NullPointerException if an argument is {@code null}
+     */
+    String plainNameForCipher(String cipherDir, String cipherName) throws IOException {
+        Objects.requireNonNull(cipherDir, "cipherDir");
+        Objects.requireNonNull(cipherName, "cipherName");
+        return nameManager.plainNameFor(cipherName, readDirIV(cipherDir));
     }
 
     /**
