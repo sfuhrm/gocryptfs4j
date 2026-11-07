@@ -5,7 +5,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
@@ -54,7 +54,7 @@ final class ProcessCommandRunner implements Fido2CommandRunner {
     }
 
     @Override
-    public List<String> run(List<String> command, List<String> stdinLines) throws IOException {
+    public byte[] run(List<String> command, List<String> stdinLines) throws IOException {
         Process process;
         try {
             process = new ProcessBuilder(command).start();
@@ -87,27 +87,34 @@ final class ProcessCommandRunner implements Fido2CommandRunner {
                 terminate(process);
                 joinQuietly(stdoutThread);
                 joinQuietly(stderrThread);
+                stdout.wipe();
+                stderr.wipe();
                 throw new IOException(command.get(0) + " timed out after " + describeTimeout());
             }
 
             joinQuietly(stdoutThread);
             joinQuietly(stderrThread);
 
-            if (stdout.isTruncated()) {
-                throw new IOException(command.get(0) + " produced too much standard output");
-            }
-
-            int exitCode = process.exitValue();
-            if (exitCode != 0) {
-                String message = stderr.asString().trim();
-                if (stderr.isTruncated()) {
-                    message = message.isEmpty() ? "(truncated)" : message + " (truncated)";
+            try {
+                if (stdout.isTruncated()) {
+                    throw new IOException(command.get(0) + " produced too much standard output");
                 }
-                throw new IOException(command.get(0) + " exited with code " + exitCode
-                        + (message.isEmpty() ? "" : ": " + message));
-            }
 
-            return splitLines(stdout.asString());
+                int exitCode = process.exitValue();
+                if (exitCode != 0) {
+                    String message = stderr.asString().trim();
+                    if (stderr.isTruncated()) {
+                        message = message.isEmpty() ? "(truncated)" : message + " (truncated)";
+                    }
+                    throw new IOException(command.get(0) + " exited with code " + exitCode
+                            + (message.isEmpty() ? "" : ": " + message));
+                }
+
+                return stdout.toByteArray();
+            } finally {
+                stdout.wipe();
+                stderr.wipe();
+            }
         } finally {
             if (process.isAlive()) {
                 terminate(process);
@@ -160,18 +167,10 @@ final class ProcessCommandRunner implements Fido2CommandRunner {
         }
     }
 
-    private static List<String> splitLines(String stdout) {
-        List<String> lines = new ArrayList<>();
-        for (String line : stdout.split("\n", -1)) {
-            lines.add(line.trim());
-        }
-        return lines;
-    }
-
     /** Drains an input stream into memory, discarding bytes beyond the cap. */
     private static final class StreamCollector implements Runnable {
         private final InputStream in;
-        private final ByteArrayOutputStream out = new ByteArrayOutputStream();
+        private final WipeableByteArrayOutputStream out = new WipeableByteArrayOutputStream();
         private boolean truncated;
 
         StreamCollector(InputStream in) {
@@ -204,8 +203,24 @@ final class ProcessCommandRunner implements Fido2CommandRunner {
             return new String(out.toByteArray(), StandardCharsets.UTF_8);
         }
 
+        byte[] toByteArray() {
+            return out.toByteArray();
+        }
+
+        void wipe() {
+            out.wipe();
+        }
+
         boolean isTruncated() {
             return truncated;
+        }
+    }
+
+    /** A byte buffer whose contents can be overwritten once they are copied out. */
+    private static final class WipeableByteArrayOutputStream extends ByteArrayOutputStream {
+        void wipe() {
+            Arrays.fill(buf, (byte) 0);
+            reset();
         }
     }
 }

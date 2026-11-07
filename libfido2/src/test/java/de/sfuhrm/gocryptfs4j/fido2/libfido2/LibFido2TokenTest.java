@@ -4,6 +4,7 @@ import de.sfuhrm.gocryptfs4j.fido2.Fido2Token;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
@@ -114,16 +115,16 @@ class LibFido2TokenTest {
 
     private static final class RecordingRunner implements Fido2CommandRunner {
 
-        private final List<String> output;
+        private final byte[] output;
         private List<String> lastCommand;
         private List<String> lastStdin;
 
         RecordingRunner(List<String> output) {
-            this.output = output;
+            this.output = String.join("\n", output).getBytes(StandardCharsets.UTF_8);
         }
 
         @Override
-        public List<String> run(List<String> command, List<String> stdinLines) {
+        public byte[] run(List<String> command, List<String> stdinLines) {
             this.lastCommand = command;
             this.lastStdin = stdinLines;
             return output;

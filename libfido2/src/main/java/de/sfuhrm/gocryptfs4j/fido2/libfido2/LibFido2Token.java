@@ -121,8 +121,12 @@ public final class LibFido2Token implements Fido2Token {
                 RELYING_PARTY_ID,
                 userName,
                 base64(randomBytes(USER_ID_LEN)));
-        List<String> output = runner.run(command, input);
-        return decodeOutput(output, OUTPUT_SECRET_LINE, "credential id");
+        byte[] output = runner.run(command, input);
+        try {
+            return decodeOutput(output, OUTPUT_SECRET_LINE, "credential id");
+        } finally {
+            Arrays.fill(output, (byte) 0);
+        }
     }
 
     @Override
@@ -144,8 +148,13 @@ public final class LibFido2Token implements Fido2Token {
                 RELYING_PARTY_ID,
                 base64(credentialId),
                 base64(hmacSalt));
-        List<String> output = runner.run(command, input);
-        byte[] secret = decodeOutput(output, OUTPUT_SECRET_LINE, "hmac secret");
+        byte[] output = runner.run(command, input);
+        byte[] secret;
+        try {
+            secret = decodeOutput(output, OUTPUT_SECRET_LINE, "hmac secret");
+        } finally {
+            Arrays.fill(output, (byte) 0);
+        }
         if (secret.length < MIN_SECRET_LEN) {
             throw new IOException("FIDO2 HMAC secret too short ("
                     + secret.length + " bytes, want at least " + MIN_SECRET_LEN + ")");
@@ -156,14 +165,36 @@ public final class LibFido2Token implements Fido2Token {
         return secret;
     }
 
-    private static byte[] decodeOutput(List<String> output, int line, String what) throws IOException {
-        if (output.size() <= line) {
-            throw new IOException("unexpected FIDO2 tool output: missing " + what);
+    private static byte[] decodeOutput(byte[] output, int line, String what) throws IOException {
+        int start = 0;
+        int currentLine = 0;
+        for (int i = 0; i <= output.length; i++) {
+            if (i == output.length || output[i] == '\n') {
+                if (currentLine == line) {
+                    return decodeLine(output, start, i, what);
+                }
+                currentLine++;
+                start = i + 1;
+            }
         }
+        throw new IOException("unexpected FIDO2 tool output: missing " + what);
+    }
+
+    private static byte[] decodeLine(byte[] output, int start, int end, String what)
+            throws IOException {
+        while (start < end && output[start] <= ' ') {
+            start++;
+        }
+        while (end > start && output[end - 1] <= ' ') {
+            end--;
+        }
+        byte[] encoded = Arrays.copyOfRange(output, start, end);
         try {
-            return Base64.getDecoder().decode(output.get(line));
+            return Base64.getDecoder().decode(encoded);
         } catch (IllegalArgumentException e) {
             throw new IOException("invalid base64 in FIDO2 " + what, e);
+        } finally {
+            Arrays.fill(encoded, (byte) 0);
         }
     }
 

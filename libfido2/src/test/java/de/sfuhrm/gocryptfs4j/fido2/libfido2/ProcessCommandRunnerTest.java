@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -39,10 +40,11 @@ class ProcessCommandRunnerTest {
     void runsProcessAndParsesOutput() throws IOException {
         ProcessCommandRunner runner = new ProcessCommandRunner();
 
-        List<String> output = runner.run(fakeToolCommand(), Arrays.asList("one", "two"));
+        byte[] output = runner.run(fakeToolCommand(), Arrays.asList("one", "two"));
 
-        assertEquals(Arrays.asList("cdh", Fido2Token.RELYING_PARTY_ID, "auth-data", "sig",
-                Base64.getEncoder().encodeToString(SECRET), ""), output);
+        assertEquals("cdh\n" + Fido2Token.RELYING_PARTY_ID + "\nauth-data\nsig\n"
+                        + Base64.getEncoder().encodeToString(SECRET) + "\n",
+                new String(output, StandardCharsets.UTF_8));
     }
 
     @Test

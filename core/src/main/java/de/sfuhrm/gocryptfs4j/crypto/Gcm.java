@@ -24,14 +24,6 @@ public final class Gcm implements ContentCipher {
     /** A copy of the AES key, kept so it can be wiped. */
     private final byte[] key;
 
-    /**
-     * An immutable copy of the AES key. It is deliberately created in the
-     * constructor and never rebuilt from {@link #key}, so wiping the mutable
-     * copy can never turn an in-flight encryption into an all-zero-key
-     * encryption.
-     */
-    private final SecretKeySpec keySpec;
-
     /** Whether this cipher has been wiped. */
     private volatile boolean wiped;
 
@@ -71,7 +63,6 @@ public final class Gcm implements ContentCipher {
             throw new IllegalArgumentException("GCM key must be " + Constants.KEY_LEN + " bytes");
         }
         this.key = Arrays.copyOf(key, key.length);
-        this.keySpec = new SecretKeySpec(key, "AES");
     }
 
     /**
@@ -82,6 +73,14 @@ public final class Gcm implements ContentCipher {
      * just the calling thread's, are cleared; see {@link TrackedThreadLocal}.
      * Because the scratch is per instance, wiping this cipher never affects
      * another {@code Gcm} instance.</p>
+     *
+     * <p>The JCE provider owns the AES key schedule inside a {@link Cipher};
+     * neither that schedule nor the provider's internal copy of the key can be
+     * overwritten directly. Re-initialising each scratch cipher with a zero key
+     * replaces those schedules, which is the strongest clearing a JCE
+     * implementation exposes. The {@link SecretKeySpec} used for an operation
+     * is created from {@link #key} while the read lock is held, so this class
+     * retains no additional long-lived key copy.</p>
      */
     @Override
     public void wipe() {
@@ -151,6 +150,7 @@ public final class Gcm implements ContentCipher {
         readLock.lock();
         try {
             checkUsable();
+            SecretKeySpec keySpec = new SecretKeySpec(key, "AES");
             Cipher cipher = encryptCipher.get();
             cipher.init(Cipher.ENCRYPT_MODE, keySpec,
                     new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8, nonce));
@@ -187,6 +187,7 @@ public final class Gcm implements ContentCipher {
         readLock.lock();
         try {
             checkUsable();
+            SecretKeySpec keySpec = new SecretKeySpec(key, "AES");
             Cipher cipher = decryptCipher.get();
             cipher.init(Cipher.DECRYPT_MODE, keySpec,
                     new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8, nonce));
@@ -222,6 +223,7 @@ public final class Gcm implements ContentCipher {
         readLock.lock();
         try {
             checkUsable();
+            SecretKeySpec keySpec = new SecretKeySpec(key, "AES");
             Cipher cipher = encryptCipher.get();
             cipher.init(Cipher.ENCRYPT_MODE, keySpec,
                     new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8, nonce));
@@ -261,6 +263,7 @@ public final class Gcm implements ContentCipher {
         readLock.lock();
         try {
             checkUsable();
+            SecretKeySpec keySpec = new SecretKeySpec(key, "AES");
             Cipher cipher = decryptCipher.get();
             cipher.init(Cipher.DECRYPT_MODE, keySpec,
                     new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8, nonce));

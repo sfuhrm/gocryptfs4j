@@ -23,14 +23,6 @@ public final class XChaCha20Poly1305 implements ContentCipher {
     /** A copy of the 32-byte key, kept so it can be wiped. */
     private final byte[] key;
 
-    /**
-     * An immutable copy of the key. It is deliberately created in the
-     * constructor and never rebuilt from {@link #key}, so wiping the mutable
-     * copy can never turn an in-flight encryption into an all-zero-key
-     * encryption.
-     */
-    private final KeyParameter keyParam;
-
     /** Whether this cipher has been wiped. */
     private volatile boolean wiped;
 
@@ -59,7 +51,6 @@ public final class XChaCha20Poly1305 implements ContentCipher {
                     + Constants.KEY_LEN + " bytes");
         }
         this.key = Arrays.copyOf(key, key.length);
-        this.keyParam = new KeyParameter(key);
     }
 
     /**
@@ -70,6 +61,12 @@ public final class XChaCha20Poly1305 implements ContentCipher {
      * just the calling thread's, are cleared; see {@link TrackedThreadLocal}.
      * Because the scratch is per instance, wiping this cipher never affects
      * another {@code XChaCha20Poly1305} instance.</p>
+     *
+     * <p>The per-operation {@link KeyParameter} is created from {@link #key}
+     * while the read lock is held, so this class retains no additional
+     * long-lived key copy. Re-initialising the scratch ciphers with a zero key
+     * replaces the key material held inside BouncyCastle's cipher objects,
+     * which is the strongest clearing that API exposes.</p>
      */
     @Override
     public void wipe() {
@@ -137,6 +134,7 @@ public final class XChaCha20Poly1305 implements ContentCipher {
         try {
             checkUsable();
             checkNonce(nonce);
+            KeyParameter keyParam = new KeyParameter(key);
             AEADCipher cipher = encryptCipher.get();
             cipher.init(true, new AEADParameters(keyParam, Constants.AUTH_TAG_LEN * 8, nonce, aad));
             checkUsable();
@@ -175,6 +173,7 @@ public final class XChaCha20Poly1305 implements ContentCipher {
         try {
             checkUsable();
             checkNonce(nonce);
+            KeyParameter keyParam = new KeyParameter(key);
             AEADCipher cipher = decryptCipher.get();
             cipher.init(false, new AEADParameters(keyParam, Constants.AUTH_TAG_LEN * 8, nonce, aad));
             checkUsable();
@@ -216,6 +215,7 @@ public final class XChaCha20Poly1305 implements ContentCipher {
         try {
             checkUsable();
             checkNonce(nonce);
+            KeyParameter keyParam = new KeyParameter(key);
             AEADCipher cipher = encryptCipher.get();
             cipher.init(true, new AEADParameters(keyParam, Constants.AUTH_TAG_LEN * 8, nonce));
             checkUsable();
@@ -259,6 +259,7 @@ public final class XChaCha20Poly1305 implements ContentCipher {
         try {
             checkUsable();
             checkNonce(nonce);
+            KeyParameter keyParam = new KeyParameter(key);
             AEADCipher cipher = decryptCipher.get();
             cipher.init(false, new AEADParameters(keyParam, Constants.AUTH_TAG_LEN * 8, nonce));
             checkUsable();
