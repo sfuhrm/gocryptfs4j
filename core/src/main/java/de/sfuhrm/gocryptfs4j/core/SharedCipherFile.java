@@ -124,6 +124,10 @@ public final class SharedCipherFile implements AutoCloseable {
      * @throws ClosedChannelException if the handle is already closed
      */
     private CipherFile file() throws IOException {
+        IOException failure = entry.failure;
+        if (failure != null) {
+            throw failure;
+        }
         CipherFile file = entry.file;
         if (file == null) {
             throw new ClosedChannelException();
@@ -321,8 +325,14 @@ public final class SharedCipherFile implements AutoCloseable {
         Lock ioLock = acquireChannelIo();
         try {
             synchronized (entry.lock) {
-                flushEntry(entry);
-                file().force(metaData);
+                try {
+                    flushEntry(entry);
+                    file().force(metaData);
+                    entry.failure = null;
+                } catch (IOException e) {
+                    entry.failure = e;
+                    throw e;
+                }
             }
         } finally {
             releaseChannelIo(ioLock);
@@ -439,6 +449,10 @@ public final class SharedCipherFile implements AutoCloseable {
      */
     static long effectiveSize(Entry entry) throws IOException {
         synchronized (entry.lock) {
+            IOException failure = entry.failure;
+            if (failure != null) {
+                throw failure;
+            }
             CipherFile file = entry.file;
             long size = file == null ? 0 : file.plainSize();
             BlockCache cache = entry.cache;
@@ -493,6 +507,13 @@ public final class SharedCipherFile implements AutoCloseable {
                 entry.failure = e;
                 throw e;
             }
+        }
+        // A failed close may have discarded the dirty block already. There is
+        // nothing left to write, but the failure stays visible to later callers
+        // instead of silently looking like a successful flush.
+        IOException failure = entry.failure;
+        if (failure != null) {
+            throw failure;
         }
         return false;
     }
@@ -558,6 +579,19 @@ public final class SharedCipherFile implements AutoCloseable {
                     }
                 }
 
+                if (last && failure != null && !ioClosed
+                        && cache != null && file != null) {
+                    // The last flush may have failed transiently. Give it one
+                    // more chance before the dirty block is wiped and the file
+                    // is closed; otherwise the data is gone for good.
+                    try {
+                        wrote = flushEntry(entry);
+                        failure = null;
+                    } catch (IOException retryFailure) {
+                        failure.addSuppressed(retryFailure);
+                    }
+                }
+
                 if (last) {
                     if (cache != null) {
                         // No handle is left that could retry a failed flush, so
@@ -607,7 +641,11 @@ public final class SharedCipherFile implements AutoCloseable {
                 if (failure != null) {
                     entry.failure = failure;
                 }
-                releaseAction = last ? entry.releaseAction : null;
+                // Keep a failed entry registered even after its last handle is
+                // gone, so the next open on this path can report the lost write
+                // instead of silently starting over. A delete/recreate clears
+                // it through FileManager.
+                releaseAction = last && entry.failure == null ? entry.releaseAction : null;
             }
             // The registry callback must run outside this entry's monitor: it
             // takes the map's lock and then re-checks the entry under this lock.

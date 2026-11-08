@@ -46,6 +46,57 @@ class FlushFailureTest {
     }
 
     @Test
+    void lastCloseFailureStaysVisibleAcrossSizeStatAndReopen() throws Exception {
+        FailingWriteStore store = new FailingWriteStore();
+        ManagerHarness h = ManagerHarness.encrypted(store);
+        h.fileManager.createFile("/f.txt");
+
+        SharedCipherFile cf = h.fileManager.openCipherFile("/f.txt", true);
+        BlockBufferedChannel ch = cf.newChannel(0, true);
+        ch.write(ByteBuffer.wrap(new byte[100]));
+
+        store.failWrites = true;
+        assertThrows(IOException.class, ch::close);
+        assertThrows(IOException.class, cf::close);
+
+        store.failWrites = false;
+        assertThrows(IOException.class, () -> h.fileManager.size("/f.txt"),
+                "a later size must report the lost write");
+        assertThrows(IOException.class, () -> h.fileManager.stat("/f.txt"),
+                "a later stat must report the lost write");
+        assertThrows(IOException.class,
+                () -> h.fileManager.openCipherFile("/f.txt", false),
+                "a reopen must report the lost write");
+
+        // Deleting the damaged file is the explicit way to discard the sticky
+        // failure and start over.
+        h.fileManager.delete("/f.txt");
+        h.fileManager.createFile("/f.txt");
+        assertEquals(0, h.fileManager.readAll("/f.txt").length);
+    }
+
+    @Test
+    void transientLastCloseFailureIsRetriedBeforeWiping() throws Exception {
+        FailingWriteStore store = new FailingWriteStore();
+        ManagerHarness h = ManagerHarness.encrypted(store);
+        h.fileManager.createFile("/f.txt");
+
+        SharedCipherFile cf = h.fileManager.openCipherFile("/f.txt", true, SyncPolicy.NONE);
+        BlockBufferedChannel ch = cf.newChannel(0, true);
+        byte[] payload = new byte[100];
+        java.util.Arrays.fill(payload, (byte) 0x5a);
+        ch.write(ByteBuffer.wrap(payload));
+
+        store.failNextWriteOnly = true;
+        ch.close();
+        cf.close();
+
+        byte[] read = h.fileManager.readAll("/f.txt");
+        assertEquals(payload.length, read.length);
+        assertEquals(0x5a, read[0], "the retried write must be durable");
+    }
+
+    @Test
     void failedFlushKeepsBlockForAnotherOpenHandleToRetry() throws Exception {
         FailingWriteStore store = new FailingWriteStore();
         ManagerHarness h = ManagerHarness.encrypted(store);
@@ -122,6 +173,7 @@ class FlushFailureTest {
         private final CipherStore delegate = new MapCipherStore();
         private final List<FailingChannel> channels = new ArrayList<>();
         private boolean failWrites;
+        private boolean failNextWriteOnly;
 
         @Override
         public String root() {
@@ -217,6 +269,10 @@ class FlushFailureTest {
         public int write(ByteBuffer src) throws IOException {
             if (store.failWrites) {
                 throw new IOException("simulated write failure");
+            }
+            if (store.failNextWriteOnly) {
+                store.failNextWriteOnly = false;
+                throw new IOException("simulated transient write failure");
             }
             return delegate.write(src);
         }

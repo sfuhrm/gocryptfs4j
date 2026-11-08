@@ -266,10 +266,16 @@ final class FileManager {
             synchronized (entry.lock) {
                 entry.key = cipherFile;
                 try {
+                    IOException stickyFailure = entry.failure;
+                    if (stickyFailure != null) {
+                        // A previous flush failed and its dirty block may have
+                        // been discarded. Never let a reopen hide that loss.
+                        ioFailure[0] = stickyFailure;
+                        return entry;
+                    }
                     if (entry.file == null) {
                         entry.file = CipherFile.open(store.open(cipherFile, writable),
                                 contentEnc, writable);
-                        entry.failure = null;
                         entry.writable = writable;
                     } else if (writable && !entry.writable) {
                         // A read-only shared file is already open (other
@@ -292,11 +298,12 @@ final class FileManager {
                     return entry;
                 } catch (IOException e) {
                     ioFailure[0] = e;
-                    // Do not retain an entry that a failed open created.
-                    return entry.refs == 0 ? null : entry;
+                    // Do not retain an entry that a failed open created, but
+                    // never drop a sticky failure from an earlier close.
+                    return entry.refs == 0 && entry.failure == null ? null : entry;
                 } catch (RuntimeException e) {
                     runtimeFailure[0] = e;
-                    return entry.refs == 0 ? null : entry;
+                    return entry.refs == 0 && entry.failure == null ? null : entry;
                 }
             }
         });
@@ -398,7 +405,10 @@ final class FileManager {
                     return current;
                 }
                 synchronized (entry.lock) {
-                    if (entry.refs != 0) {
+                    if (entry.refs != 0 || entry.failure != null) {
+                        // A concurrent failed close may have marked the entry
+                        // after the release that scheduled this prune. Keep it
+                        // so the failure stays visible to the next open.
                         return current;
                     }
                     entry.key = null;
@@ -450,7 +460,7 @@ final class FileManager {
                 return null;
             }
             synchronized (entry.lock) {
-                if (entry.refs == 0) {
+                if (entry.refs == 0 && entry.failure == null) {
                     entry.key = null;
                     return null;
                 }
