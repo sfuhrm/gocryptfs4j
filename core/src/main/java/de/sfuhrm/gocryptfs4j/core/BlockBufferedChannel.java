@@ -5,6 +5,7 @@ import java.nio.ByteBuffer;
 import java.nio.channels.ClosedChannelException;
 import java.nio.channels.NonWritableChannelException;
 import java.nio.channels.SeekableByteChannel;
+import java.util.concurrent.locks.Lock;
 
 /**
  * A {@link SeekableByteChannel} over the plaintext of a single encrypted file,
@@ -101,13 +102,18 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
         if (dst.remaining() == 0) {
             return 0;
         }
-        long wanted = position / blockSize;
-        int off = (int) (position % blockSize);
-        int n = cache.read(wanted, off, dst);
-        if (n > 0) {
-            position += n;
+        Lock ioLock = file.acquireChannelIo();
+        try {
+            long wanted = position / blockSize;
+            int off = (int) (position % blockSize);
+            int n = cache.read(wanted, off, dst);
+            if (n > 0) {
+                position += n;
+            }
+            return n;
+        } finally {
+            SharedCipherFile.releaseChannelIo(ioLock);
         }
-        return n;
     }
 
     /**
@@ -131,15 +137,20 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
         if (src.remaining() == 0) {
             return 0;
         }
-        long wanted = position / blockSize;
-        int off = (int) (position % blockSize);
-        int len = Math.min(src.remaining(), blockSize - off);
-        int w = cache.write(wanted, off, len, src);
-        position += w;
-        if (syncPolicy == SyncPolicy.ALWAYS && cache.flush()) {
-            file.force(true);
+        Lock ioLock = file.acquireChannelIo();
+        try {
+            long wanted = position / blockSize;
+            int off = (int) (position % blockSize);
+            int len = Math.min(src.remaining(), blockSize - off);
+            int w = cache.write(wanted, off, len, src);
+            position += w;
+            if (syncPolicy == SyncPolicy.ALWAYS && cache.flush()) {
+                file.force(true);
+            }
+            return w;
+        } finally {
+            SharedCipherFile.releaseChannelIo(ioLock);
         }
-        return w;
     }
 
     /**
@@ -166,11 +177,16 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
         if (src.remaining() == 0) {
             return 0;
         }
-        synchronized (file.appendLock()) {
-            position(file.effectiveSize());
-            int n = write(src);
-            flush();
-            return n;
+        Lock ioLock = file.acquireChannelIo();
+        try {
+            synchronized (file.appendLock()) {
+                position(file.effectiveSize());
+                int n = write(src);
+                flush();
+                return n;
+            }
+        } finally {
+            SharedCipherFile.releaseChannelIo(ioLock);
         }
     }
 
@@ -210,7 +226,12 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
      */
     @Override
     public long size() throws IOException {
-        return file.effectiveSize();
+        Lock ioLock = file.acquireChannelIo();
+        try {
+            return file.effectiveSize();
+        } finally {
+            SharedCipherFile.releaseChannelIo(ioLock);
+        }
     }
 
     /**
@@ -233,13 +254,8 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
         if (size < 0) {
             throw new IllegalArgumentException("negative size");
         }
-        cache.flush();
-        long current = file.effectiveSize();
-        if (size < current) {
-            file.truncate(size);
-            if (syncPolicy == SyncPolicy.ALWAYS) {
-                file.force(true);
-            }
+        if (file.truncateIfSmaller(size) && syncPolicy == SyncPolicy.ALWAYS) {
+            file.force(true);
         }
         if (position > size) {
             position = size;
@@ -254,7 +270,6 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
      * @throws IOException on filesystem or encryption errors
      */
     public void force(boolean metaData) throws IOException {
-        cache.flush();
         file.force(metaData);
     }
 
@@ -275,7 +290,7 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
      * @throws IOException on filesystem or encryption errors
      */
     public void flush() throws IOException {
-        cache.flush();
+        file.flushChannels();
     }
 
     /**

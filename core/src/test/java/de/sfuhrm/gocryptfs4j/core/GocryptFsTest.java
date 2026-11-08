@@ -17,6 +17,7 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.nio.ByteBuffer;
+import java.nio.channels.ClosedChannelException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.FileAlreadyExistsException;
@@ -102,6 +103,35 @@ class GocryptFsTest {
         try (PathCipherStore store = new PathCipherStore(cipherDir);
              GocryptFs fs = GocryptFs.open(store, "pw".toCharArray())) {
             assertArrayEquals(data, fs.readAll("/f.txt"));
+        }
+    }
+
+    @Test
+    void closeFlushesAndThenRejectsWritesOnOpenChannels() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        byte[] data = "kept despite close".getBytes(StandardCharsets.UTF_8);
+
+        try (PathCipherStore store = new PathCipherStore(cipherDir)) {
+            GocryptFs fs = GocryptFs.create(store, "pw".toCharArray());
+            fs.createFile("/f.txt");
+            SharedCipherFile cf = fs.openCipherFile("/f.txt", true);
+            BlockBufferedChannel ch = cf.newChannel(0, true);
+            ch.write(ByteBuffer.wrap(data));
+
+            fs.close();
+
+            assertThrows(ClosedChannelException.class,
+                    () -> ch.write(ByteBuffer.wrap(new byte[]{1})));
+            assertThrows(ClosedChannelException.class, () -> cf.newChannel(0, true));
+            ch.close();
+            cf.close();
+        }
+
+        try (PathCipherStore store = new PathCipherStore(cipherDir);
+             GocryptFs fs = GocryptFs.open(store, "pw".toCharArray())) {
+            assertArrayEquals(data, fs.readAll("/f.txt"),
+                    "the pre-close write must be flushed before the keys are wiped");
         }
     }
 

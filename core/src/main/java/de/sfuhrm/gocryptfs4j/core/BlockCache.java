@@ -16,8 +16,9 @@ import java.util.Arrays;
  *
  * <p>The cache holds at most one block. Accessing a different block flushes the
  * current one (if it was modified) and loads the requested one. All access is
- * serialized on this object, so concurrent channels on the same file cannot
- * interleave load-patch-flush sequences.</p>
+ * serialized on the shared entry's monitor, together with truncation and
+ * growth of the file, so concurrent channels on the same file cannot interleave
+ * load-patch-flush sequences and a flush cannot be split from a size change.</p>
  */
 final class BlockCache {
 
@@ -77,15 +78,17 @@ final class BlockCache {
      * @return {@code true} if a modified block was written
      * @throws IOException on filesystem or encryption errors
      */
-    synchronized boolean flush() throws IOException {
-        boolean wrote = dirty;
-        if (dirty) {
-            file().writeBlock(blockNo, block, 0, blockLen);
+    boolean flush() throws IOException {
+        synchronized (entry.lock) {
+            boolean wrote = dirty;
+            if (dirty) {
+                file().writeBlock(blockNo, block, 0, blockLen);
+            }
+            blockNo = -1;
+            blockLen = 0;
+            dirty = false;
+            return wrote;
         }
-        blockNo = -1;
-        blockLen = 0;
-        dirty = false;
-        return wrote;
     }
 
     /**
@@ -94,8 +97,10 @@ final class BlockCache {
      *
      * @return the write-back size, or {@code -1}
      */
-    synchronized long writeBackSize() {
-        return dirty ? blockNo * blockSize() + blockLen : -1;
+    long writeBackSize() {
+        synchronized (entry.lock) {
+            return dirty ? blockNo * blockSize() + blockLen : -1;
+        }
     }
 
     /**
@@ -108,14 +113,16 @@ final class BlockCache {
      * @return the number of bytes read, or {@code -1} at the end of the file
      * @throws IOException on filesystem or decryption errors
      */
-    synchronized int read(long no, int off, ByteBuffer dst) throws IOException {
-        load(no);
-        if (off >= blockLen) {
-            return -1;
+    int read(long no, int off, ByteBuffer dst) throws IOException {
+        synchronized (entry.lock) {
+            load(no);
+            if (off >= blockLen) {
+                return -1;
+            }
+            int n = Math.min(dst.remaining(), blockLen - off);
+            dst.put(block, off, n);
+            return n;
         }
-        int n = Math.min(dst.remaining(), blockLen - off);
-        dst.put(block, off, n);
-        return n;
     }
 
     /**
@@ -130,39 +137,44 @@ final class BlockCache {
      * @return the number of bytes written
      * @throws IOException on filesystem or encryption errors
      */
-    synchronized int write(long no, int off, int len, ByteBuffer src) throws IOException {
-        if (blockNo != no) {
-            flush();
-            padFinalPartialBlock(no);
-            load(no);
-        } else if (!dirty) {
-            // The target block is already cached (e.g. a read at a hole
-            // position loaded it), but a write into it would still leave a
-            // hole after the final partial block. Pad that block here as well.
-            padFinalPartialBlock(no);
+    int write(long no, int off, int len, ByteBuffer src) throws IOException {
+        synchronized (entry.lock) {
+            if (blockNo != no) {
+                flush();
+                padFinalPartialBlock(no);
+                load(no);
+            } else if (!dirty) {
+                // The target block is already cached (e.g. a read at a hole
+                // position loaded it), but a write into it would still leave a
+                // hole after the final partial block. Pad that block here as
+                // well.
+                padFinalPartialBlock(no);
+            }
+            if (off > blockLen) {
+                // The write starts past the current valid data, leaving a hole
+                // inside the block. Zero it out instead of encrypting stale
+                // bytes left over from a previously cached block.
+                Arrays.fill(block, blockLen, off, (byte) 0);
+            }
+            src.get(block, off, len);
+            if (off + len > blockLen) {
+                blockLen = off + len;
+            }
+            dirty = true;
+            return len;
         }
-        if (off > blockLen) {
-            // The write starts past the current valid data, leaving a hole
-            // inside the block. Zero it out instead of encrypting stale bytes
-            // left over from a previously cached block.
-            Arrays.fill(block, blockLen, off, (byte) 0);
-        }
-        src.get(block, off, len);
-        if (off + len > blockLen) {
-            blockLen = off + len;
-        }
-        dirty = true;
-        return len;
     }
 
     /**
      * Wipes the plaintext buffer and invalidates the cache.
      */
-    synchronized void wipe() {
-        Arrays.fill(block, (byte) 0);
-        blockNo = -1;
-        blockLen = 0;
-        dirty = false;
+    void wipe() {
+        synchronized (entry.lock) {
+            Arrays.fill(block, (byte) 0);
+            blockNo = -1;
+            blockLen = 0;
+            dirty = false;
+        }
     }
 
     /**

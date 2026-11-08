@@ -32,6 +32,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.Lock;
 
 /**
  * Performs plaintext file operations (read, write, attributes, create, delete,
@@ -85,6 +86,13 @@ final class FileManager {
      * files does not accumulate idle entries.
      */
     private final Map<String, SharedCipherFile.Entry> sharedFiles = new ConcurrentHashMap<>();
+
+    /**
+     * Guards channel I/O against the owning filesystem closing. Every entry
+     * created here shares this guard so a close can exclude all channels at
+     * once while it flushes pending writes and then wipes the keys.
+     */
+    private final ChannelGuard channelGuard = new ChannelGuard();
 
     /** When buffered writes of new handles are flushed to storage. */
     private volatile SyncPolicy syncPolicy = SyncPolicy.ON_CLOSE;
@@ -252,6 +260,7 @@ final class FileManager {
             SharedCipherFile.Entry entry = existing;
             if (entry == null) {
                 entry = new SharedCipherFile.Entry();
+                entry.guard = channelGuard;
                 entry.releaseAction = this::pruneSharedFile;
             }
             synchronized (entry.lock) {
@@ -464,6 +473,21 @@ final class FileManager {
                 return entry;
             }
         });
+    }
+
+    /**
+     * Acquires exclusive access to every channel operation and rejects any
+     * operation that starts afterwards. The caller must keep the returned lock
+     * until it has flushed the shared files and wiped the keys, then release
+     * it.
+     *
+     * @return the held close lock
+     */
+    Lock lockChannelsForClose() {
+        Lock lock = channelGuard.writeLock();
+        lock.lock();
+        channelGuard.markClosed();
+        return lock;
     }
 
     /**

@@ -2340,11 +2340,12 @@ public final class GocryptFs implements AutoCloseable {
      * the master key and every key derived from it and, when this instance
      * created the store itself (via the URI-based factories), closing the store.
      *
-     * <p>Closing takes the write lock, so it waits for every operation that
-     * already holds the read or write lock; operations started after the close
-     * has begun fail with {@link IllegalStateException}. Closing is idempotent.
-     * A store supplied directly to {@code open}/{@code create} is owned by the
-     * caller and is left open.</p>
+     * <p>Closing takes the write lock and excludes every open channel
+     * operation, so it waits for every operation that already holds the read
+     * or write lock (including buffered channel I/O) before flushing and
+     * wiping; operations started after the close has begun fail. Closing is
+     * idempotent. A store supplied directly to {@code open}/{@code create} is
+     * owned by the caller and is left open.</p>
      *
      * @throws IOException if a pending write cannot be flushed or the store cannot be closed
      */
@@ -2358,39 +2359,48 @@ public final class GocryptFs implements AutoCloseable {
             }
             closed = true;
             IOException failure = null;
+            // Exclude every open channel operation, reject new ones, and keep
+            // that exclusion across both the flush and the key wipe. Otherwise
+            // a channel write could land after flushSharedFiles() but before
+            // wipeSecrets() and be lost or fail against wiped keys.
+            Lock channelLock = fileManager.lockChannelsForClose();
             try {
-                // Flush before the keys are wiped so buffered plaintext can
-                // still be encrypted; every entry is flushed, with failures
-                // collected.
-                fileManager.flushSharedFiles();
-            } catch (IOException e) {
-                failure = e;
-            }
-            try {
-                wipeSecrets();
+                try {
+                    // Flush before the keys are wiped so buffered plaintext
+                    // can still be encrypted; every entry is flushed, with
+                    // failures collected.
+                    fileManager.flushSharedFiles();
+                } catch (IOException e) {
+                    failure = e;
+                }
+                try {
+                    wipeSecrets();
+                } finally {
+                    if (rootLock != null) {
+                        try {
+                            rootLock.close();
+                        } catch (IOException e) {
+                            if (failure == null) {
+                                failure = e;
+                            } else {
+                                failure.addSuppressed(e);
+                            }
+                        }
+                    }
+                    if (ownsStore) {
+                        try {
+                            store.close();
+                        } catch (IOException e) {
+                            if (failure == null) {
+                                failure = e;
+                            } else {
+                                failure.addSuppressed(e);
+                            }
+                        }
+                    }
+                }
             } finally {
-                if (rootLock != null) {
-                    try {
-                        rootLock.close();
-                    } catch (IOException e) {
-                        if (failure == null) {
-                            failure = e;
-                        } else {
-                            failure.addSuppressed(e);
-                        }
-                    }
-                }
-                if (ownsStore) {
-                    try {
-                        store.close();
-                    } catch (IOException e) {
-                        if (failure == null) {
-                            failure = e;
-                        } else {
-                            failure.addSuppressed(e);
-                        }
-                    }
-                }
+                channelLock.unlock();
             }
             if (failure != null) {
                 throw failure;
