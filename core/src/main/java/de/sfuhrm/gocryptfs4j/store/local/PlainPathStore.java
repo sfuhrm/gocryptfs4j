@@ -290,18 +290,41 @@ final class PlainPathStore implements CipherStore {
     }
 
     /**
-     * Best-effort fsync of a directory so that a rename into it becomes durable
-     * across power loss. Not all filesystems permit opening a directory; on such
-     * filesystems the move is still atomic, just not forced to stable storage.
+     * Best-effort fsync of a directory so that an entry created, deleted or
+     * renamed within it becomes durable across power loss. Not all filesystems
+     * permit opening a directory; on such filesystems the operation is still
+     * atomic, just not forced to stable storage.
      *
-     * @param dir the directory to fsync
+     * @param dir the directory to fsync, or {@code null} to do nothing
      */
-    private static void fsyncDirectory(Path dir) {
+    static void fsyncDirectory(@Nullable Path dir) {
+        if (dir == null) {
+            return;
+        }
         try (FileChannel channel = FileChannel.open(dir, StandardOpenOption.READ)) {
             channel.force(true);
         } catch (IOException | UnsupportedOperationException e) {
             // Non-POSIX or read-only filesystems cannot open a directory as a
             // channel; ignore, the atomic move still holds.
+        }
+    }
+
+    /**
+     * Best-effort fsync of the parent directories affected by a rename: the
+     * source directory loses an entry and the target directory gains one. When
+     * both are the same directory it is forced only once.
+     *
+     * @param src the source path of the rename
+     * @param dst the target path of the rename
+     */
+    private static void fsyncRenameParents(Path src, Path dst) {
+        Path srcDir = src.getParent();
+        Path dstDir = dst.getParent();
+        if (srcDir == null || srcDir.equals(dstDir)) {
+            fsyncDirectory(dstDir);
+        } else {
+            fsyncDirectory(srcDir);
+            fsyncDirectory(dstDir);
         }
     }
 
@@ -374,19 +397,25 @@ final class PlainPathStore implements CipherStore {
     @Override
     public void createFile(String name) throws IOException {
         Objects.requireNonNull(name, "name");
-        Files.createFile(resolve(name));
+        Path p = resolve(name);
+        Files.createFile(p);
+        fsyncDirectory(p.getParent());
     }
 
     @Override
     public void mkdir(String name) throws IOException {
         Objects.requireNonNull(name, "name");
-        Files.createDirectory(resolve(name));
+        Path p = resolve(name);
+        Files.createDirectory(p);
+        fsyncDirectory(p.getParent());
     }
 
     @Override
     public void delete(String name) throws IOException {
         Objects.requireNonNull(name, "name");
-        Files.delete(resolve(name));
+        Path p = resolve(name);
+        Files.delete(p);
+        fsyncDirectory(p.getParent());
     }
 
     @Override
@@ -410,13 +439,18 @@ final class PlainPathStore implements CipherStore {
         } else {
             Files.move(src, dst);
         }
+        // The rename is only durable once both directories that gained or lost
+        // an entry are forced to stable storage.
+        fsyncRenameParents(src, dst);
     }
 
     @Override
     public void createSymlink(String name, String target) throws IOException {
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(target, "target");
-        Files.createSymbolicLink(resolve(name), Paths.get(target));
+        Path p = resolve(name);
+        Files.createSymbolicLink(p, Paths.get(target));
+        fsyncDirectory(p.getParent());
     }
 
     @Override

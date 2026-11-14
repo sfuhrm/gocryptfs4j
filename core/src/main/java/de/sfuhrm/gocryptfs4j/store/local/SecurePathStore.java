@@ -147,6 +147,7 @@ final class SecurePathStore implements CipherStore {
         try (SecurePath parent = requireParent(name)) {
             writeSecure(parent, data, null);
         }
+        fsyncParent(name);
     }
 
     @Override
@@ -163,6 +164,7 @@ final class SecurePathStore implements CipherStore {
             try (SecurePath parent = requireParent(name)) {
                 writeSecure(parent, data, PosixFilePermissions.fromString("r--------"));
             }
+            fsyncParent(name);
             return;
         }
         // Create-new semantics cannot be expressed with SecureDirectoryStream
@@ -292,6 +294,7 @@ final class SecurePathStore implements CipherStore {
                      WRITE_CREATE_NEW)) {
             // Creating the channel creates the empty file.
         }
+        fsyncParent(name);
     }
 
     @Override
@@ -319,6 +322,7 @@ final class SecurePathStore implements CipherStore {
                 parent.dir().deleteFile(parent.name());
             }
         }
+        fsyncParent(name);
     }
 
     @Override
@@ -344,6 +348,7 @@ final class SecurePathStore implements CipherStore {
              SecurePath dst = requireParent(to)) {
             src.dir().move(src.name(), dst.dir(), dst.name());
         }
+        fsyncRenameParents(from, to);
     }
 
     @Override
@@ -588,6 +593,64 @@ final class SecurePathStore implements CipherStore {
             throw new IOException("no parent directory for " + name);
         }
         return parent;
+    }
+
+    /**
+     * Returns the absolute parent directory path of a ciphertext name, so it can
+     * be forced to stable storage after an entry is created, deleted or renamed.
+     * The name has already been resolved through the secure traversal, so this is
+     * only used for a best-effort durability fsync, not for addressing the entry.
+     *
+     * @param name the ciphertext name
+     * @return the parent directory path, or the root for a top-level entry
+     */
+    private Path parentPath(String name) {
+        Path p = root.getFileSystem().getPath(name);
+        if (!p.isAbsolute()) {
+            p = root.resolve(p);
+        }
+        Path parent = p.normalize().getParent();
+        return parent == null ? root : parent;
+    }
+
+    /**
+     * Best-effort fsync of the parent directory of {@code name} so an entry
+     * created or deleted within it becomes durable across power loss. Failures
+     * are ignored: the entry operation itself already succeeded and the fsync is
+     * only a durability improvement.
+     *
+     * @param name the ciphertext name whose parent is to be forced
+     */
+    private void fsyncParent(String name) {
+        try {
+            PlainPathStore.fsyncDirectory(parentPath(name));
+        } catch (RuntimeException e) {
+            // A malformed path cannot be fsynced; the operation already
+            // succeeded, so nothing further can be done.
+        }
+    }
+
+    /**
+     * Best-effort fsync of the two parent directories affected by a rename: the
+     * source directory loses an entry and the target directory gains one. When
+     * both are the same directory it is forced only once.
+     *
+     * @param from the source ciphertext name
+     * @param to   the target ciphertext name
+     */
+    private void fsyncRenameParents(String from, String to) {
+        try {
+            Path srcDir = parentPath(from);
+            Path dstDir = parentPath(to);
+            if (srcDir.equals(dstDir)) {
+                PlainPathStore.fsyncDirectory(dstDir);
+            } else {
+                PlainPathStore.fsyncDirectory(srcDir);
+                PlainPathStore.fsyncDirectory(dstDir);
+            }
+        } catch (RuntimeException e) {
+            // Best effort: the rename already succeeded.
+        }
     }
 
     /**

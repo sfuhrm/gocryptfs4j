@@ -50,6 +50,9 @@ public final class CipherFile implements AutoCloseable {
     /** Whether the file id has been loaded from the header. */
     private boolean fileIdLoaded;
 
+    /** Whether the file has been modified since the last {@link #force(boolean)}. */
+    private boolean dirty;
+
     /**
      * Creates an instance over an open channel.
      *
@@ -268,6 +271,7 @@ public final class CipherFile implements AutoCloseable {
             // of 0 even though the file still has a partial header, and this
             // must truncate the channel so the file is actually repaired.
             channel.truncate(0);
+            dirty = true;
             fileId = null;
             // Do not cache an empty file: another handle or process may write
             // a new header later, and reads must observe it.
@@ -289,6 +293,7 @@ public final class CipherFile implements AutoCloseable {
             // The new size ends on a block boundary, so no block has to be
             // re-encrypted. Just drop the blocks that no longer belong to it.
             channel.truncate(enc.blockNoToCipherOff(blockNo + 1));
+            dirty = true;
             return;
         }
         int len = readBlock(blockNo, blockPlain, 0);
@@ -305,6 +310,7 @@ public final class CipherFile implements AutoCloseable {
         long blockCipherOff = enc.blockNoToCipherOff(blockNo);
         writeCipherRange(blockCipherOff, cipherBlock);
         channel.truncate(blockCipherOff + cipherBlock.length);
+        dirty = true;
     }
 
     /**
@@ -315,24 +321,30 @@ public final class CipherFile implements AutoCloseable {
      */
     public synchronized void force(boolean metaData) throws IOException {
         channel.force(metaData);
+        dirty = false;
     }
 
     /**
      * Closes the underlying channel, first forcing any pending content updates
-     * to stable storage if the file was opened for writing, and wipes this
-     * file's own content-encryption key material and the scratch buffers, which
-     * may hold plaintext or ciphertext of the last operation. Calling this
-     * method more than once has no effect.
+     * to stable storage if the file was opened for writing and has been
+     * modified since the last force, and wipes this file's own
+     * content-encryption key material and the scratch buffers, which may hold
+     * plaintext or ciphertext of the last operation. Calling this method more
+     * than once has no effect.
      *
      * @throws IOException on filesystem errors
      */
     @Override
     public synchronized void close() throws IOException {
         try {
-            // fsync writable files so a power loss after close() cannot lose
-            // the just-written content. Read-only files have nothing to force.
-            if (writable && channel.isOpen()) {
+            // fsync writable files only when a write since the last force would
+            // otherwise be lost by a power loss after close(). Read-only files,
+            // and files whose updates were already forced, have nothing to
+            // force, so the caller does not pay a redundant fsync on every
+            // close.
+            if (dirty && writable && channel.isOpen()) {
                 channel.force(true);
+                dirty = false;
             }
         } finally {
             try {
@@ -480,6 +492,7 @@ public final class CipherFile implements AutoCloseable {
         while (bb.hasRemaining()) {
             channel.write(bb);
         }
+        dirty = true;
     }
 
     /**

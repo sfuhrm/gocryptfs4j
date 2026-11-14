@@ -119,11 +119,54 @@ class CipherFileMockTest {
     }
 
     @Test
-    void closeForcesWritableChannelBeforeClosing() throws Exception {
+    void closeForcesWritableChannelAfterWrite() throws Exception {
+        CipherChannel channel = mock(CipherChannel.class);
+        when(channel.size()).thenReturn(0L);
+        when(channel.isOpen()).thenReturn(true);
+        when(channel.position(anyLong())).thenAnswer(inv -> channel);
+        when(channel.write(any(ByteBuffer.class))).thenAnswer(inv -> {
+            ByteBuffer bb = inv.getArgument(0);
+            int n = bb.remaining();
+            bb.position(bb.position() + n);
+            return n;
+        });
+        CipherFile cf = CipherFile.open(channel, enc(), true);
+
+        cf.writeBlock(0, new byte[10], 0, 10);
+        cf.close();
+
+        verify(channel).force(true);
+        verify(channel).close();
+    }
+
+    @Test
+    void closeWithoutWriteDoesNotForce() throws Exception {
         CipherChannel channel = mock(CipherChannel.class);
         when(channel.isOpen()).thenReturn(true);
         CipherFile cf = CipherFile.open(channel, enc(), true);
 
+        cf.close();
+
+        verify(channel, never()).force(anyBoolean());
+        verify(channel).close();
+    }
+
+    @Test
+    void closeAfterForceDoesNotForceAgain() throws Exception {
+        CipherChannel channel = mock(CipherChannel.class);
+        when(channel.size()).thenReturn(0L);
+        when(channel.isOpen()).thenReturn(true);
+        when(channel.position(anyLong())).thenAnswer(inv -> channel);
+        when(channel.write(any(ByteBuffer.class))).thenAnswer(inv -> {
+            ByteBuffer bb = inv.getArgument(0);
+            int n = bb.remaining();
+            bb.position(bb.position() + n);
+            return n;
+        });
+        CipherFile cf = CipherFile.open(channel, enc(), true);
+
+        cf.writeBlock(0, new byte[10], 0, 10);
+        cf.force(true);
         cf.close();
 
         verify(channel).force(true);
