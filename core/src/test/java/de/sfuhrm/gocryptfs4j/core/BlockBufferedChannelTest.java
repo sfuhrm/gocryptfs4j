@@ -293,14 +293,16 @@ class BlockBufferedChannelTest {
 
     @Test
     void streamingWriteAcrossBlocks() throws IOException {
-        ContentEnc enc = enc();
+        byte[] key = Keys.randomBytes(Constants.KEY_LEN);
+        ContentEnc enc = new ContentEnc(key, Constants.DEFAULT_IV_BITS / 8);
         byte[] data = new byte[(int) (enc.plainBS * 2 + 1000)];
         for (int i = 0; i < data.length; i++) {
             data[i] = (byte) (i * 7);
         }
 
         Path p = newFile();
-        try (BlockBufferedChannel ch = openChannel(p, enc, true)) {
+        try (BlockBufferedChannel ch = openChannel(p,
+                new ContentEnc(key, Constants.DEFAULT_IV_BITS / 8), true)) {
             int pos = 0;
             while (pos < data.length) {
                 int chunk = Math.min(777, data.length - pos);
@@ -313,7 +315,8 @@ class BlockBufferedChannelTest {
             }
         }
 
-        try (BlockBufferedChannel ch = openChannel(p, enc, false)) {
+        try (BlockBufferedChannel ch = openChannel(p,
+                new ContentEnc(key, Constants.DEFAULT_IV_BITS / 8), false)) {
             assertArrayEquals(data, readAll(ch));
         }
     }

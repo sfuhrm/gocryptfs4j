@@ -31,6 +31,9 @@ public final class ContentEnc {
     /** The authenticated-encryption cipher. */
     private final ContentCipher cipher;
 
+    /** The keyless block geometry (sizes and offset/size translations). */
+    private final ContentGeometry geometry;
+
     /** A thread-local scratch buffer for the additional authenticated data. */
     private final TrackedThreadLocal<byte[]> aadBuffer;
 
@@ -86,11 +89,21 @@ public final class ContentEnc {
         if (plainBS <= 0) {
             throw new IllegalArgumentException("plainBS must be positive: " + plainBS);
         }
-        this.ivLen = ivLen;
-        this.plainBS = plainBS;
-        this.cipherBS = plainBS + ivLen + Constants.AUTH_TAG_LEN;
+        this.geometry = new ContentGeometry(ivLen, plainBS);
+        this.ivLen = geometry.ivLen;
+        this.plainBS = geometry.plainBS;
+        this.cipherBS = geometry.cipherBS;
         this.aadBuffer = new TrackedThreadLocal<>(() -> new byte[8 + Constants.HEADER_ID_LEN]);
         this.nonceBuffer = new TrackedThreadLocal<>(() -> new byte[ivLen]);
+    }
+
+    /**
+     * Returns the keyless block geometry used for size and offset translation.
+     *
+     * @return the content geometry
+     */
+    public ContentGeometry geometry() {
+        return geometry;
     }
 
     /**
@@ -99,7 +112,7 @@ public final class ContentEnc {
      * @return the ciphertext minus plaintext block size
      */
     public long blockOverhead() {
-        return cipherBS - plainBS;
+        return geometry.blockOverhead();
     }
 
     /**
@@ -413,7 +426,7 @@ public final class ContentEnc {
      * @return the block number
      */
     public long plainOffToBlockNo(long plainOffset) {
-        return plainOffset / plainBS;
+        return geometry.plainOffToBlockNo(plainOffset);
     }
 
     /**
@@ -424,10 +437,7 @@ public final class ContentEnc {
      * @throws IllegalArgumentException if the offset lies inside the file header
      */
     public long cipherOffToBlockNo(long cipherOffset) {
-        if (cipherOffset < Constants.HEADER_LEN) {
-            throw new IllegalArgumentException("offset inside file header");
-        }
-        return (cipherOffset - Constants.HEADER_LEN) / cipherBS;
+        return geometry.cipherOffToBlockNo(cipherOffset);
     }
 
     /**
@@ -437,7 +447,7 @@ public final class ContentEnc {
      * @return the ciphertext offset in bytes
      */
     public long blockNoToCipherOff(long blockNo) {
-        return Constants.HEADER_LEN + blockNo * cipherBS;
+        return geometry.blockNoToCipherOff(blockNo);
     }
 
     /**
@@ -447,7 +457,7 @@ public final class ContentEnc {
      * @return the plaintext offset in bytes
      */
     public long blockNoToPlainOff(long blockNo) {
-        return blockNo * plainBS;
+        return geometry.blockNoToPlainOff(blockNo);
     }
 
     /**
@@ -457,26 +467,7 @@ public final class ContentEnc {
      * @return the plaintext size in bytes
      */
     public long cipherSizeToPlainSize(long cipherSize) {
-        if (cipherSize == 0) {
-            return 0;
-        }
-        if (cipherSize == Constants.HEADER_LEN) {
-            return 0;
-        }
-        if (cipherSize < Constants.HEADER_LEN) {
-            return 0;
-        }
-        long lastBlockSize = (cipherSize - Constants.HEADER_LEN) % cipherBS;
-        if (lastBlockSize > 0 && lastBlockSize <= blockOverhead()) {
-            cipherSize = cipherSize - lastBlockSize + blockOverhead() + 1;
-        }
-        long blockNo = cipherOffToBlockNo(cipherSize - 1);
-        long blockCount = blockNo + 1;
-        long overhead = blockOverhead() * blockCount + Constants.HEADER_LEN;
-        if (overhead > cipherSize) {
-            return 0;
-        }
-        return cipherSize - overhead;
+        return geometry.cipherSizeToPlainSize(cipherSize);
     }
 
     /**
@@ -486,10 +477,7 @@ public final class ContentEnc {
      * @return the ciphertext size in bytes
      */
     public long plainSizeToCipherSize(long plainSize) {
-        if (plainSize == 0) {
-            return 0;
-        }
-        return plainOffToCipherOff(plainSize - 1) + 1;
+        return geometry.plainSizeToCipherSize(plainSize);
     }
 
     /**
@@ -500,7 +488,6 @@ public final class ContentEnc {
      * @return the highest ciphertext offset in bytes
      */
     public long plainOffToCipherOff(long plainOff) {
-        long startOfBlock = blockNoToCipherOff(plainOffToBlockNo(plainOff));
-        return startOfBlock + plainOff % plainBS + blockOverhead();
+        return geometry.plainOffToCipherOff(plainOff);
     }
 }

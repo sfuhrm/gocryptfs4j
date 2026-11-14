@@ -2,6 +2,7 @@ package de.sfuhrm.gocryptfs4j.core;
 
 import de.sfuhrm.gocryptfs4j.crypto.Constants;
 import de.sfuhrm.gocryptfs4j.crypto.ContentEnc;
+import de.sfuhrm.gocryptfs4j.crypto.ContentGeometry;
 import de.sfuhrm.gocryptfs4j.crypto.Keys;
 import de.sfuhrm.gocryptfs4j.names.NameTransform;
 import de.sfuhrm.gocryptfs4j.store.CipherNode;
@@ -19,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 
 /**
  * Manages per-directory IVs and the listing of ciphertext directories.
@@ -51,8 +53,11 @@ final class DirectoryManager {
     /** The name-transform helper. */
     private final NameTransform nameTransform;
 
-    /** The content-encryption helper. */
-    private final ContentEnc contentEnc;
+    /** The content-encryption block geometry. */
+    private final ContentGeometry contentGeometry;
+
+    /** Mints a fresh keyed content-encryption helper for transient use. */
+    private final Supplier<ContentEnc> contentEncFactory;
 
     /** The name manager. */
     private final NameManager nameManager;
@@ -87,15 +92,17 @@ final class DirectoryManager {
      * @param plaintextNames     whether file names are stored unencrypted
      * @param deterministicNames whether deterministic name encryption is used
      * @param nameTransform      the name-transform helper
-     * @param contentEnc         the content-encryption helper
+     * @param contentGeometry    the content block geometry
+     * @param contentEncFactory  mints a fresh content-encryption helper for transient use
      * @param nameManager        the name manager
      * @throws NullPointerException if a required argument is {@code null}
      */
     DirectoryManager(CipherStore store, String rootName, boolean plaintextNames,
                      boolean deterministicNames, NameTransform nameTransform,
-                     ContentEnc contentEnc, NameManager nameManager) {
+                     ContentGeometry contentGeometry, Supplier<ContentEnc> contentEncFactory,
+                     NameManager nameManager) {
         this(store, rootName, plaintextNames, deterministicNames, nameTransform,
-                contentEnc, nameManager, false);
+                contentGeometry, contentEncFactory, nameManager, false);
     }
 
     /**
@@ -106,20 +113,23 @@ final class DirectoryManager {
      * @param plaintextNames     whether file names are stored unencrypted
      * @param deterministicNames whether deterministic name encryption is used
      * @param nameTransform      the name-transform helper
-     * @param contentEnc         the content-encryption helper
+     * @param contentGeometry    the content block geometry
+     * @param contentEncFactory  mints a fresh content-encryption helper for transient use
      * @param nameManager        the name manager
      * @param readOnly           whether the filesystem is read-only
      * @throws NullPointerException if a required argument is {@code null}
      */
     DirectoryManager(CipherStore store, String rootName, boolean plaintextNames,
                      boolean deterministicNames, NameTransform nameTransform,
-                     ContentEnc contentEnc, NameManager nameManager, boolean readOnly) {
+                     ContentGeometry contentGeometry, Supplier<ContentEnc> contentEncFactory,
+                     NameManager nameManager, boolean readOnly) {
         this.store = Objects.requireNonNull(store, "store");
         this.rootName = Objects.requireNonNull(rootName, "rootName");
         this.plaintextNames = plaintextNames;
         this.deterministicNames = deterministicNames;
         this.nameTransform = Objects.requireNonNull(nameTransform, "nameTransform");
-        this.contentEnc = Objects.requireNonNull(contentEnc, "contentEnc");
+        this.contentGeometry = Objects.requireNonNull(contentGeometry, "contentGeometry");
+        this.contentEncFactory = Objects.requireNonNull(contentEncFactory, "contentEncFactory");
         this.nameManager = Objects.requireNonNull(nameManager, "nameManager");
         this.cacheDirIVs = !readOnly;
     }
@@ -628,9 +638,10 @@ final class DirectoryManager {
             } else if (node.isSymbolicLink()) {
                 kind = DirEntry.Kind.SYMLINK;
                 String target;
+                ContentEnc transientEnc = contentEncFactory.get();
                 try {
                     target = FileManager.readSymlink(PathResolver.join(cipherDir, cName),
-                            store, contentEnc, nameTransform, plaintextNames);
+                            store, transientEnc, nameTransform, plaintextNames);
                 } catch (IOException | IllegalArgumentException e) {
                     // A corrupt (undecodable or undecryptable) symlink target
                     // is treated like a corrupt name: skip it.
@@ -639,6 +650,8 @@ final class DirectoryManager {
                                     ? (IOException) e
                                     : new IOException("corrupt symlink target", e));
                     continue;
+                } finally {
+                    transientEnc.wipe();
                 }
                 size = target.getBytes(StandardCharsets.UTF_8).length;
             } else if (node.isRegularFile()) {
@@ -647,7 +660,7 @@ final class DirectoryManager {
                     size = fileManager.plainSizeIncludingWriteBack(
                             PathResolver.join(cipherDir, cName), node.size());
                 } else {
-                    size = contentEnc.cipherSizeToPlainSize(node.size());
+                    size = contentGeometry.cipherSizeToPlainSize(node.size());
                 }
             } else {
                 kind = DirEntry.Kind.OTHER;

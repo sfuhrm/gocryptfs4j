@@ -69,6 +69,41 @@ class CipherFileTest {
     }
 
     @Test
+    void closingFileWipesItsContentKey() throws IOException {
+        ContentEnc enc = enc();
+        try (CipherFile cf = open(newFile(), enc, true)) {
+            cf.writeBlock(0, new byte[10], 0, 10);
+        }
+        assertThrows(IllegalStateException.class,
+                () -> enc.encryptBlock(new byte[10], 0, null));
+    }
+
+    @Test
+    void closingOneFileKeepsOtherOpenFileUsable() throws IOException {
+        byte[] key = Keys.randomBytes(Constants.KEY_LEN);
+        byte[] data = new byte[100];
+        Arrays.fill(data, (byte) 0x33);
+
+        Path a = tmp.resolve("a.bin");
+        Files.createFile(a);
+        Path b = tmp.resolve("b.bin");
+        Files.createFile(b);
+
+        CipherFile first = open(a, new ContentEnc(key, Constants.DEFAULT_IV_BITS / 8), true);
+        CipherFile second = open(b, new ContentEnc(key, Constants.DEFAULT_IV_BITS / 8), true);
+        try {
+            first.writeBlock(0, data, 0, data.length);
+            first.close();
+            second.writeBlock(0, data, 0, data.length);
+            byte[] out = new byte[data.length];
+            assertEquals(data.length, second.readBlock(0, out, 0));
+            assertArrayEquals(data, out);
+        } finally {
+            second.close();
+        }
+    }
+
+    @Test
     void writeBlockPartialRoundTrip() throws IOException {
         ContentEnc enc = enc();
         byte[] data = new byte[100];
@@ -350,21 +385,23 @@ class CipherFileTest {
 
     @Test
     void readRetriesAfterExternalTruncateAndRewrite() throws IOException {
-        ContentEnc enc = enc();
+        byte[] key = Keys.randomBytes(Constants.KEY_LEN);
+        ContentEnc h1Enc = new ContentEnc(key, Constants.DEFAULT_IV_BITS / 8);
+        ContentEnc h2Enc = new ContentEnc(key, Constants.DEFAULT_IV_BITS / 8);
         Path p = newFile();
         byte[] oldData = new byte[100];
         Arrays.fill(oldData, (byte) 0x11);
         byte[] newData = new byte[100];
         Arrays.fill(newData, (byte) 0x22);
 
-        try (CipherFile h1 = open(p, enc, true)) {
+        try (CipherFile h1 = open(p, h1Enc, true)) {
             h1.writeBlock(0, oldData, 0, oldData.length);
-            byte[] out = new byte[(int) enc.plainBS];
+            byte[] out = new byte[(int) h1Enc.plainBS];
             assertEquals(oldData.length, h1.readBlock(0, out, 0));
             byte[] oldId = h1.fileId();
 
             byte[] newId;
-            try (CipherFile h2 = open(p, enc, true)) {
+            try (CipherFile h2 = open(p, h2Enc, true)) {
                 h2.truncate(0);
                 h2.writeBlock(0, newData, 0, newData.length);
                 newId = h2.fileId();

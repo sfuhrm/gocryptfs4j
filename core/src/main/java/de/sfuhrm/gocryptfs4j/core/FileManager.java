@@ -2,6 +2,7 @@ package de.sfuhrm.gocryptfs4j.core;
 
 import de.sfuhrm.gocryptfs4j.crypto.Constants;
 import de.sfuhrm.gocryptfs4j.crypto.ContentEnc;
+import de.sfuhrm.gocryptfs4j.crypto.ContentGeometry;
 import de.sfuhrm.gocryptfs4j.names.NameTransform;
 import de.sfuhrm.gocryptfs4j.store.CipherNode;
 import de.sfuhrm.gocryptfs4j.store.CipherStore;
@@ -33,6 +34,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.Lock;
+import java.util.function.Supplier;
 
 /**
  * Performs plaintext file operations (read, write, attributes, create, delete,
@@ -48,8 +50,11 @@ final class FileManager {
     /** The ciphertext-side store. */
     private final CipherStore store;
 
-    /** The content-encryption helper. */
-    private final ContentEnc contentEnc;
+    /** The content-encryption block geometry. */
+    private final ContentGeometry contentGeometry;
+
+    /** Mints a fresh keyed content-encryption helper per file and per transient use. */
+    private final Supplier<ContentEnc> contentEncFactory;
 
     /** The name-transform helper. */
     private final NameTransform nameTransform;
@@ -101,7 +106,9 @@ final class FileManager {
      * Creates a file manager.
      *
      * @param store            the ciphertext-side store
-     * @param contentEnc       the content-encryption helper
+     * @param contentGeometry  the content block geometry
+     * @param contentEncFactory mints a fresh content-encryption helper per file
+     *                          and per transient use
      * @param nameTransform    the name-transform helper
      * @param plaintextNames   whether file names are stored unencrypted
      * @param nameManager      the name manager
@@ -109,11 +116,13 @@ final class FileManager {
      * @param pathResolver     the path resolver
      * @throws NullPointerException if a required argument is {@code null}
      */
-    FileManager(CipherStore store, ContentEnc contentEnc, NameTransform nameTransform,
+    FileManager(CipherStore store, ContentGeometry contentGeometry,
+                Supplier<ContentEnc> contentEncFactory, NameTransform nameTransform,
                 boolean plaintextNames, NameManager nameManager,
                 DirectoryManager directoryManager, PathResolver pathResolver) {
         this.store = Objects.requireNonNull(store, "store");
-        this.contentEnc = Objects.requireNonNull(contentEnc, "contentEnc");
+        this.contentGeometry = Objects.requireNonNull(contentGeometry, "contentGeometry");
+        this.contentEncFactory = Objects.requireNonNull(contentEncFactory, "contentEncFactory");
         this.nameTransform = Objects.requireNonNull(nameTransform, "nameTransform");
         this.plaintextNames = plaintextNames;
         this.nameManager = Objects.requireNonNull(nameManager, "nameManager");
@@ -275,7 +284,7 @@ final class FileManager {
                     }
                     if (entry.file == null) {
                         entry.file = CipherFile.open(store.open(cipherFile, writable),
-                                contentEnc, writable);
+                                contentEncFactory.get(), writable);
                         entry.writable = writable;
                     } else if (writable && !entry.writable) {
                         // A read-only shared file is already open (other
@@ -285,7 +294,7 @@ final class FileManager {
                         // is fully released: a reader may already have
                         // captured it and would otherwise see a closed channel.
                         CipherFile upgraded = CipherFile.open(store.open(cipherFile, true),
-                                contentEnc, true);
+                                contentEncFactory.get(), true);
                         CipherFile old = entry.file;
                         entry.file = upgraded;
                         entry.writable = true;
@@ -537,7 +546,7 @@ final class FileManager {
      * @throws IOException on filesystem errors
      */
     long plainSizeIncludingWriteBack(String cipherFile, long cipherSize) throws IOException {
-        long size = contentEnc.cipherSizeToPlainSize(cipherSize);
+        long size = contentGeometry.cipherSizeToPlainSize(cipherSize);
         SharedCipherFile.Entry entry = sharedFiles.get(cipherFile);
         if (entry != null) {
             size = Math.max(size, SharedCipherFile.effectiveSize(entry));
@@ -1040,7 +1049,12 @@ final class FileManager {
      */
     String readSymlink(String cipherSymlink) throws IOException {
         Objects.requireNonNull(cipherSymlink, "cipherSymlink");
-        return readSymlink(cipherSymlink, store, contentEnc, nameTransform, plaintextNames);
+        ContentEnc enc = contentEncFactory.get();
+        try {
+            return readSymlink(cipherSymlink, store, enc, nameTransform, plaintextNames);
+        } finally {
+            enc.wipe();
+        }
     }
 
     /**
@@ -1070,14 +1084,17 @@ final class FileManager {
         Objects.requireNonNull(target, "target");
         PathResolver.Resolved r = pathResolver.resolveParent(plainPath, true);
         boolean wroteName = nameManager.prepareLongName(r);
+        ContentEnc enc = contentEncFactory.get();
         try {
-            String cTarget = encryptSymlinkTarget(target, contentEnc, nameTransform, plaintextNames);
+            String cTarget = encryptSymlinkTarget(target, enc, nameTransform, plaintextNames);
             store.createSymlink(r.cipherPath, cTarget);
         } catch (IOException | RuntimeException e) {
             if (wroteName) {
                 nameManager.removeLongName(r);
             }
             throw e;
+        } finally {
+            enc.wipe();
         }
     }
 

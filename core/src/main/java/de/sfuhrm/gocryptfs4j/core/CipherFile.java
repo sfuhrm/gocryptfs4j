@@ -23,6 +23,9 @@ import java.util.Objects;
  * byte- and range-level buffering, read-modify-write of partial blocks and
  * position tracking live in {@link BlockBufferedChannel}, which sits on top of
  * the shared {@link SharedCipherFile}.</p>
+ *
+ * <p>Owns the {@link ContentEnc} it is opened with: {@link #close()} wipes that
+ * helper's key material, so a file's content key does not outlive the file.</p>
  */
 public final class CipherFile implements AutoCloseable {
 
@@ -316,9 +319,10 @@ public final class CipherFile implements AutoCloseable {
 
     /**
      * Closes the underlying channel, first forcing any pending content updates
-     * to stable storage if the file was opened for writing, and wipes the
-     * scratch buffers, which may hold plaintext or ciphertext of the last
-     * operation. Calling this method more than once has no effect.
+     * to stable storage if the file was opened for writing, and wipes this
+     * file's own content-encryption key material and the scratch buffers, which
+     * may hold plaintext or ciphertext of the last operation. Calling this
+     * method more than once has no effect.
      *
      * @throws IOException on filesystem errors
      */
@@ -334,6 +338,7 @@ public final class CipherFile implements AutoCloseable {
             try {
                 channel.close();
             } finally {
+                enc.wipe();
                 Arrays.fill(blockCipher, (byte) 0);
                 Arrays.fill(blockPlain, (byte) 0);
             }

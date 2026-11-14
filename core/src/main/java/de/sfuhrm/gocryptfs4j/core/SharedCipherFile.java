@@ -27,9 +27,10 @@ import org.jspecify.annotations.Nullable;
  * the same file stay coherent. Channels are created per handle via
  * {@link #newChannel(long, boolean)} and tracked by the shared entry so that a
  * filesystem close can exclude channel I/O, flush pending plaintext and then
- * wipe the keys before any further operation starts. Closing a handle only
- * releases its reference; the underlying channel is closed once the last
- * reference is released.</p>
+ * wipe the keys before any further operation starts. The shared backing file
+ * owns its own content key, wiped when it is closed on release of the last
+ * reference. Closing a handle only releases its reference; the underlying
+ * channel is closed once the last reference is released.</p>
  */
 public final class SharedCipherFile implements AutoCloseable {
 

@@ -5,6 +5,7 @@ import de.sfuhrm.gocryptfs4j.config.Fido2Params;
 import de.sfuhrm.gocryptfs4j.crypto.AesBlockCipher;
 import de.sfuhrm.gocryptfs4j.crypto.Constants;
 import de.sfuhrm.gocryptfs4j.crypto.ContentEnc;
+import de.sfuhrm.gocryptfs4j.crypto.ContentGeometry;
 import de.sfuhrm.gocryptfs4j.crypto.Eme;
 import de.sfuhrm.gocryptfs4j.crypto.Hkdf;
 import de.sfuhrm.gocryptfs4j.crypto.Keys;
@@ -79,9 +80,11 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * neither retained nor wiped by this class: the caller keeps ownership of them
  * and should clear them once they are no longer needed. A password is encoded
  * as UTF-8 before it is passed to scrypt, matching the raw bytes gocryptfs
- * reads from a UTF-8 terminal, passfile or extpass program. The master key that
- * the returned instance derives, and every sub-key derived from it, are owned
- * by that instance and wiped on {@link #close()}. A raw master-key array is
+ * reads from a UTF-8 terminal, passfile or extpass program. The master key and
+ * the EME name-encryption sub-key are owned by this instance and wiped on
+ * {@link #close()}. The content-encryption sub-key is scoped to the resource
+ * that requires it: each file, stream and handle derives its own copy and wipes
+ * it when it closes. A raw master-key array is
  * cloned internally, so closing the filesystem never modifies the caller's
  * array. Secrets obtained from a {@link Fido2Token} are owned and wiped by
  * this class.</p>
@@ -130,8 +133,8 @@ public final class GocryptFs implements AutoCloseable {
     /** The EME name-encryption helper. */
     private final Eme eme;
 
-    /** The content-encryption helper. */
-    private final ContentEnc contentEnc;
+    /** The keyless content block geometry (sizes and offset translation). */
+    private final ContentGeometry contentGeometry;
 
     /** Whether file names are stored unencrypted. */
     private final boolean plaintextNames;
@@ -336,7 +339,6 @@ public final class GocryptFs implements AutoCloseable {
         boolean deterministic = !plainNames && !dirIv;
 
         Eme emeHelper = null;
-        ContentEnc contentEncHelper = null;
         boolean constructed = false;
         try {
             boolean useHkdf = config.hkdf();
@@ -348,7 +350,7 @@ public final class GocryptFs implements AutoCloseable {
             } finally {
                 Keys.wipe(emeKey);
             }
-            contentEncHelper = config.contentEnc(masterKey);
+            ContentGeometry contentGeometry = config.contentGeometry();
             NameTransform nameTransformHelper = new NameTransform(emeHelper, config.longNames(),
                     config.longNameMax(), config.raw64(), deterministic);
 
@@ -361,14 +363,16 @@ public final class GocryptFs implements AutoCloseable {
             this.rootLock = rootLock;
             this.plaintextNames = plainNames;
             this.eme = emeHelper;
-            this.contentEnc = contentEncHelper;
+            this.contentGeometry = contentGeometry;
             this.nameManager = new NameManager(nameTransformHelper, plainNames, store);
             this.directoryManager = new DirectoryManager(store, root, plainNames, deterministic,
-                    nameTransformHelper, contentEncHelper, this.nameManager, readOnly);
+                    nameTransformHelper, contentGeometry, this::deriveContentEnc,
+                    this.nameManager, readOnly);
             this.pathResolver = new PathResolver(store, root, plainNames,
                     this.nameManager, this.directoryManager);
-            this.fileManager = new FileManager(store, contentEncHelper, nameTransformHelper,
-                    plainNames, this.nameManager, this.directoryManager, this.pathResolver);
+            this.fileManager = new FileManager(store, contentGeometry, this::deriveContentEnc,
+                    nameTransformHelper, plainNames, this.nameManager, this.directoryManager,
+                    this.pathResolver);
             this.fileManager.setSyncPolicy(syncPolicy);
             this.directoryManager.setFileManager(this.fileManager);
             constructed = true;
@@ -377,9 +381,6 @@ public final class GocryptFs implements AutoCloseable {
                 // The constructor is aborting before ownership of the key
                 // material transfers to the instance: wipe everything derived
                 // here, including the master key.
-                if (contentEncHelper != null) {
-                    contentEncHelper.wipe();
-                }
                 if (emeHelper != null) {
                     emeHelper.wipe();
                 }
@@ -2324,14 +2325,28 @@ public final class GocryptFs implements AutoCloseable {
     // ------------------------------------------------------------------
 
     /**
-     * Wipes the master key and every key derived from it, and clears the
+     * Derives a fresh content-encryption helper from the master key. Each
+     * returned instance owns its own key material and must be wiped by its
+     * consumer (a file/stream/handle on close, or a transient use immediately
+     * afterwards). The master key itself is owned by this filesystem and is
+     * wiped only on {@link #close()}.
+     *
+     * @return a new content-encryption helper
+     */
+    private ContentEnc deriveContentEnc() {
+        return config.contentEnc(masterKey);
+    }
+
+    /**
+     * Wipes the master key and the EME name-encryption key, and clears the
      * directory-IV cache. This is the secret-destruction part of
-     * {@link #close()}; it deliberately does not touch the store.
+     * {@link #close()}; it deliberately does not touch the store. Content keys
+     * are owned per resource and are wiped by those resources on their own
+     * close.
      */
     private void wipeSecrets() {
         directoryManager.clearDirIvCache();
         eme.wipe();
-        contentEnc.wipe();
         Keys.wipe(masterKey);
     }
 

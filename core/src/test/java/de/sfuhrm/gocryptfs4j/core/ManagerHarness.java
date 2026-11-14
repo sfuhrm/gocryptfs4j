@@ -3,6 +3,7 @@ package de.sfuhrm.gocryptfs4j.core;
 import de.sfuhrm.gocryptfs4j.crypto.AesBlockCipher;
 import de.sfuhrm.gocryptfs4j.crypto.Constants;
 import de.sfuhrm.gocryptfs4j.crypto.ContentEnc;
+import de.sfuhrm.gocryptfs4j.crypto.ContentGeometry;
 import de.sfuhrm.gocryptfs4j.crypto.Eme;
 import de.sfuhrm.gocryptfs4j.crypto.Keys;
 import de.sfuhrm.gocryptfs4j.names.NameTransform;
@@ -10,6 +11,7 @@ import de.sfuhrm.gocryptfs4j.store.CipherStore;
 import de.sfuhrm.gocryptfs4j.store.memory.MapCipherStore;
 
 import java.io.IOException;
+import java.util.function.Supplier;
 
 /**
  * Builds a fully wired set of the {@code GocryptFs} collaborators over an
@@ -66,18 +68,21 @@ final class ManagerHarness {
         this.deterministicNames = deterministicNames;
 
         Eme eme = new Eme(new AesBlockCipher(Keys.randomBytes(Constants.KEY_LEN)));
-        this.contentEnc = new ContentEnc(Keys.randomBytes(Constants.KEY_LEN),
-                Constants.DEFAULT_IV_BITS / 8);
+        byte[] masterKey = Keys.randomBytes(Constants.KEY_LEN);
+        this.contentEnc = new ContentEnc(masterKey, Constants.DEFAULT_IV_BITS / 8);
+        ContentGeometry geometry = contentEnc.geometry();
+        Supplier<ContentEnc> contentEncFactory = () ->
+                new ContentEnc(masterKey, Constants.DEFAULT_IV_BITS / 8);
         NameTransform nameTransform = new NameTransform(eme, true, Constants.NAME_MAX, false,
                 deterministicNames);
 
         this.nameManager = new NameManager(nameTransform, plaintextNames, store);
         this.directoryManager = new DirectoryManager(store, store.root(), plaintextNames,
-                deterministicNames, nameTransform, contentEnc, nameManager);
+                deterministicNames, nameTransform, geometry, contentEncFactory, nameManager);
         this.pathResolver = new PathResolver(store, store.root(), plaintextNames,
                 nameManager, directoryManager);
-        this.fileManager = new FileManager(store, contentEnc, nameTransform, plaintextNames,
-                nameManager, directoryManager, pathResolver);
+        this.fileManager = new FileManager(store, geometry, contentEncFactory, nameTransform,
+                plaintextNames, nameManager, directoryManager, pathResolver);
         directoryManager.setFileManager(fileManager);
 
         if (!plaintextNames && !deterministicNames) {

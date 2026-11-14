@@ -480,6 +480,27 @@ class GocryptFsTest {
     }
 
     @Test
+    void closingStreamKeepsFilesystemUsable() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
+            fs.createFile("/a.txt");
+            fs.createFile("/b.txt");
+            fs.write("/a.txt", 0, "alpha".getBytes(StandardCharsets.UTF_8));
+            fs.write("/b.txt", 0, "bravo".getBytes(StandardCharsets.UTF_8));
+
+            try (InputStream in = fs.openRead("/a.txt")) {
+                assertEquals('a', in.read());
+            }
+            // Closing the stream wiped only /a.txt's content-key copy; the
+            // master key survives, so other files remain readable.
+            assertEquals("bravo", new String(fs.readAll("/b.txt"), StandardCharsets.UTF_8));
+            assertEquals("alpha", new String(fs.readAll("/a.txt"), StandardCharsets.UTF_8));
+        }
+    }
+
+    @Test
     void openReadStreamsMultiBlockContent() throws IOException {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
