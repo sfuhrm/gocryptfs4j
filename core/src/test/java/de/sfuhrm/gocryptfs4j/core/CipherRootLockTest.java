@@ -102,7 +102,7 @@ class CipherRootLockTest {
         try (GocryptFs fs = GocryptFs.create(
                 new PathCipherStore(cipherDir), "pw".toCharArray())) {
             fs.mkdir("/dir");
-            dirCipher = java.nio.file.Paths.get(fs.resolve("/dir").cipherPath);
+            dirCipher = java.nio.file.Paths.get(fs.resolve("/dir").cipherPath());
         }
 
         Path dirIV = dirCipher.resolve("gocryptfs.diriv");

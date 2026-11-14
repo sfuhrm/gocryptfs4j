@@ -22,11 +22,11 @@ import java.util.Objects;
 public final class ContentEnc {
 
     /** Plaintext block size. */
-    public final long plainBS;
+    private final long plainBS;
     /** Ciphertext block size (plainBS + ivLen + tag). */
-    public final long cipherBS;
+    private final long cipherBS;
     /** Nonce length in bytes. */
-    public final int ivLen;
+    private final int ivLen;
 
     /** The authenticated-encryption cipher. */
     private final ContentCipher cipher;
@@ -90,11 +90,38 @@ public final class ContentEnc {
             throw new IllegalArgumentException("plainBS must be positive: " + plainBS);
         }
         this.geometry = new ContentGeometry(ivLen, plainBS);
-        this.ivLen = geometry.ivLen;
-        this.plainBS = geometry.plainBS;
-        this.cipherBS = geometry.cipherBS;
+        this.ivLen = geometry.ivLen();
+        this.plainBS = geometry.plainBS();
+        this.cipherBS = geometry.cipherBS();
         this.aadBuffer = new TrackedThreadLocal<>(() -> new byte[8 + Constants.HEADER_ID_LEN]);
         this.nonceBuffer = new TrackedThreadLocal<>(() -> new byte[ivLen]);
+    }
+
+    /**
+     * Returns the plaintext block size in bytes.
+     *
+     * @return the plaintext block size
+     */
+    public long plainBS() {
+        return plainBS;
+    }
+
+    /**
+     * Returns the ciphertext block size in bytes.
+     *
+     * @return the ciphertext block size (plainBS + nonce length + tag)
+     */
+    public long cipherBS() {
+        return cipherBS;
+    }
+
+    /**
+     * Returns the nonce length in bytes.
+     *
+     * @return the nonce length
+     */
+    public int ivLen() {
+        return ivLen;
     }
 
     /**

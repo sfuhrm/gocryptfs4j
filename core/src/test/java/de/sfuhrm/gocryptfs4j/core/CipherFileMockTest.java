@@ -99,7 +99,7 @@ class CipherFileMockTest {
         ContentEnc enc = enc();
         CipherFile cf = newCipherFile(channel, enc);
 
-        byte[] data = new byte[(int) enc.plainBS];
+        byte[] data = new byte[(int) enc.plainBS()];
         Arrays.fill(data, (byte) 0x33);
         cf.writeBlock(0, data, 0, data.length);
 
@@ -111,10 +111,10 @@ class CipherFileMockTest {
     void plainSizeDelegatesToChannelSize() throws Exception {
         CipherChannel channel = mock(CipherChannel.class);
         ContentEnc enc = enc();
-        when(channel.size()).thenReturn(Constants.HEADER_LEN + enc.cipherBS);
+        when(channel.size()).thenReturn(Constants.HEADER_LEN + enc.cipherBS());
         CipherFile cf = newCipherFile(channel, enc());
 
-        assertEquals(enc.plainBS, cf.plainSize());
+        assertEquals(enc.plainBS(), cf.plainSize());
         verify(channel).size();
     }
 
@@ -146,7 +146,7 @@ class CipherFileMockTest {
         ContentEnc enc = enc();
         byte[] header = FileHeader.random().pack();
         CipherChannel channel = mock(CipherChannel.class);
-        when(channel.size()).thenReturn(Constants.HEADER_LEN + 2 * enc.cipherBS);
+        when(channel.size()).thenReturn(Constants.HEADER_LEN + 2 * enc.cipherBS());
         long[] pos = {0};
         when(channel.position(anyLong())).thenAnswer(inv -> {
             pos[0] = inv.getArgument(0);
@@ -164,7 +164,7 @@ class CipherFileMockTest {
         });
         CipherFile cf = newCipherFile(channel, enc);
 
-        cf.truncate(enc.plainBS);
+        cf.truncate(enc.plainBS());
 
         verify(channel, never()).write(any(ByteBuffer.class));
         verify(channel).truncate(enc.blockNoToCipherOff(1));

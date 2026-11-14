@@ -97,7 +97,7 @@ class ConfigFileTest {
                 expectedIvLen = Constants.DEFAULT_IV_BITS / 8;
                 break;
         }
-        assertEquals(expectedIvLen, enc.ivLen);
+        assertEquals(expectedIvLen, enc.ivLen());
         assertEquals(expectedIvLen + Constants.AUTH_TAG_LEN, enc.blockOverhead());
 
         byte[] fileId = Keys.randomBytes(Constants.HEADER_ID_LEN);

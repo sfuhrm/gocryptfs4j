@@ -55,14 +55,14 @@ class CipherFileTest {
     @Test
     void writeBlockAndReadBlockRoundTrip() throws IOException {
         ContentEnc enc = enc();
-        byte[] data = new byte[(int) enc.plainBS];
+        byte[] data = new byte[(int) enc.plainBS()];
         Arrays.fill(data, (byte) 0x5a);
 
         try (CipherFile cf = open(newFile(), enc, true)) {
             cf.writeBlock(0, data, 0, data.length);
             assertEquals(data.length, cf.plainSize());
 
-            byte[] out = new byte[(int) enc.plainBS];
+            byte[] out = new byte[(int) enc.plainBS()];
             assertEquals(data.length, cf.readBlock(0, out, 0));
             assertArrayEquals(data, out);
         }
@@ -113,7 +113,7 @@ class CipherFileTest {
             cf.writeBlock(0, data, 0, data.length);
             assertEquals(data.length, cf.plainSize());
 
-            byte[] out = new byte[(int) enc.plainBS];
+            byte[] out = new byte[(int) enc.plainBS()];
             assertEquals(data.length, cf.readBlock(0, out, 0));
             assertArrayEquals(data, Arrays.copyOf(out, data.length));
         }
@@ -124,7 +124,7 @@ class CipherFileTest {
         ContentEnc enc = enc();
         try (CipherFile cf = open(newFile(), enc, true)) {
             cf.writeBlock(0, new byte[100], 0, 100);
-            byte[] out = new byte[(int) enc.plainBS];
+            byte[] out = new byte[(int) enc.plainBS()];
             assertEquals(0, cf.readBlock(10_000, out, 0));
         }
     }
@@ -138,10 +138,10 @@ class CipherFileTest {
             Arrays.fill(data, (byte) 0x77);
             cf.writeBlock(blockNo, data, 0, data.length);
 
-            assertEquals(blockNo * enc.plainBS + data.length, cf.plainSize());
-            byte[] hole = new byte[(int) enc.plainBS];
-            assertEquals(enc.plainBS, cf.readBlock(blockNo - 1, hole, 0));
-            assertArrayEquals(new byte[(int) enc.plainBS], hole);
+            assertEquals(blockNo * enc.plainBS() + data.length, cf.plainSize());
+            byte[] hole = new byte[(int) enc.plainBS()];
+            assertEquals(enc.plainBS(), cf.readBlock(blockNo - 1, hole, 0));
+            assertArrayEquals(new byte[(int) enc.plainBS()], hole);
         }
     }
 
@@ -179,12 +179,12 @@ class CipherFileTest {
     @Test
     void truncateShrink() throws IOException {
         ContentEnc enc = enc();
-        byte[] data = new byte[(int) (enc.plainBS + 500)];
+        byte[] data = new byte[(int) (enc.plainBS() + 500)];
         Arrays.fill(data, (byte) 0x33);
 
         try (CipherFile cf = open(newFile(), enc, true)) {
-            cf.writeBlock(0, data, 0, (int) enc.plainBS);
-            cf.writeBlock(1, data, (int) enc.plainBS, 500);
+            cf.writeBlock(0, data, 0, (int) enc.plainBS());
+            cf.writeBlock(1, data, (int) enc.plainBS(), 500);
             assertEquals(data.length, cf.plainSize());
 
             cf.truncate(1000);
@@ -202,7 +202,7 @@ class CipherFileTest {
     @Test
     void truncateToBlockBoundaryKeepsFullBlocks() throws IOException {
         ContentEnc enc = enc();
-        int bs = (int) enc.plainBS;
+        int bs = (int) enc.plainBS();
         byte[] data = new byte[bs * 2 + 500];
         Arrays.fill(data, (byte) 0x44);
 
@@ -229,17 +229,17 @@ class CipherFileTest {
         ContentEnc enc = enc();
         Path p = newFile();
         try (CipherFile cf = open(p, enc, true)) {
-            cf.writeBlock(0, new byte[(int) enc.plainBS], 0, (int) enc.plainBS);
+            cf.writeBlock(0, new byte[(int) enc.plainBS()], 0, (int) enc.plainBS());
             cf.force(false);
         }
 
         // Simulate a torn tail: cut the last block short of the nonce length.
         try (SeekableByteChannel ch = Files.newByteChannel(p, StandardOpenOption.WRITE)) {
-            ch.truncate(Constants.HEADER_LEN + enc.ivLen - 1);
+            ch.truncate(Constants.HEADER_LEN + enc.ivLen() - 1);
         }
 
         try (CipherFile cf = open(p, enc, false)) {
-            byte[] out = new byte[(int) enc.plainBS];
+            byte[] out = new byte[(int) enc.plainBS()];
             assertThrows(IOException.class, () -> cf.readBlock(0, out, 0));
         }
     }
@@ -294,20 +294,20 @@ class CipherFileTest {
     @Test
     void closeWipesScratchBuffers() throws Exception {
         ContentEnc enc = enc();
-        byte[] data = new byte[(int) enc.plainBS];
+        byte[] data = new byte[(int) enc.plainBS()];
         Arrays.fill(data, (byte) 0x42);
 
         CipherFile cf = open(newFile(), enc, true);
         cf.writeBlock(0, data, 0, data.length);
-        byte[] out = new byte[(int) enc.plainBS];
+        byte[] out = new byte[(int) enc.plainBS()];
         cf.readBlock(0, out, 0);
 
         assertHasNonZero(cf, "blockCipher");
 
         cf.close();
 
-        assertArrayEquals(new byte[(int) enc.plainBS], (byte[]) field(cf, "blockPlain"));
-        assertArrayEquals(new byte[(int) enc.cipherBS], (byte[]) field(cf, "blockCipher"));
+        assertArrayEquals(new byte[(int) enc.plainBS()], (byte[]) field(cf, "blockPlain"));
+        assertArrayEquals(new byte[(int) enc.cipherBS()], (byte[]) field(cf, "blockCipher"));
     }
 
     private static Object field(Object target, String name) throws Exception {
@@ -346,17 +346,17 @@ class CipherFileTest {
         Path p = newFile();
 
         try (CipherFile h1 = open(p, enc, true)) {
-            h1.writeBlock(0, new byte[(int) enc.plainBS], 0, (int) enc.plainBS);
+            h1.writeBlock(0, new byte[(int) enc.plainBS()], 0, (int) enc.plainBS());
             h1.force(false);
-            assertEquals(enc.plainBS, h1.plainSize());
+            assertEquals(enc.plainBS(), h1.plainSize());
 
             // A second handle grows the file behind h1's back.
             try (CipherFile h2 = open(p, enc, true)) {
-                h2.writeBlock(1, new byte[(int) enc.plainBS], 0, (int) enc.plainBS);
+                h2.writeBlock(1, new byte[(int) enc.plainBS()], 0, (int) enc.plainBS());
             }
 
             // h1 must observe the grown size instead of a stale cached value.
-            assertEquals(2 * enc.plainBS, h1.plainSize());
+            assertEquals(2 * enc.plainBS(), h1.plainSize());
         }
     }
 
@@ -377,7 +377,7 @@ class CipherFileTest {
             // The reader must not have cached the empty state forever.
             assertNotNull(reader.fileId());
             assertEquals(data.length, reader.plainSize());
-            byte[] out = new byte[(int) enc.plainBS];
+            byte[] out = new byte[(int) enc.plainBS()];
             assertEquals(data.length, reader.readBlock(0, out, 0));
             assertArrayEquals(data, Arrays.copyOf(out, data.length));
         }
@@ -396,7 +396,7 @@ class CipherFileTest {
 
         try (CipherFile h1 = open(p, h1Enc, true)) {
             h1.writeBlock(0, oldData, 0, oldData.length);
-            byte[] out = new byte[(int) h1Enc.plainBS];
+            byte[] out = new byte[(int) h1Enc.plainBS()];
             assertEquals(oldData.length, h1.readBlock(0, out, 0));
             byte[] oldId = h1.fileId();
 

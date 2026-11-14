@@ -75,7 +75,7 @@ class BlockBufferedChannelTest {
     @Test
     void writeAndReadRoundTripMultiBlock() throws IOException {
         ContentEnc enc = enc();
-        byte[] data = new byte[(int) (enc.plainBS * 2 + 100)];
+        byte[] data = new byte[(int) (enc.plainBS() * 2 + 100)];
         for (int i = 0; i < data.length; i++) {
             data[i] = (byte) (i * 31);
         }
@@ -113,7 +113,7 @@ class BlockBufferedChannelTest {
     @Test
     void partialBlockWriteMergesWithExistingData() throws IOException {
         ContentEnc enc = enc();
-        byte[] data = new byte[(int) enc.plainBS];
+        byte[] data = new byte[(int) enc.plainBS()];
         Arrays.fill(data, (byte) 0x11);
 
         try (BlockBufferedChannel ch = openChannel(newFile(), enc, true)) {
@@ -272,7 +272,7 @@ class BlockBufferedChannelTest {
     @Test
     void truncateShrink() throws IOException {
         ContentEnc enc = enc();
-        byte[] data = new byte[(int) (enc.plainBS * 2)];
+        byte[] data = new byte[(int) (enc.plainBS() * 2)];
         Arrays.fill(data, (byte) 0x33);
 
         try (BlockBufferedChannel ch = openChannel(newFile(), enc, true)) {
@@ -295,7 +295,7 @@ class BlockBufferedChannelTest {
     void streamingWriteAcrossBlocks() throws IOException {
         byte[] key = Keys.randomBytes(Constants.KEY_LEN);
         ContentEnc enc = new ContentEnc(key, Constants.DEFAULT_IV_BITS / 8);
-        byte[] data = new byte[(int) (enc.plainBS * 2 + 1000)];
+        byte[] data = new byte[(int) (enc.plainBS() * 2 + 1000)];
         for (int i = 0; i < data.length; i++) {
             data[i] = (byte) (i * 7);
         }

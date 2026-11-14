@@ -61,8 +61,8 @@ public final class CipherFile implements AutoCloseable {
         this.channel = channel;
         this.enc = enc;
         this.writable = writable;
-        this.blockCipher = new byte[(int) enc.cipherBS];
-        this.blockPlain = new byte[(int) enc.plainBS];
+        this.blockCipher = new byte[(int) enc.cipherBS()];
+        this.blockPlain = new byte[(int) enc.plainBS()];
     }
 
     /**
@@ -97,7 +97,7 @@ public final class CipherFile implements AutoCloseable {
      * @return the plaintext block size
      */
     int blockSize() {
-        return (int) enc.plainBS;
+        return (int) enc.plainBS();
     }
 
     /**
@@ -178,7 +178,7 @@ public final class CipherFile implements AutoCloseable {
         if (cipherOffset >= cipherSize) {
             return 0;
         }
-        int len = (int) Math.min(enc.cipherBS, cipherSize - cipherOffset);
+        int len = (int) Math.min(enc.cipherBS(), cipherSize - cipherOffset);
         int read = readCipherRange(cipherOffset, blockCipher, len);
         return enc.decryptBlocks(blockCipher, 0, read, blockNo, id, out, off);
     }
@@ -223,17 +223,17 @@ public final class CipherFile implements AutoCloseable {
             throw new NonWritableChannelException();
         }
         long size = plainSize();
-        if (size == 0 || size % enc.plainBS == 0) {
+        if (size == 0 || size % enc.plainBS() == 0) {
             return;
         }
         byte[] id = fileId();
         if (id == null) {
             return;
         }
-        long blockNo = (size - 1) / enc.plainBS;
+        long blockNo = (size - 1) / enc.plainBS();
         int len = readBlock(blockNo, blockPlain, 0);
-        Arrays.fill(blockPlain, len, (int) enc.plainBS, (byte) 0);
-        writeBlock(blockNo, blockPlain, 0, (int) enc.plainBS);
+        Arrays.fill(blockPlain, len, (int) enc.plainBS(), (byte) 0);
+        writeBlock(blockNo, blockPlain, 0, (int) enc.plainBS());
     }
 
     /**
@@ -282,10 +282,10 @@ public final class CipherFile implements AutoCloseable {
         if (id == null) {
             return;
         }
-        long blockNo = (newPlainSize - 1) / enc.plainBS;
-        long blockStart = blockNo * enc.plainBS;
+        long blockNo = (newPlainSize - 1) / enc.plainBS();
+        long blockStart = blockNo * enc.plainBS();
         int keep = (int) (newPlainSize - blockStart);
-        if (keep == enc.plainBS) {
+        if (keep == enc.plainBS()) {
             // The new size ends on a block boundary, so no block has to be
             // re-encrypted. Just drop the blocks that no longer belong to it.
             channel.truncate(enc.blockNoToCipherOff(blockNo + 1));

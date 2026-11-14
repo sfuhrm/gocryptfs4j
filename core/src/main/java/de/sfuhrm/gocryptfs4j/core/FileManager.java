@@ -174,7 +174,7 @@ final class FileManager {
      * @throws IOException on filesystem errors
      */
     private DirEntry statResolved(PathResolver.Resolved r) throws IOException {
-        CipherNode node = store.stat(r.cipherPath);
+        CipherNode node = store.stat(r.cipherPath());
         DirEntry.Kind kind;
         long size;
         if (node.isDirectory()) {
@@ -182,16 +182,16 @@ final class FileManager {
             size = 0;
         } else if (node.isSymbolicLink()) {
             kind = DirEntry.Kind.SYMLINK;
-            size = readSymlink(r.cipherPath).getBytes(StandardCharsets.UTF_8).length;
+            size = readSymlink(r.cipherPath()).getBytes(StandardCharsets.UTF_8).length;
         } else if (node.isRegularFile()) {
             kind = DirEntry.Kind.FILE;
-            size = plainSizeIncludingWriteBack(r.cipherPath, node.size());
+            size = plainSizeIncludingWriteBack(r.cipherPath(), node.size());
         } else {
             kind = DirEntry.Kind.OTHER;
             size = node.size();
         }
-        String plainName = r.plainName.isEmpty() ? "/" : r.plainName;
-        return new DirEntry(plainName, r.cipherName, store.posixAttributes(r.cipherPath), kind, size,
+        String plainName = r.plainName().isEmpty() ? "/" : r.plainName();
+        return new DirEntry(plainName, r.cipherName(), store.posixAttributes(r.cipherPath()), kind, size,
                 node.lastModifiedTime(), node.lastAccessTime(), node.creationTime(),
                 node.fileKey());
     }
@@ -228,7 +228,7 @@ final class FileManager {
         Objects.requireNonNull(plainFile, "plainFile");
         Objects.requireNonNull(syncPolicy, "syncPolicy");
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
-        return openCipherFileByName(r.cipherPath, writable, syncPolicy);
+        return openCipherFileByName(r.cipherPath(), writable, syncPolicy);
     }
 
     /**
@@ -565,8 +565,8 @@ final class FileManager {
     long size(String plainFile) throws IOException {
         Objects.requireNonNull(plainFile, "plainFile");
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
-        synchronized (fileLock(r.cipherPath)) {
-            try (SharedCipherFile cf = openCipherFileByName(r.cipherPath, false)) {
+        synchronized (fileLock(r.cipherPath())) {
+            try (SharedCipherFile cf = openCipherFileByName(r.cipherPath(), false)) {
                 return cf.effectiveSize();
             }
         }
@@ -583,8 +583,8 @@ final class FileManager {
     byte[] readAll(String plainFile) throws IOException {
         Objects.requireNonNull(plainFile, "plainFile");
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
-        synchronized (fileLock(r.cipherPath)) {
-            try (SharedCipherFile cf = openCipherFileByName(r.cipherPath, false)) {
+        synchronized (fileLock(r.cipherPath())) {
+            try (SharedCipherFile cf = openCipherFileByName(r.cipherPath(), false)) {
                 // Another handle may hold unflushed buffered blocks; flush them
                 // so this read sees the same content, then read back.
                 cf.flushChannels();
@@ -619,7 +619,7 @@ final class FileManager {
     InputStream openRead(String plainFile) throws IOException {
         Objects.requireNonNull(plainFile, "plainFile");
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
-        SeekableByteChannel ch = openChannel(r.cipherPath, 0, false);
+        SeekableByteChannel ch = openChannel(r.cipherPath(), 0, false);
         try {
             return new CipherInputStream(ch);
         } catch (RuntimeException e) {
@@ -657,7 +657,7 @@ final class FileManager {
         Objects.requireNonNull(plainFile, "plainFile");
         Objects.requireNonNull(syncPolicy, "syncPolicy");
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
-        try (SharedCipherFile cf = openCipherFileByName(r.cipherPath, true, syncPolicy)) {
+        try (SharedCipherFile cf = openCipherFileByName(r.cipherPath(), true, syncPolicy)) {
             cf.truncate(0);
             return Channels.newOutputStream(cf.newChannel(0, true, syncPolicy));
         }
@@ -698,8 +698,8 @@ final class FileManager {
             throw new IllegalArgumentException("negative offset: " + offset);
         }
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
-        synchronized (fileLock(r.cipherPath)) {
-            try (SeekableByteChannel ch = openChannel(r.cipherPath, offset, true, syncPolicy)) {
+        synchronized (fileLock(r.cipherPath())) {
+            try (SeekableByteChannel ch = openChannel(r.cipherPath(), offset, true, syncPolicy)) {
                 ByteBuffer buf = ByteBuffer.wrap(data);
                 while (buf.hasRemaining()) {
                     int n = ch.write(buf);
@@ -741,8 +741,8 @@ final class FileManager {
             throw new IllegalArgumentException("negative size: " + newSize);
         }
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
-        synchronized (fileLock(r.cipherPath)) {
-            try (SharedCipherFile cf = openCipherFileByName(r.cipherPath, true, syncPolicy)) {
+        synchronized (fileLock(r.cipherPath())) {
+            try (SharedCipherFile cf = openCipherFileByName(r.cipherPath(), true, syncPolicy)) {
                 cf.truncate(newSize);
             }
         }
@@ -767,7 +767,7 @@ final class FileManager {
             throws IOException {
         Objects.requireNonNull(plainPath, "plainPath");
         PathResolver.Resolved r = pathResolver.resolve(plainPath);
-        store.setTimes(r.cipherPath, lastModifiedTime, lastAccessTime, createTime);
+        store.setTimes(r.cipherPath(), lastModifiedTime, lastAccessTime, createTime);
     }
 
     /**
@@ -783,7 +783,7 @@ final class FileManager {
     void checkAccess(String plainPath, AccessMode... modes) throws IOException {
         Objects.requireNonNull(plainPath, "plainPath");
         PathResolver.Resolved r = pathResolver.resolve(plainPath);
-        store.checkAccess(r.cipherPath, modes);
+        store.checkAccess(r.cipherPath(), modes);
     }
 
     /**
@@ -798,7 +798,7 @@ final class FileManager {
     @Nullable PosixFileAttributes posixAttributes(String plainPath) throws IOException {
         Objects.requireNonNull(plainPath, "plainPath");
         PathResolver.Resolved r = pathResolver.resolve(plainPath);
-        return store.posixAttributes(r.cipherPath);
+        return store.posixAttributes(r.cipherPath());
     }
 
     /**
@@ -814,7 +814,7 @@ final class FileManager {
         Objects.requireNonNull(plainPath, "plainPath");
         Objects.requireNonNull(permissions, "permissions");
         PathResolver.Resolved r = pathResolver.resolve(plainPath);
-        store.setPosixPermissions(r.cipherPath, permissions);
+        store.setPosixPermissions(r.cipherPath(), permissions);
     }
 
     /**
@@ -829,7 +829,7 @@ final class FileManager {
         Objects.requireNonNull(plainPath, "plainPath");
         Objects.requireNonNull(owner, "owner");
         PathResolver.Resolved r = pathResolver.resolve(plainPath);
-        store.setPosixOwner(r.cipherPath, owner);
+        store.setPosixOwner(r.cipherPath(), owner);
     }
 
     /**
@@ -844,7 +844,7 @@ final class FileManager {
         Objects.requireNonNull(plainPath, "plainPath");
         Objects.requireNonNull(group, "group");
         PathResolver.Resolved r = pathResolver.resolve(plainPath);
-        store.setPosixGroup(r.cipherPath, group);
+        store.setPosixGroup(r.cipherPath(), group);
     }
 
     // ------------------------------------------------------------------
@@ -863,7 +863,7 @@ final class FileManager {
         PathResolver.Resolved r = pathResolver.resolveParent(plainFile, true);
         boolean wroteName = nameManager.prepareLongName(r);
         try {
-            store.createFile(r.cipherPath);
+            store.createFile(r.cipherPath());
         } catch (IOException | RuntimeException e) {
             if (wroteName) {
                 nameManager.removeLongName(r);
@@ -884,7 +884,7 @@ final class FileManager {
         PathResolver.Resolved r = pathResolver.resolveParent(plainDir, true);
         boolean wroteName = nameManager.prepareLongName(r);
         try {
-            store.mkdir(r.cipherPath);
+            store.mkdir(r.cipherPath());
         } catch (IOException | RuntimeException e) {
             if (wroteName) {
                 nameManager.removeLongName(r);
@@ -892,11 +892,11 @@ final class FileManager {
             throw e;
         }
         try {
-            directoryManager.writeDirIV(r.cipherPath);
+            directoryManager.writeDirIV(r.cipherPath());
         } catch (IOException | RuntimeException e) {
             try {
-                deleteIfExists(store, PathResolver.join(r.cipherPath, Constants.DIR_IV_FILENAME));
-                store.delete(r.cipherPath);
+                deleteIfExists(store, PathResolver.join(r.cipherPath(), Constants.DIR_IV_FILENAME));
+                store.delete(r.cipherPath());
                 nameManager.removeLongName(r);
             } catch (IOException cleanup) {
                 e.addSuppressed(cleanup);
@@ -915,14 +915,14 @@ final class FileManager {
     void delete(String plainPath) throws IOException {
         Objects.requireNonNull(plainPath, "plainPath");
         PathResolver.Resolved r = pathResolver.resolve(plainPath);
-        if (store.stat(r.cipherPath).isDirectory()) {
-            removeEmptyDir(r.cipherPath);
+        if (store.stat(r.cipherPath()).isDirectory()) {
+            removeEmptyDir(r.cipherPath());
         } else {
-            store.delete(r.cipherPath);
+            store.delete(r.cipherPath());
         }
-        releaseSharedFile(r.cipherPath);
+        releaseSharedFile(r.cipherPath());
         nameManager.removeLongName(r);
-        directoryManager.invalidateDirIvCache(r.cipherPath);
+        directoryManager.invalidateDirIvCache(r.cipherPath());
     }
 
     /**
@@ -962,7 +962,7 @@ final class FileManager {
         PathResolver.Resolved from = pathResolver.resolveParent(plainFrom);
         CipherNode fromNode;
         try {
-            fromNode = store.stat(from.cipherPath);
+            fromNode = store.stat(from.cipherPath());
         } catch (NoSuchFileException e) {
             throw new NoSuchFileException(plainFrom);
         }
@@ -975,16 +975,16 @@ final class FileManager {
         }
         PathResolver.Resolved to = pathResolver.resolveParent(plainTo, true);
         String movedDirIV = null;
-        if (exists(to.cipherPath)) {
+        if (exists(to.cipherPath())) {
             if (!replaceExisting) {
                 throw new FileAlreadyExistsException(plainTo);
             }
-            if (store.stat(to.cipherPath).isDirectory()) {
+            if (store.stat(to.cipherPath()).isDirectory()) {
                 // A directory can only be replaced by another directory, and
                 // only when it is empty apart from its gocryptfs.diriv. Verify
                 // both before removing anything so a rejected replace leaves the
                 // target intact.
-                verifyEmptyDir(to.cipherPath);
+                verifyEmptyDir(to.cipherPath());
                 if (!fromNode.isDirectory()) {
                     throw new FileSystemException(plainFrom, plainTo,
                             "cannot replace a directory with a non-directory");
@@ -995,7 +995,7 @@ final class FileManager {
                 // the store to replace atomically. The diriv is moved back if
                 // the rename fails.
                 if (directoryManager.usesDirIV()) {
-                    movedDirIV = directoryManager.moveDirIVAside(to.cipherPath);
+                    movedDirIV = directoryManager.moveDirIVAside(to.cipherPath());
                 }
             }
             // A non-directory target is replaced atomically by the rename below.
@@ -1003,13 +1003,13 @@ final class FileManager {
         boolean wroteName = false;
         try {
             wroteName = nameManager.prepareLongName(to);
-            store.rename(from.cipherPath, to.cipherPath, replaceExisting);
+            store.rename(from.cipherPath(), to.cipherPath(), replaceExisting);
         } catch (IOException | RuntimeException e) {
             // Restore the target's diriv so a failed directory replace leaves
             // the target directory intact.
             if (movedDirIV != null) {
                 try {
-                    directoryManager.restoreDirIV(to.cipherPath, movedDirIV);
+                    directoryManager.restoreDirIV(to.cipherPath(), movedDirIV);
                 } catch (IOException restore) {
                     e.addSuppressed(restore);
                 }
@@ -1030,9 +1030,9 @@ final class FileManager {
             }
         }
         nameManager.removeLongName(from);
-        moveSharedFile(from.cipherPath, to.cipherPath);
-        directoryManager.invalidateDirIvCache(from.cipherPath);
-        directoryManager.invalidateDirIvCache(to.cipherPath);
+        moveSharedFile(from.cipherPath(), to.cipherPath());
+        directoryManager.invalidateDirIvCache(from.cipherPath());
+        directoryManager.invalidateDirIvCache(to.cipherPath());
     }
 
     // ------------------------------------------------------------------
@@ -1068,7 +1068,7 @@ final class FileManager {
     String readSymlinkTarget(String plainPath) throws IOException {
         Objects.requireNonNull(plainPath, "plainPath");
         PathResolver.Resolved r = pathResolver.resolve(plainPath);
-        return readSymlink(r.cipherPath);
+        return readSymlink(r.cipherPath());
     }
 
     /**
@@ -1087,7 +1087,7 @@ final class FileManager {
         ContentEnc enc = contentEncFactory.get();
         try {
             String cTarget = encryptSymlinkTarget(target, enc, nameTransform, plaintextNames);
-            store.createSymlink(r.cipherPath, cTarget);
+            store.createSymlink(r.cipherPath(), cTarget);
         } catch (IOException | RuntimeException e) {
             if (wroteName) {
                 nameManager.removeLongName(r);

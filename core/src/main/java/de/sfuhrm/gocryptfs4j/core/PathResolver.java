@@ -23,15 +23,15 @@ final class PathResolver {
     /** Result of resolving a plaintext path to a cipher-side path. */
     static final class Resolved {
         /** The ciphertext-side name. */
-        public final String cipherPath;
+        private final String cipherPath;
         /** The ciphertext-side parent name, or {@code null} for the root. */
-        public final @Nullable String cipherParent;
+        private final @Nullable String cipherParent;
         /** The 16-byte IV of the parent directory. */
-        public final byte[] parentDirIV;
+        private final byte[] parentDirIV;
         /** The ciphertext (encrypted) name, or {@code null} for the root. */
-        public final @Nullable String cipherName;
+        private final @Nullable String cipherName;
         /** The plaintext (decrypted) name. */
-        public final String plainName;
+        private final String plainName;
 
         /**
          * Creates a resolution result.
@@ -49,6 +49,31 @@ final class PathResolver {
             this.parentDirIV = parentDirIV;
             this.cipherName = cipherName;
             this.plainName = plainName;
+        }
+
+        /** @return the ciphertext-side name */
+        String cipherPath() {
+            return cipherPath;
+        }
+
+        /** @return the ciphertext-side parent name, or {@code null} for the root */
+        @Nullable String cipherParent() {
+            return cipherParent;
+        }
+
+        /** @return the 16-byte IV of the parent directory */
+        byte[] parentDirIV() {
+            return parentDirIV;
+        }
+
+        /** @return the ciphertext (encrypted) name, or {@code null} for the root */
+        @Nullable String cipherName() {
+            return cipherName;
+        }
+
+        /** @return the plaintext (decrypted) name */
+        String plainName() {
+            return plainName;
         }
     }
 

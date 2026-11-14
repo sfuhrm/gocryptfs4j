@@ -196,14 +196,14 @@ final class NameManager {
      * @throws IOException on filesystem errors
      */
     boolean prepareLongName(PathResolver.Resolved r) throws IOException {
-        String cipherName = r.cipherName;
-        String cipherParent = r.cipherParent;
+        String cipherName = r.cipherName();
+        String cipherParent = r.cipherParent();
         if (plaintextNames || cipherName == null || cipherParent == null
                 || !nameTransform.isLongContent(cipherName)) {
             return false;
         }
         String nameFile = PathResolver.join(cipherParent, cipherName + Constants.LONG_NAME_SUFFIX);
-        byte[] fullCipher = nameTransform.encryptName(r.plainName, r.parentDirIV)
+        byte[] fullCipher = nameTransform.encryptName(r.plainName(), r.parentDirIV())
                 .getBytes(StandardCharsets.UTF_8);
         try {
             store.writeSmall(nameFile, fullCipher, false);
@@ -222,8 +222,8 @@ final class NameManager {
      * @throws IOException on filesystem errors
      */
     void removeLongName(PathResolver.Resolved r) throws IOException {
-        String cipherName = r.cipherName;
-        String cipherParent = r.cipherParent;
+        String cipherName = r.cipherName();
+        String cipherParent = r.cipherParent();
         if (plaintextNames || cipherName == null || cipherParent == null
                 || !nameTransform.isLongContent(cipherName)) {
             return;

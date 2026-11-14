@@ -1742,8 +1742,8 @@ public final class GocryptFs implements AutoCloseable {
         try {
             ensureOpen();
             PathResolver.Resolved r = pathResolver.resolve(plainDir);
-            byte[] iv = directoryManager.readDirIV(r.cipherPath);
-            List<DirEntry> entries = directoryManager.listCipherDir(r.cipherPath, iv, listener);
+            byte[] iv = directoryManager.readDirIV(r.cipherPath());
+            List<DirEntry> entries = directoryManager.listCipherDir(r.cipherPath(), iv, listener);
             entries.sort(Comparator.comparing(DirEntry::plainName));
             return entries;
         } finally {
@@ -1774,7 +1774,7 @@ public final class GocryptFs implements AutoCloseable {
         try {
             ensureOpen();
             PathResolver.Resolved r = pathResolver.resolve(plainDir);
-            return directoryManager.snapshotDirectory(r.cipherPath);
+            return directoryManager.snapshotDirectory(r.cipherPath());
         } finally {
             readLock.unlock();
         }

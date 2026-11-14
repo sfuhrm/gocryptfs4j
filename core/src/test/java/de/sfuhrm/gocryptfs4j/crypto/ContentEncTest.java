@@ -23,6 +23,21 @@ class ContentEncTest {
     }
 
     @Test
+    void accessorsExposeBlockGeometry() {
+        int ivLen = Constants.DEFAULT_IV_BITS / 8;
+        ContentEnc enc = new ContentEnc(Keys.randomBytes(Constants.KEY_LEN), ivLen);
+
+        assertEquals(Constants.DEFAULT_PLAIN_BS, enc.plainBS());
+        assertEquals(Constants.DEFAULT_PLAIN_BS + ivLen + Constants.AUTH_TAG_LEN, enc.cipherBS());
+        assertEquals(ivLen, enc.ivLen());
+
+        ContentGeometry geometry = enc.geometry();
+        assertEquals(Constants.DEFAULT_PLAIN_BS, geometry.plainBS());
+        assertEquals(enc.cipherBS(), geometry.cipherBS());
+        assertEquals(ivLen, geometry.ivLen());
+    }
+
+    @Test
     void encryptDecryptBlockRoundTrip() throws GeneralSecurityException {
         ContentEnc enc = newEnc();
         byte[] fileId = Keys.randomBytes(Constants.HEADER_ID_LEN);
@@ -30,7 +45,7 @@ class ContentEncTest {
         Arrays.fill(data, (byte) 0x5a);
 
         byte[] ct = enc.encryptBlock(data, 0, fileId);
-        assertEquals(data.length + enc.ivLen + Constants.AUTH_TAG_LEN, ct.length);
+        assertEquals(data.length + enc.ivLen() + Constants.AUTH_TAG_LEN, ct.length);
 
         assertArrayEquals(data, enc.decryptBlock(ct, 0, fileId));
     }
@@ -40,7 +55,7 @@ class ContentEncTest {
         ContentEnc enc = new ContentEnc(
                 new XChaCha20Poly1305(Keys.randomBytes(Constants.KEY_LEN)),
                 Constants.XCHACHA_NONCE_LEN);
-        assertEquals(Constants.XCHACHA_NONCE_LEN, enc.ivLen);
+        assertEquals(Constants.XCHACHA_NONCE_LEN, enc.ivLen());
         assertEquals(Constants.XCHACHA_NONCE_LEN + Constants.AUTH_TAG_LEN, enc.blockOverhead());
 
         byte[] fileId = Keys.randomBytes(Constants.HEADER_ID_LEN);
@@ -48,7 +63,7 @@ class ContentEncTest {
         Arrays.fill(data, (byte) 0x6b);
 
         byte[] ct = enc.encryptBlock(data, 0, fileId);
-        assertEquals(data.length + enc.ivLen + Constants.AUTH_TAG_LEN, ct.length);
+        assertEquals(data.length + enc.ivLen() + Constants.AUTH_TAG_LEN, ct.length);
         assertArrayEquals(data, enc.decryptBlock(ct, 0, fileId));
     }
 
@@ -88,30 +103,30 @@ class ContentEncTest {
     @Test
     void allZeroBlockDecryptsToZeroPlaintext() throws GeneralSecurityException {
         ContentEnc enc = newEnc();
-        byte[] zero = new byte[(int) enc.cipherBS];
+        byte[] zero = new byte[(int) enc.cipherBS()];
         byte[] pt = enc.decryptBlock(zero, 7, Keys.randomBytes(Constants.HEADER_ID_LEN));
-        assertEquals((int) enc.plainBS, pt.length);
-        assertArrayEquals(new byte[(int) enc.plainBS], pt);
+        assertEquals((int) enc.plainBS(), pt.length);
+        assertArrayEquals(new byte[(int) enc.plainBS()], pt);
     }
 
     @Test
     void encryptRejectsWrongNonceLength() {
         ContentEnc enc = newEnc();
         assertThrows(IllegalArgumentException.class,
-                () -> enc.encryptBlock(new byte[]{1}, 0, null, new byte[enc.ivLen - 1]));
+                () -> enc.encryptBlock(new byte[]{1}, 0, null, new byte[enc.ivLen() - 1]));
     }
 
     @Test
     void decryptRejectsTooShortBlock() {
         ContentEnc enc = newEnc();
         assertThrows(IllegalArgumentException.class,
-                () -> enc.decryptBlock(new byte[enc.ivLen - 1], 0, null));
+                () -> enc.decryptBlock(new byte[enc.ivLen() - 1], 0, null));
     }
 
     @Test
     void decryptRejectsAllZeroNonce() {
         ContentEnc enc = newEnc();
-        byte[] ct = new byte[enc.ivLen + Constants.AUTH_TAG_LEN];
+        byte[] ct = new byte[enc.ivLen() + Constants.AUTH_TAG_LEN];
         assertThrows(IllegalArgumentException.class,
                 () -> enc.decryptBlock(ct, 0, null));
     }
@@ -137,19 +152,19 @@ class ContentEncTest {
         ContentEnc enc = newEnc();
         byte[] fileId = Keys.randomBytes(Constants.HEADER_ID_LEN);
         int blockCount = 3;
-        byte[] data = new byte[(int) (enc.plainBS * blockCount + 500)];
+        byte[] data = new byte[(int) (enc.plainBS() * blockCount + 500)];
         for (int i = 0; i < data.length; i++) {
             data[i] = (byte) (i * 7);
         }
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         for (int b = 0; b < blockCount; b++) {
-            byte[] block = new byte[(int) enc.plainBS];
-            System.arraycopy(data, b * (int) enc.plainBS, block, 0, (int) enc.plainBS);
+            byte[] block = new byte[(int) enc.plainBS()];
+            System.arraycopy(data, b * (int) enc.plainBS(), block, 0, (int) enc.plainBS());
             byte[] cipher = enc.encryptBlock(block, b, fileId);
             out.write(cipher, 0, cipher.length);
         }
-        byte[] last = Arrays.copyOfRange(data, blockCount * (int) enc.plainBS, data.length);
+        byte[] last = Arrays.copyOfRange(data, blockCount * (int) enc.plainBS(), data.length);
         byte[] lastCipher = enc.encryptBlock(last, blockCount, fileId);
         out.write(lastCipher, 0, lastCipher.length);
 
@@ -161,13 +176,13 @@ class ContentEncTest {
         for (boolean withFileId : new boolean[]{false, true}) {
             ContentEnc enc = newEnc();
             byte[] fileId = withFileId ? Keys.randomBytes(Constants.HEADER_ID_LEN) : null;
-            int full = (int) enc.plainBS;
+            int full = (int) enc.plainBS();
             byte[] data = new byte[full * 2 + 500];
             for (int i = 0; i < data.length; i++) {
                 data[i] = (byte) (i * 13);
             }
 
-            int overhead = enc.ivLen + Constants.AUTH_TAG_LEN;
+            int overhead = enc.ivLen() + Constants.AUTH_TAG_LEN;
             byte[] cipher = new byte[data.length + 3 * overhead];
             int cipherLen = enc.encryptBlocks(data, 0, data.length, 0, fileId, cipher, 0);
 
@@ -183,7 +198,7 @@ class ContentEncTest {
     void bulkDecryptAcceptsPerBlockCiphertext() throws GeneralSecurityException {
         ContentEnc enc = newEnc();
         byte[] fileId = Keys.randomBytes(Constants.HEADER_ID_LEN);
-        int full = (int) enc.plainBS;
+        int full = (int) enc.plainBS();
         byte[] data = new byte[full + 137];
         for (int i = 0; i < data.length; i++) {
             data[i] = (byte) (i * 29);
@@ -207,11 +222,11 @@ class ContentEncTest {
     void bulkDecryptTreatsAllZeroBlockAsHole() throws GeneralSecurityException {
         ContentEnc enc = newEnc();
         byte[] fileId = Keys.randomBytes(Constants.HEADER_ID_LEN);
-        byte[] cipher = new byte[(int) (2 * enc.cipherBS)];
-        byte[] real = enc.encryptBlock(new byte[(int) enc.plainBS], 0, fileId);
+        byte[] cipher = new byte[(int) (2 * enc.cipherBS())];
+        byte[] real = enc.encryptBlock(new byte[(int) enc.plainBS()], 0, fileId);
         System.arraycopy(real, 0, cipher, 0, real.length);
 
-        byte[] plain = new byte[(int) (2 * enc.plainBS)];
+        byte[] plain = new byte[(int) (2 * enc.plainBS())];
         int n = enc.decryptBlocks(cipher, 0, cipher.length, 0, fileId, plain, 0);
 
         assertEquals(plain.length, n);
@@ -222,11 +237,11 @@ class ContentEncTest {
     void bulkMethodsHonorOutputOffsets() throws GeneralSecurityException {
         ContentEnc enc = newEnc();
         byte[] fileId = Keys.randomBytes(Constants.HEADER_ID_LEN);
-        byte[] data = new byte[(int) enc.plainBS + 64];
+        byte[] data = new byte[(int) enc.plainBS() + 64];
         for (int i = 0; i < data.length; i++) {
             data[i] = (byte) (i * 17);
         }
-        int overhead = enc.ivLen + Constants.AUTH_TAG_LEN;
+        int overhead = enc.ivLen() + Constants.AUTH_TAG_LEN;
         int pad = 11;
 
         byte[] cipher = new byte[pad + data.length + 2 * overhead];
@@ -247,7 +262,7 @@ class ContentEncTest {
         ContentEnc enc = newEnc();
         assertEquals(0, enc.plainSizeToCipherSize(0));
         assertEquals(Constants.HEADER_LEN + enc.blockOverhead() + 1, enc.plainSizeToCipherSize(1));
-        assertEquals(Constants.HEADER_LEN + enc.cipherBS, enc.plainSizeToCipherSize(enc.plainBS));
+        assertEquals(Constants.HEADER_LEN + enc.cipherBS(), enc.plainSizeToCipherSize(enc.plainBS()));
     }
 
     @Test
@@ -256,7 +271,7 @@ class ContentEncTest {
         assertEquals(0, enc.cipherSizeToPlainSize(0));
         assertEquals(0, enc.cipherSizeToPlainSize(Constants.HEADER_LEN));
         assertEquals(0, enc.cipherSizeToPlainSize(Constants.HEADER_LEN - 1));
-        assertEquals(enc.plainBS, enc.cipherSizeToPlainSize(Constants.HEADER_LEN + enc.cipherBS));
+        assertEquals(enc.plainBS(), enc.cipherSizeToPlainSize(Constants.HEADER_LEN + enc.cipherBS()));
         assertEquals(1, enc.cipherSizeToPlainSize(Constants.HEADER_LEN + enc.blockOverhead() + 1));
     }
 
@@ -273,17 +288,17 @@ class ContentEncTest {
     void offsetTranslations() {
         ContentEnc enc = newEnc();
         assertEquals(0, enc.plainOffToBlockNo(0));
-        assertEquals(0, enc.plainOffToBlockNo(enc.plainBS - 1));
-        assertEquals(1, enc.plainOffToBlockNo(enc.plainBS));
+        assertEquals(0, enc.plainOffToBlockNo(enc.plainBS() - 1));
+        assertEquals(1, enc.plainOffToBlockNo(enc.plainBS()));
 
         assertEquals(Constants.HEADER_LEN, enc.blockNoToCipherOff(0));
-        assertEquals(Constants.HEADER_LEN + enc.cipherBS, enc.blockNoToCipherOff(1));
+        assertEquals(Constants.HEADER_LEN + enc.cipherBS(), enc.blockNoToCipherOff(1));
 
         assertEquals(0, enc.blockNoToPlainOff(0));
-        assertEquals(enc.plainBS, enc.blockNoToPlainOff(1));
+        assertEquals(enc.plainBS(), enc.blockNoToPlainOff(1));
 
         assertEquals(0, enc.cipherOffToBlockNo(Constants.HEADER_LEN));
-        assertEquals(1, enc.cipherOffToBlockNo(Constants.HEADER_LEN + enc.cipherBS));
+        assertEquals(1, enc.cipherOffToBlockNo(Constants.HEADER_LEN + enc.cipherBS()));
     }
 
     @Test

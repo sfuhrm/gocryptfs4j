@@ -243,7 +243,7 @@ class FileManagerTest {
 
         assertEquals("/target", h.fileManager.readSymlinkTarget("/link"));
 
-        String cipherPath = h.pathResolver.resolve("/link").cipherPath;
+        String cipherPath = h.pathResolver.resolve("/link").cipherPath();
         assertNotEquals("/target", h.store.readSymlink(cipherPath),
                 "the stored symlink target must be encrypted");
     }
@@ -255,14 +255,14 @@ class FileManagerTest {
 
         assertEquals("/target", h.fileManager.readSymlinkTarget("/link"));
 
-        String cipherPath = h.pathResolver.resolve("/link").cipherPath;
+        String cipherPath = h.pathResolver.resolve("/link").cipherPath();
         assertEquals("/target", h.store.readSymlink(cipherPath));
     }
 
     @Test
     void readSymlinkTargetWrapsBadBase64AsIoException() throws IOException {
         ManagerHarness h = ManagerHarness.encrypted();
-        String cipherPath = h.pathResolver.resolve("/link").cipherPath;
+        String cipherPath = h.pathResolver.resolve("/link").cipherPath();
         h.store.createSymlink(cipherPath, "!!!not-valid-base64!!!");
 
         assertThrows(IOException.class, () -> h.fileManager.readSymlinkTarget("/link"));
@@ -271,8 +271,8 @@ class FileManagerTest {
     @Test
     void readSymlinkTargetWrapsShortCiphertextAsIoException() throws IOException {
         ManagerHarness h = ManagerHarness.encrypted();
-        String cipherPath = h.pathResolver.resolve("/link").cipherPath;
-        byte[] shortCipher = new byte[h.contentEnc.ivLen - 1];
+        String cipherPath = h.pathResolver.resolve("/link").cipherPath();
+        byte[] shortCipher = new byte[h.contentEnc.ivLen() - 1];
         h.store.createSymlink(cipherPath, Base64.getUrlEncoder().encodeToString(shortCipher));
 
         assertThrows(IOException.class, () -> h.fileManager.readSymlinkTarget("/link"));
@@ -284,7 +284,7 @@ class FileManagerTest {
         h.fileManager.createFile("/f.txt");
 
         int threads = 8;
-        byte[] payload = new byte[(int) h.contentEnc.plainBS];
+        byte[] payload = new byte[(int) h.contentEnc.plainBS()];
         Arrays.fill(payload, (byte) 0x5a);
 
         ExecutorService pool = Executors.newFixedThreadPool(threads);
@@ -292,7 +292,7 @@ class FileManagerTest {
         List<Future<?>> futures = new ArrayList<>();
         try {
             for (int i = 0; i < threads; i++) {
-                final int offset = i * (int) h.contentEnc.plainBS;
+                final int offset = i * (int) h.contentEnc.plainBS();
                 futures.add(pool.submit(() -> {
                     start.await();
                     h.fileManager.write("/f.txt", offset, payload);
@@ -317,7 +317,7 @@ class FileManagerTest {
     void openHandlesShareOneCipherFile() throws IOException {
         ManagerHarness h = ManagerHarness.encrypted();
         h.fileManager.createFile("/f.txt");
-        int block = (int) h.contentEnc.plainBS;
+        int block = (int) h.contentEnc.plainBS();
 
         byte[] first = new byte[block];
         Arrays.fill(first, (byte) 0x41);
@@ -345,7 +345,7 @@ class FileManagerTest {
     void concurrentChannelsOnSameBlockDoNotLoseUpdates() throws IOException {
         ManagerHarness h = ManagerHarness.encrypted();
         h.fileManager.createFile("/f.txt");
-        int block = (int) h.contentEnc.plainBS;
+        int block = (int) h.contentEnc.plainBS();
 
         byte[] initial = new byte[block];
         Arrays.fill(initial, (byte) 0x11);
@@ -409,7 +409,7 @@ class FileManagerTest {
         h.fileManager.createFile("/f.txt");
         byte[] data = "hello".getBytes(StandardCharsets.UTF_8);
         h.fileManager.write("/f.txt", 0, data);
-        String cipherPath = h.pathResolver.resolve("/f.txt").cipherPath;
+        String cipherPath = h.pathResolver.resolve("/f.txt").cipherPath();
 
         try (SharedCipherFile reader = h.fileManager.openCipherFile("/f.txt", false)) {
             SharedCipherFile.Entry entry =
@@ -430,7 +430,7 @@ class FileManagerTest {
     void sharedFilesEntryRemovedOnLastClose() throws Exception {
         ManagerHarness h = ManagerHarness.encrypted();
         h.fileManager.createFile("/f.txt");
-        String cipherPath = h.pathResolver.resolve("/f.txt").cipherPath;
+        String cipherPath = h.pathResolver.resolve("/f.txt").cipherPath();
 
         try (SharedCipherFile cf = h.fileManager.openCipherFile("/f.txt", true)) {
             assertTrue(sharedFiles(h).containsKey(cipherPath));
@@ -443,7 +443,7 @@ class FileManagerTest {
     void sharedFilesEntryRemovedOnDelete() throws Exception {
         ManagerHarness h = ManagerHarness.encrypted();
         h.fileManager.createFile("/f.txt");
-        String cipherPath = h.pathResolver.resolve("/f.txt").cipherPath;
+        String cipherPath = h.pathResolver.resolve("/f.txt").cipherPath();
 
         try (SharedCipherFile cf = h.fileManager.openCipherFile("/f.txt", true)) {
             assertTrue(sharedFiles(h).containsKey(cipherPath));
@@ -459,8 +459,8 @@ class FileManagerTest {
     void sharedFilesEntryMovedOnRenameAndPrunedOnClose() throws Exception {
         ManagerHarness h = ManagerHarness.encrypted();
         h.fileManager.createFile("/a.txt");
-        String from = h.pathResolver.resolve("/a.txt").cipherPath;
-        String to = h.pathResolver.resolve("/b.txt").cipherPath;
+        String from = h.pathResolver.resolve("/a.txt").cipherPath();
+        String to = h.pathResolver.resolve("/b.txt").cipherPath();
 
         try (SharedCipherFile cf = h.fileManager.openCipherFile("/a.txt", true)) {
             assertTrue(sharedFiles(h).containsKey(from));
@@ -478,7 +478,7 @@ class FileManagerTest {
     @Test
     void failedOpenDoesNotRetainSharedEntry() throws Exception {
         ManagerHarness h = ManagerHarness.encrypted();
-        String cipherPath = h.pathResolver.resolve("/missing.txt").cipherPath;
+        String cipherPath = h.pathResolver.resolve("/missing.txt").cipherPath();
 
         assertThrows(NoSuchFileException.class,
                 () -> h.fileManager.openCipherFile("/missing.txt", false));

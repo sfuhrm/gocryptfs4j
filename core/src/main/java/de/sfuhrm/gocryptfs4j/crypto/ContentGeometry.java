@@ -12,11 +12,11 @@ package de.sfuhrm.gocryptfs4j.crypto;
 public final class ContentGeometry {
 
     /** Plaintext block size. */
-    public final long plainBS;
+    private final long plainBS;
     /** Ciphertext block size (plainBS + ivLen + tag). */
-    public final long cipherBS;
+    private final long cipherBS;
     /** Nonce length in bytes. */
-    public final int ivLen;
+    private final int ivLen;
 
     /**
      * Creates the geometry for a content cipher.
@@ -35,6 +35,33 @@ public final class ContentGeometry {
         this.ivLen = ivLen;
         this.plainBS = plainBS;
         this.cipherBS = plainBS + ivLen + Constants.AUTH_TAG_LEN;
+    }
+
+    /**
+     * Returns the plaintext block size in bytes.
+     *
+     * @return the plaintext block size
+     */
+    public long plainBS() {
+        return plainBS;
+    }
+
+    /**
+     * Returns the ciphertext block size in bytes.
+     *
+     * @return the ciphertext block size (plainBS + nonce length + tag)
+     */
+    public long cipherBS() {
+        return cipherBS;
+    }
+
+    /**
+     * Returns the nonce length in bytes.
+     *
+     * @return the nonce length
+     */
+    public int ivLen() {
+        return ivLen;
     }
 
     /**

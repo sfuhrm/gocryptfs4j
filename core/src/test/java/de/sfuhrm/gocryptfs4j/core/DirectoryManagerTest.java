@@ -134,7 +134,7 @@ class DirectoryManagerTest {
     void restoreDirIVMovesAsideBackWhenNoNewDirIVAppeared() throws IOException {
         ManagerHarness h = ManagerHarness.encrypted();
         h.fileManager.mkdir("/dir");
-        String cipherDir = h.pathResolver.resolve("/dir").cipherPath;
+        String cipherDir = h.pathResolver.resolve("/dir").cipherPath();
         String dirIV = PathResolver.join(cipherDir, Constants.DIR_IV_FILENAME);
         byte[] before = h.store.readSmall(dirIV, Constants.DIR_IV_LEN);
 
@@ -152,7 +152,7 @@ class DirectoryManagerTest {
     void restoreDirIVKeepsExternallyCreatedDirIV() throws IOException {
         ManagerHarness h = ManagerHarness.encrypted();
         h.fileManager.mkdir("/dir");
-        String cipherDir = h.pathResolver.resolve("/dir").cipherPath;
+        String cipherDir = h.pathResolver.resolve("/dir").cipherPath();
         String dirIV = PathResolver.join(cipherDir, Constants.DIR_IV_FILENAME);
         // Populate the cache with the old IV before moving it aside.
         h.directoryManager.readDirIV(cipherDir);
@@ -295,7 +295,7 @@ class DirectoryManagerTest {
         h.fileManager.mkdir("/dir");
         h.fileManager.createFile("/dir/gocryptfs.diriv");
 
-        String cipherPath = h.pathResolver.resolve("/dir").cipherPath;
+        String cipherPath = h.pathResolver.resolve("/dir").cipherPath();
         byte[] iv = h.directoryManager.readDirIV(cipherPath);
         List<DirEntry> entries = h.directoryManager.listCipherDir(cipherPath, iv);
 
@@ -331,7 +331,7 @@ class DirectoryManagerTest {
         h.store.writeSmall(PathResolver.join("dir", ".gocryptfs-abc.tmp"),
                 new byte[]{1}, false);
 
-        String cipherPath = h.pathResolver.resolve("/dir").cipherPath;
+        String cipherPath = h.pathResolver.resolve("/dir").cipherPath();
         byte[] iv = h.directoryManager.readDirIV(cipherPath);
         List<DirEntry> entries = h.directoryManager.listCipherDir(cipherPath, iv);
 
@@ -345,7 +345,7 @@ class DirectoryManagerTest {
         h.fileManager.mkdir("/dir");
         h.fileManager.createFile("/dir/gocryptfs.diriv");
 
-        String cipherPath = h.pathResolver.resolve("/dir").cipherPath;
+        String cipherPath = h.pathResolver.resolve("/dir").cipherPath();
         byte[] iv = h.directoryManager.readDirIV(cipherPath);
         List<DirEntry> entries = h.directoryManager.listCipherDir(cipherPath, iv);
 
@@ -381,8 +381,8 @@ class DirectoryManagerTest {
         h.fileManager.createFile("/" + nameA);
         h.fileManager.createFile("/" + nameB);
 
-        String cipherA = h.pathResolver.resolve("/" + nameA).cipherName;
-        String cipherB = h.pathResolver.resolve("/" + nameB).cipherName;
+        String cipherA = h.pathResolver.resolve("/" + nameA).cipherName();
+        String cipherB = h.pathResolver.resolve("/" + nameB).cipherName();
         String fileA = PathResolver.join(h.store.root(), cipherA + Constants.LONG_NAME_SUFFIX);
         String fileB = PathResolver.join(h.store.root(), cipherB + Constants.LONG_NAME_SUFFIX);
 

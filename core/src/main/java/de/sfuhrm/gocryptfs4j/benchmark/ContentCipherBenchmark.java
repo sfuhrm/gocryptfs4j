@@ -240,7 +240,7 @@ public final class ContentCipherBenchmark {
      * @return the throughput in MiB/s
      */
     private static double run(ContentEnc enc, byte[] fileId, long nanos, boolean encrypt) {
-        byte[] plain = new byte[(int) enc.plainBS];
+        byte[] plain = new byte[(int) enc.plainBS()];
         byte[] ciphertext = enc.encryptBlock(plain, 0, fileId);
 
         long bytes = 0;
@@ -257,7 +257,7 @@ public final class ContentCipherBenchmark {
                     throw new IllegalStateException("decryption failed", e);
                 }
             }
-            bytes += enc.plainBS;
+            bytes += enc.plainBS();
             blockNo++;
         }
 

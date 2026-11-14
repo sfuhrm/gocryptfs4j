@@ -715,12 +715,12 @@ class GocryptFsTest {
             fs.createFile("/d1/sub/f.txt");
             fs.write("/d1/sub/f.txt", 0, "deep".getBytes(StandardCharsets.UTF_8));
 
-            Path oldCipher = Paths.get(fs.resolve("/a.txt").cipherPath);
+            Path oldCipher = Paths.get(fs.resolve("/a.txt").cipherPath());
             fs.rename("/a.txt", "/d2/b.txt", false);
             assertFalse(Files.exists(oldCipher, LinkOption.NOFOLLOW_LINKS));
             assertEquals("data", new String(fs.readAll("/d2/b.txt"), StandardCharsets.UTF_8));
 
-            Path dirCipher = Paths.get(fs.resolve("/d1").cipherPath);
+            Path dirCipher = Paths.get(fs.resolve("/d1").cipherPath());
             fs.rename("/d1", "/d2/moved", false);
             assertFalse(Files.exists(dirCipher, LinkOption.NOFOLLOW_LINKS));
             assertEquals("deep", new String(
@@ -741,7 +741,7 @@ class GocryptFsTest {
         try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             fs.createFile("/" + longA);
             fs.mkdir("/dir");
-            Path oldCipher = Paths.get(fs.resolve("/" + longA).cipherPath);
+            Path oldCipher = Paths.get(fs.resolve("/" + longA).cipherPath());
             Path oldName = oldCipher.resolveSibling(oldCipher.getFileName() + ".name");
             assertTrue(Files.exists(oldName));
 
@@ -749,7 +749,7 @@ class GocryptFsTest {
 
             assertFalse(Files.exists(oldCipher, LinkOption.NOFOLLOW_LINKS));
             assertFalse(Files.exists(oldName), "old long-name file must be removed");
-            Path newCipher = Paths.get(fs.resolve("/dir/" + longB).cipherPath);
+            Path newCipher = Paths.get(fs.resolve("/dir/" + longB).cipherPath());
             assertTrue(Files.exists(newCipher));
             assertTrue(Files.exists(newCipher.resolveSibling(newCipher.getFileName() + ".name")));
             assertEquals(1, fs.list("/dir").size());
@@ -797,7 +797,7 @@ class GocryptFsTest {
             fs.mkdir("/dir");
             fs.createFile("/dir/keep.txt");
 
-            Path cipherPath = Paths.get(fs.resolve("/dir").cipherPath);
+            Path cipherPath = Paths.get(fs.resolve("/dir").cipherPath());
             Path dirIV = cipherPath.resolve("gocryptfs.diriv");
             assertTrue(Files.exists(dirIV), "a fresh directory has a gocryptfs.diriv");
 
@@ -823,7 +823,7 @@ class GocryptFsTest {
 
         try (GocryptFs fs = GocryptFs.create(store, "pw".toCharArray())) {
             fs.mkdir("/dir");
-            Path cipherPath = Paths.get(fs.resolve("/dir").cipherPath);
+            Path cipherPath = Paths.get(fs.resolve("/dir").cipherPath());
             Path dirIV = cipherPath.resolve("gocryptfs.diriv");
             byte[] before = Files.readAllBytes(dirIV);
 
@@ -849,7 +849,7 @@ class GocryptFsTest {
         Path dirCipher;
         try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             fs.mkdir("/dir");
-            dirCipher = Paths.get(fs.resolve("/dir").cipherPath);
+            dirCipher = Paths.get(fs.resolve("/dir").cipherPath());
         }
         // Simulate a directory left without its diriv (a crash between mkdir and
         // writeDirIV, or a store created by an older gocryptfs).
@@ -872,7 +872,7 @@ class GocryptFsTest {
             fs.mkdir("/dir");
             fs.createFile("/dir/gocryptfs.diriv");
 
-            Path cipherPath = Paths.get(fs.resolve("/dir").cipherPath);
+            Path cipherPath = Paths.get(fs.resolve("/dir").cipherPath());
             Path userDiriv = cipherPath.resolve("gocryptfs.diriv");
             assertTrue(Files.exists(userDiriv), "a user file may be named gocryptfs.diriv");
 
@@ -901,8 +901,8 @@ class GocryptFsTest {
             fs.mkdir("/" + name);
 
             PathResolver.Resolved r = fs.resolve("/" + name);
-            Path cipherPath = Paths.get(r.cipherPath);
-            Path nameFile = cipherPath.resolveSibling(r.cipherName + ".name");
+            Path cipherPath = Paths.get(r.cipherPath());
+            Path nameFile = cipherPath.resolveSibling(r.cipherName() + ".name");
             assertTrue(Files.exists(nameFile), "long directories use a .name support file");
 
             fs.delete("/" + name);
@@ -1261,7 +1261,7 @@ class GocryptFsTest {
             fs.mkdir("/src");
             fs.mkdir("/dst");
 
-            Path dstCipher = Paths.get(fs.resolve("/dst").cipherPath);
+            Path dstCipher = Paths.get(fs.resolve("/dst").cipherPath());
             Path dstDirIV = dstCipher.resolve("gocryptfs.diriv");
             byte[] before = Files.readAllBytes(dstDirIV);
 
@@ -1291,8 +1291,8 @@ class GocryptFsTest {
             assertThrows(IOException.class, () -> fs.createFile("/" + name));
 
             PathResolver.Resolved r = fs.resolve("/" + name);
-            Path cipherPath = Paths.get(r.cipherPath);
-            Path nameFile = cipherPath.resolveSibling(r.cipherName + ".name");
+            Path cipherPath = Paths.get(r.cipherPath());
+            Path nameFile = cipherPath.resolveSibling(r.cipherName() + ".name");
             assertFalse(Files.exists(nameFile, LinkOption.NOFOLLOW_LINKS),
                     "a failed createFile must not leave an orphan .name file");
         }

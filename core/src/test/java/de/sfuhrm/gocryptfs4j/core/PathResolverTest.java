@@ -51,10 +51,10 @@ class PathResolverTest {
 
         PathResolver.Resolved r = h.pathResolver.resolve("/");
 
-        assertEquals(h.store.root(), r.cipherPath);
-        assertNull(r.cipherParent);
-        assertNull(r.cipherName);
-        assertEquals("", r.plainName);
+        assertEquals(h.store.root(), r.cipherPath());
+        assertNull(r.cipherParent());
+        assertNull(r.cipherName());
+        assertEquals("", r.plainName());
     }
 
     @Test
@@ -66,9 +66,9 @@ class PathResolverTest {
         PathResolver.Resolved dir = h.pathResolver.resolve("/a");
         PathResolver.Resolved r = h.pathResolver.resolve("/a/b.txt");
 
-        assertEquals("b.txt", r.plainName);
-        assertEquals(dir.cipherPath, r.cipherParent);
-        assertTrue(!dir.cipherPath.equals("a"), "an encrypted name must not equal its plaintext");
+        assertEquals("b.txt", r.plainName());
+        assertEquals(dir.cipherPath(), r.cipherParent());
+        assertTrue(!dir.cipherPath().equals("a"), "an encrypted name must not equal its plaintext");
     }
 
     @Test
@@ -80,8 +80,8 @@ class PathResolverTest {
         PathResolver.Resolved dir = h.pathResolver.resolve("/a");
         PathResolver.Resolved r = h.pathResolver.resolveParent("/a/b.txt");
 
-        assertEquals("b.txt", r.plainName);
-        assertEquals(dir.cipherPath, r.cipherParent);
+        assertEquals("b.txt", r.plainName());
+        assertEquals(dir.cipherPath(), r.cipherParent());
     }
 
     @Test
@@ -125,7 +125,7 @@ class PathResolverTest {
 
         PathResolver.Resolved r = h.pathResolver.resolve("/sub/gocryptfs.conf");
 
-        assertEquals("gocryptfs.conf", r.plainName);
+        assertEquals("gocryptfs.conf", r.plainName());
     }
 
     @Test
@@ -134,8 +134,8 @@ class PathResolverTest {
 
         PathResolver.Resolved r = h.pathResolver.resolve("/gocryptfs.conf");
 
-        assertEquals("gocryptfs.conf", r.plainName);
-        assertTrue(!r.cipherName.equals("gocryptfs.conf"));
+        assertEquals("gocryptfs.conf", r.plainName());
+        assertTrue(!r.cipherName().equals("gocryptfs.conf"));
     }
 
     @Test
