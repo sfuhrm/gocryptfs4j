@@ -2,6 +2,7 @@ package de.sfuhrm.gocryptfs4j.nio;
 
 import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
 
+import de.sfuhrm.gocryptfs4j.core.BlockBufferedChannel;
 import de.sfuhrm.gocryptfs4j.core.GocryptFs;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -28,12 +29,14 @@ import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
 
 /** Unit tests for the {@link GocryptFsFileChannel} seekable channel. */
 class GocryptFsFileChannelTest {
@@ -156,6 +159,36 @@ class GocryptFsFileChannelTest {
             ch.write(ByteBuffer.wrap("x".getBytes(StandardCharsets.UTF_8)));
         }
         assertFalse(Files.exists(file, LinkOption.NOFOLLOW_LINKS));
+    }
+
+    @Test
+    void concurrentCloseRunsCloseActionExactlyOnce() throws Exception {
+        AtomicInteger runs = new AtomicInteger();
+        BlockBufferedChannel inner = mock(BlockBufferedChannel.class);
+        GocryptFsFileChannel ch = new GocryptFsFileChannel(inner, true, true, false,
+                GocryptFsFileChannel.Sync.NONE, runs::incrementAndGet);
+
+        int threads = 8;
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        CyclicBarrier start = new CyclicBarrier(threads);
+        List<Future<?>> futures = new ArrayList<>();
+        try {
+            for (int t = 0; t < threads; t++) {
+                futures.add(pool.submit(() -> {
+                    start.await();
+                    ch.close();
+                    return null;
+                }));
+            }
+            for (Future<?> f : futures) {
+                f.get();
+            }
+        } finally {
+            pool.shutdown();
+        }
+
+        assertEquals(1, runs.get(), "close action must run exactly once");
+        assertFalse(ch.isOpen());
     }
 
     @Test

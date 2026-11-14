@@ -20,6 +20,12 @@ import java.nio.channels.SeekableByteChannel;
  * forced to storage, according to the {@link Sync} mode, and an optional
  * {@link CloseAction} runs after the underlying file has been closed (used for
  * {@link java.nio.file.StandardOpenOption#DELETE_ON_CLOSE}).</p>
+ *
+ * <p>Like {@link java.nio.channels.FileChannel}, a single channel is safe for
+ * use by multiple concurrent threads. The {@link #open} state is guarded by the
+ * channel's monitor, so {@link #close()} runs the close action at most once,
+ * and reads, writes and seeks are serialized by the backing
+ * {@link BlockBufferedChannel}.</p>
  */
 final class GocryptFsFileChannel implements SeekableByteChannel {
 
@@ -207,17 +213,18 @@ final class GocryptFsFileChannel implements SeekableByteChannel {
      * @return {@code true} if the channel is open
      */
     @Override
-    public boolean isOpen() {
+    public synchronized boolean isOpen() {
         return open;
     }
 
     /**
-     * Closes the channel and, if present, runs the close action.
+     * Closes the channel and, if present, runs the close action exactly once,
+     * even when several threads close the channel concurrently.
      *
      * @throws IOException if closing the underlying file or the close action fails
      */
     @Override
-    public void close() throws IOException {
+    public synchronized void close() throws IOException {
         if (open) {
             open = false;
             try {

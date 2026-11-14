@@ -21,6 +21,11 @@ import java.util.concurrent.locks.Lock;
  *
  * <p>The channel owns its own reference to the {@link SharedCipherFile};
  * closing it releases that reference without closing the caller's handle.</p>
+ *
+ * <p>Like {@link java.nio.channels.FileChannel}, a single channel is safe for
+ * use by multiple concurrent threads: reads, writes, seeks, truncation and
+ * close are serialized on the channel's monitor, so the shared
+ * {@link #position} cannot be corrupted by interleaved access.</p>
  */
 public final class BlockBufferedChannel implements SeekableByteChannel {
 
@@ -95,7 +100,7 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
      * @throws IOException on filesystem or decryption errors
      */
     @Override
-    public int read(ByteBuffer dst) throws IOException {
+    public synchronized int read(ByteBuffer dst) throws IOException {
         if (!open) {
             throw new ClosedChannelException();
         }
@@ -127,7 +132,7 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
      * @throws IOException on filesystem or encryption errors
      */
     @Override
-    public int write(ByteBuffer src) throws IOException {
+    public synchronized int write(ByteBuffer src) throws IOException {
         if (!writable) {
             throw new NonWritableChannelException();
         }
@@ -170,7 +175,7 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
      * @throws ClosedChannelException if the channel is closed
      * @throws IOException on filesystem or encryption errors
      */
-    public int append(ByteBuffer src) throws IOException {
+    public synchronized int append(ByteBuffer src) throws IOException {
         if (!writable) {
             throw new NonWritableChannelException();
         }
@@ -202,7 +207,7 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
      * @return the current position
      */
     @Override
-    public long position() {
+    public synchronized long position() {
         return position;
     }
 
@@ -215,7 +220,7 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
      * @throws IllegalArgumentException if {@code newPosition} is negative
      */
     @Override
-    public SeekableByteChannel position(long newPosition) {
+    public synchronized SeekableByteChannel position(long newPosition) {
         if (newPosition < 0) {
             throw new IllegalArgumentException("negative position");
         }
@@ -253,7 +258,7 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
      * @throws IOException on filesystem or encryption errors
      */
     @Override
-    public SeekableByteChannel truncate(long size) throws IOException {
+    public synchronized SeekableByteChannel truncate(long size) throws IOException {
         if (!writable) {
             throw new NonWritableChannelException();
         }
@@ -285,7 +290,7 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
      * @return {@code true} if the channel is open
      */
     @Override
-    public boolean isOpen() {
+    public synchronized boolean isOpen() {
         return open;
     }
 
@@ -307,7 +312,7 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
      * @throws IOException on filesystem errors
      */
     @Override
-    public void close() throws IOException {
+    public synchronized void close() throws IOException {
         if (!open) {
             return;
         }
