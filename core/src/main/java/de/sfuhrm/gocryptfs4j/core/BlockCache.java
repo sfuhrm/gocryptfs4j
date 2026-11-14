@@ -187,10 +187,22 @@ final class BlockCache {
     private void load(long no) throws IOException {
         if (blockNo != no) {
             flush();
-            blockNo = no;
-            blockLen = file().readBlock(no, block, 0);
-            Arrays.fill(block, blockLen, blockSize(), (byte) 0);
+            blockNo = -1;
+            blockLen = 0;
             dirty = false;
+            int len;
+            try {
+                len = file().readBlock(no, block, 0);
+            } catch (IOException e) {
+                // readBlock may have released unauthenticated plaintext into the
+                // buffer before the tag was verified. Wipe it so it is never
+                // mistaken for valid data, and leave the cache invalidated.
+                Arrays.fill(block, (byte) 0);
+                throw e;
+            }
+            blockLen = len;
+            Arrays.fill(block, blockLen, blockSize(), (byte) 0);
+            blockNo = no;
         }
     }
 
