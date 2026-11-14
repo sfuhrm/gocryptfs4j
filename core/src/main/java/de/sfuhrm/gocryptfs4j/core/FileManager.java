@@ -4,6 +4,7 @@ import de.sfuhrm.gocryptfs4j.crypto.Constants;
 import de.sfuhrm.gocryptfs4j.crypto.ContentEnc;
 import de.sfuhrm.gocryptfs4j.crypto.ContentGeometry;
 import de.sfuhrm.gocryptfs4j.names.NameTransform;
+import de.sfuhrm.gocryptfs4j.store.CipherChannel;
 import de.sfuhrm.gocryptfs4j.store.CipherNode;
 import de.sfuhrm.gocryptfs4j.store.CipherStore;
 import org.jspecify.annotations.Nullable;
@@ -283,8 +284,8 @@ final class FileManager {
                         return entry;
                     }
                     if (entry.file == null) {
-                        entry.file = CipherFile.open(store.open(cipherFile, writable),
-                                contentEncFactory.get(), writable);
+                        entry.file = openBackingFile(store, cipherFile, writable,
+                                contentEncFactory);
                         entry.writable = writable;
                     } else if (writable && !entry.writable) {
                         // A read-only shared file is already open (other
@@ -293,8 +294,8 @@ final class FileManager {
                         // can be retired safely. Keep it open until the entry
                         // is fully released: a reader may already have
                         // captured it and would otherwise see a closed channel.
-                        CipherFile upgraded = CipherFile.open(store.open(cipherFile, true),
-                                contentEncFactory.get(), true);
+                        CipherFile upgraded = openBackingFile(store, cipherFile, true,
+                                contentEncFactory);
                         CipherFile old = entry.file;
                         entry.file = upgraded;
                         entry.writable = true;
@@ -323,6 +324,39 @@ final class FileManager {
             throw ioFailure[0];
         }
         return new SharedCipherFile(opened[0], syncPolicy);
+    }
+
+    /**
+     * Opens a backing {@link CipherFile} for {@code cipherFile}, opening the
+     * store channel first and only then deriving the content key, so a failure
+     * in either step does not leak the already-opened channel or an unwiped
+     * derived key. Package-private for testing.
+     *
+     * @param store             the ciphertext-side store
+     * @param cipherFile        the ciphertext file name
+     * @param writable          whether to open for writing
+     * @param contentEncFactory mints a fresh content-encryption helper
+     * @return the opened backing file
+     * @throws IOException on filesystem errors
+     */
+    static CipherFile openBackingFile(CipherStore store, String cipherFile, boolean writable,
+                                      Supplier<ContentEnc> contentEncFactory) throws IOException {
+        CipherChannel channel = store.open(cipherFile, writable);
+        ContentEnc enc = null;
+        try {
+            enc = contentEncFactory.get();
+            return CipherFile.open(channel, enc, writable);
+        } catch (RuntimeException | Error e) {
+            if (enc != null) {
+                enc.wipe();
+            }
+            try {
+                channel.close();
+            } catch (IOException closeFailure) {
+                e.addSuppressed(closeFailure);
+            }
+            throw e;
+        }
     }
 
     /**

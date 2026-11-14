@@ -1,6 +1,8 @@
 package de.sfuhrm.gocryptfs4j.core;
 
 import de.sfuhrm.gocryptfs4j.crypto.Constants;
+import de.sfuhrm.gocryptfs4j.store.CipherChannel;
+import de.sfuhrm.gocryptfs4j.store.CipherStore;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -27,6 +29,11 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * Tests {@link FileManager} in isolation: file content operations, create,
@@ -43,6 +50,19 @@ class FileManagerTest {
 
         assertEquals("f.txt", e.plainName());
         assertEquals(DirEntry.Kind.FILE, e.kind());
+    }
+
+    @Test
+    void failedKeyDerivationClosesStoreChannel() throws Exception {
+        CipherStore store = mock(CipherStore.class);
+        CipherChannel channel = mock(CipherChannel.class);
+        when(store.open(anyString(), anyBoolean())).thenReturn(channel);
+
+        assertThrows(IllegalStateException.class, () ->
+                FileManager.openBackingFile(store, "f", true, () -> {
+                    throw new IllegalStateException("derive failed");
+                }));
+        verify(channel).close();
     }
 
     @Test
