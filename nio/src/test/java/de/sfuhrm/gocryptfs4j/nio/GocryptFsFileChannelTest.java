@@ -19,6 +19,7 @@ import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.List;
@@ -329,6 +330,63 @@ class GocryptFsFileChannelTest {
         Set<String> actual = new HashSet<>();
         for (int i = 0; i < all.length; i += tokenLength) {
             actual.add(new String(all, i, tokenLength, StandardCharsets.UTF_8));
+        }
+        assertEquals(expected, actual);
+    }
+
+    @Test
+    void concurrentAppendersAcrossBlockBoundariesDoNotInterleave() throws Exception {
+        Path file = nio.getPath("/append-concurrent-large.txt");
+        Files.write(file, new byte[0]);
+
+        int threads = 4;
+        int rounds = 8;
+        int tokenLength = 4096 + 7;
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        CyclicBarrier start = new CyclicBarrier(threads);
+        List<Future<?>> futures = new ArrayList<>();
+        try {
+            for (int t = 0; t < threads; t++) {
+                final int thread = t;
+                futures.add(pool.submit(() -> {
+                    try (SeekableByteChannel ch = Files.newByteChannel(file,
+                            EnumSet.of(StandardOpenOption.WRITE, StandardOpenOption.APPEND))) {
+                        for (int r = 0; r < rounds; r++) {
+                            start.await();
+                            byte[] token = new byte[tokenLength];
+                            Arrays.fill(token, (byte) (1 + thread * rounds + r));
+                            ByteBuffer buf = ByteBuffer.wrap(token);
+                            while (buf.hasRemaining()) {
+                                ch.write(buf);
+                            }
+                        }
+                    }
+                    return null;
+                }));
+            }
+            for (Future<?> f : futures) {
+                f.get();
+            }
+        } finally {
+            pool.shutdown();
+        }
+
+        byte[] all = Files.readAllBytes(file);
+        assertEquals(threads * rounds * tokenLength, all.length);
+        Set<Integer> expected = new HashSet<>();
+        for (int t = 0; t < threads; t++) {
+            for (int r = 0; r < rounds; r++) {
+                expected.add(1 + t * rounds + r);
+            }
+        }
+        Set<Integer> actual = new HashSet<>();
+        for (int i = 0; i < all.length; i += tokenLength) {
+            int value = all[i] & 0xff;
+            for (int j = 1; j < tokenLength; j++) {
+                assertEquals(value, all[i + j] & 0xff,
+                        "appended token must not interleave with another");
+            }
+            actual.add(value);
         }
         assertEquals(expected, actual);
     }

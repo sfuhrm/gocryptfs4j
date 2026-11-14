@@ -159,7 +159,10 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
      *
      * <p>The size lookup, write and flush are serialized on the shared append
      * monitor, so concurrent appenders on the same file cannot both observe the
-     * same end of file and overwrite each other.</p>
+     * same end of file and overwrite each other. The whole source buffer is
+     * drained under that monitor: {@link #write(ByteBuffer)} only fills up to
+     * the current block boundary, so a buffer spanning blocks must not return
+     * early and let another appender slip in between two of its blocks.</p>
      *
      * @param src the source buffer
      * @return the number of bytes written
@@ -181,9 +184,12 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
         try {
             synchronized (file.appendLock()) {
                 position(file.effectiveSize());
-                int n = write(src);
+                int total = 0;
+                while (src.hasRemaining()) {
+                    total += write(src);
+                }
                 flush();
-                return n;
+                return total;
             }
         } finally {
             SharedCipherFile.releaseChannelIo(ioLock);

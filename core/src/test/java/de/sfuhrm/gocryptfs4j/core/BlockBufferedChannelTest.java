@@ -61,6 +61,22 @@ class BlockBufferedChannelTest {
     }
 
     @Test
+    void appendDrainsWholeBufferAcrossBlockBoundaries() throws IOException {
+        ContentEnc enc = enc();
+        byte[] data = new byte[(int) (enc.plainBS() * 2 + 3)];
+        for (int i = 0; i < data.length; i++) {
+            data[i] = (byte) (i * 29);
+        }
+
+        try (BlockBufferedChannel ch = openChannel(newFile(), enc, true)) {
+            ByteBuffer buf = ByteBuffer.wrap(data);
+            assertEquals(data.length, ch.append(buf));
+            assertEquals(0, buf.remaining(), "append must drain the whole buffer");
+            assertArrayEquals(data, readAll(ch));
+        }
+    }
+
+    @Test
     void writeAndReadRoundTripSingleBlock() throws IOException {
         byte[] data = new byte[100];
         Arrays.fill(data, (byte) 0x5a);
