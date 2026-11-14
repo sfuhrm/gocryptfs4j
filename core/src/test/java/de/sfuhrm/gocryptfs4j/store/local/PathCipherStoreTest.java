@@ -35,6 +35,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -468,5 +469,30 @@ class PathCipherStoreTest {
 
         verify(delegate).writeSmall(name, data, false);
         verify(root, never()).move(any(), any(), any());
+    }
+
+    @Test
+    void secureWriteConfigOverwriteUsesPinnedRootHandle() throws Exception {
+        SecureDirectoryStream<Path> root = mockSecureDirectory();
+        CipherStore delegate = mock(CipherStore.class);
+        Path cipher = tmp.resolve("cipher");
+        SecurePathStore store = new SecurePathStore(delegate, cipher, root);
+        byte[] data = "x".getBytes(StandardCharsets.UTF_8);
+        String name = cipher.resolve("gocryptfs.conf").toString();
+
+        SeekableByteChannel channel = mock(SeekableByteChannel.class);
+        when(channel.write(any(ByteBuffer.class))).thenAnswer(inv -> {
+            ByteBuffer buf = inv.getArgument(0);
+            int n = buf.remaining();
+            buf.position(buf.limit());
+            return n;
+        });
+        when(root.newByteChannel(any(Path.class), any())).thenReturn(channel);
+
+        store.writeConfig(name, data, true);
+
+        verify(delegate, never()).writeConfig(any(), any(), anyBoolean());
+        verify(root).newByteChannel(any(Path.class), any());
+        verify(root).move(any(Path.class), Mockito.eq(root), Mockito.eq(Paths.get("gocryptfs.conf")));
     }
 }

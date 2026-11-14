@@ -26,6 +26,7 @@ import java.nio.file.attribute.GroupPrincipal;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFileAttributes;
 import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.nio.file.attribute.UserPrincipal;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -47,15 +48,17 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * cipher root.
  *
  * <p>Operations that {@code SecureDirectoryStream} cannot express
- * ({@link #writeConfig}, {@link #mkdir}, {@link #createSymlink},
- * {@link #readSymlink} and {@link #checkAccess}) are delegated to the wrapped
- * store. The entry-creating operations {@link #mkdir} and {@link #createSymlink},
- * and the link-reading {@link #readSymlink}, first verify the parent through the
- * secure traversal. Because NIO exposes no {@code mkdirat}/{@code symlinkat}/
- * {@code readlinkat}, the actual operation is then a path-based syscall: the
+ * ({@link #mkdir}, {@link #createSymlink}, {@link #readSymlink}, a
+ * non-replacing {@link #rename}, a create-new {@link #writeSmall} and
+ * {@link #checkAccess}) are delegated to the wrapped store. Every one of them
+ * still resolves its parent through the secure traversal so that it addresses
+ * the same pinned directory as the rest of the store, and that parent handle is
+ * kept open for the duration of the delegated operation. Because NIO exposes no
+ * {@code mkdirat}/{@code symlinkat}/{@code readlinkat}/{@code linkat}/
+ * {@code renameat2}, the delegated operation is then a path-based syscall: the
  * traversal rejects a symlink that is already in place as an intermediate
- * component, but a symlink swapped in between the traversal and that syscall
- * remains a residual window (see {@link #verifyParent}).</p>
+ * component, but a directory swapped or moved between the traversal and that
+ * syscall remains a residual window (see {@link #requireParent}).</p>
  */
 final class SecurePathStore implements CipherStore {
 
@@ -133,53 +136,87 @@ final class SecurePathStore implements CipherStore {
             // replaced, leaving every name in the directory undecryptable.
             // Delegate to the path-based store, which publishes the temporary
             // file with a hard link where the filesystem supports one, so the
-            // create-new contract is enforced atomically. On filesystems
-            // without hard links it falls back to a non-replacing move. The
-            // parent is still verified through the secure traversal first; see
-            // verifyParent for the residual window.
-            verifyParent(name);
-            delegate.writeSmall(name, data, false);
+            // create-new contract is enforced atomically. The parent is resolved
+            // through the secure traversal and kept pinned while the delegated
+            // syscall runs; see the class comment for the residual window.
+            try (SecurePath parent = requireParent(name)) {
+                delegate.writeSmall(name, data, false);
+            }
             return;
         }
         try (SecurePath parent = requireParent(name)) {
-            // Write to a temporary file in the same directory and move it into
-            // place, so a crash never leaves a truncated control file (for
-            // example a gocryptfs.diriv).
-            Path temp = Paths.get(".gocryptfs-" + UUID.randomUUID() + ".tmp");
-            boolean moved = false;
-            try {
-                try (SeekableByteChannel channel = parent.dir().newByteChannel(temp,
-                        WRITE_CREATE_NEW)) {
-                    ByteBuffer buffer = ByteBuffer.wrap(data);
-                    while (buffer.hasRemaining()) {
-                        channel.write(buffer);
-                    }
-                    if (channel instanceof FileChannel) {
-                        ((FileChannel) channel).force(true);
-                    }
-                }
-                parent.dir().move(temp, parent.dir(), parent.name());
-                moved = true;
-            } finally {
-                if (!moved) {
-                    try {
-                        parent.dir().deleteFile(temp);
-                    } catch (NoSuchFileException ignored) {
-                        // Already gone.
-                    }
-                }
-            }
+            writeSecure(parent, data, null);
         }
     }
 
     @Override
     public void writeConfig(String name, byte[] data, boolean overwrite) throws IOException {
-        // The config file always lives directly in the (trusted) root directory,
-        // so there are no intermediate directories an attacker could swap. The
-        // temporary-file + atomic-move dance in the delegate is kept as-is to
-        // preserve its atomicity and crash-safety guarantees, which
-        // SecureDirectoryStream.move cannot provide.
-        delegate.writeConfig(name, data, overwrite);
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(data, "data");
+        if (overwrite) {
+            // The config file always lives directly in the (trusted) root
+            // directory. Write it through the pinned root handle with the same
+            // temporary-file + atomic-move dance as writeSmall, so it lands in
+            // the same directory the rest of the store addresses and a crash
+            // never leaves it truncated. New files get mode 0400, matching
+            // gocryptfs.
+            try (SecurePath parent = requireParent(name)) {
+                writeSecure(parent, data, PosixFilePermissions.fromString("r--------"));
+            }
+            return;
+        }
+        // Create-new semantics cannot be expressed with SecureDirectoryStream
+        // (move is rename(2) and always replaces); delegate to the path-based
+        // store's hard-link publish, keeping the parent pinned.
+        try (SecurePath parent = requireParent(name)) {
+            delegate.writeConfig(name, data, false);
+        }
+    }
+
+    /**
+     * Writes {@code data} to the entry addressed by {@code parent} through the
+     * pinned directory handle: to a temporary file that is flushed and moved
+     * into place, so a crash never leaves the target truncated or half-written.
+     *
+     * @param parent      the pinned parent handle plus the target name
+     * @param data        the content to write
+     * @param permissions the POSIX permissions to apply to the new file, or
+     *                    {@code null} to keep the temporary file's defaults
+     * @throws IOException on filesystem errors
+     */
+    private void writeSecure(SecurePath parent, byte[] data,
+                              @Nullable Set<PosixFilePermission> permissions) throws IOException {
+        Path temp = Paths.get(".gocryptfs-" + UUID.randomUUID() + ".tmp");
+        boolean moved = false;
+        try {
+            try (SeekableByteChannel channel = parent.dir().newByteChannel(temp,
+                    WRITE_CREATE_NEW)) {
+                ByteBuffer buffer = ByteBuffer.wrap(data);
+                while (buffer.hasRemaining()) {
+                    channel.write(buffer);
+                }
+                if (channel instanceof FileChannel) {
+                    ((FileChannel) channel).force(true);
+                }
+            }
+            if (permissions != null) {
+                PosixFileAttributeView view = parent.dir().getFileAttributeView(temp,
+                        PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
+                if (view != null) {
+                    view.setPermissions(permissions);
+                }
+            }
+            parent.dir().move(temp, parent.dir(), parent.name());
+            moved = true;
+        } finally {
+            if (!moved) {
+                try {
+                    parent.dir().deleteFile(temp);
+                } catch (NoSuchFileException ignored) {
+                    // Already gone.
+                }
+            }
+        }
     }
 
     @Override
@@ -261,12 +298,12 @@ final class SecurePathStore implements CipherStore {
     public void mkdir(String name) throws IOException {
         Objects.requireNonNull(name, "name");
         // SecureDirectoryStream has no create-directory operation, so the actual
-        // creation is delegated. Walking to the parent first still rejects an
-        // intermediate symlink already in place, but the walk and the delegated
-        // syscall are not atomic: a symlink swapped in between remains a
-        // residual window (see verifyParent).
-        verifyParent(name);
-        delegate.mkdir(name);
+        // creation is delegated. The parent is resolved through the secure
+        // traversal and kept pinned while the delegated path-based syscall runs;
+        // see the class comment for the residual window.
+        try (SecurePath parent = requireParent(name)) {
+            delegate.mkdir(name);
+        }
     }
 
     @Override
@@ -294,11 +331,13 @@ final class SecurePathStore implements CipherStore {
             // and then moving is racy. Delegate to the path-based store, whose
             // Files.move without REPLACE_EXISTING fails with
             // FileAlreadyExistsException instead of silently replacing. Both
-            // parents are still verified through the secure traversal first;
-            // see verifyParent for the residual window.
-            verifyParent(from);
-            verifyParent(to);
-            delegate.rename(from, to, false);
+            // parents are resolved through the secure traversal and kept pinned
+            // while the delegated syscall runs; see the class comment for the
+            // residual window.
+            try (SecurePath src = requireParent(from);
+                 SecurePath dst = requireParent(to)) {
+                delegate.rename(from, to, false);
+            }
             return;
         }
         try (SecurePath src = requireParent(from);
@@ -311,19 +350,21 @@ final class SecurePathStore implements CipherStore {
     public void createSymlink(String name, String target) throws IOException {
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(target, "target");
-        // No SecureDirectoryStream API exists for creating symlinks; see
-        // {@link #mkdir} and {@link #verifyParent} for the residual window.
-        verifyParent(name);
-        delegate.createSymlink(name, target);
+        // No SecureDirectoryStream API exists for creating symlinks; see the
+        // class comment for the residual window.
+        try (SecurePath parent = requireParent(name)) {
+            delegate.createSymlink(name, target);
+        }
     }
 
     @Override
     public String readSymlink(String name) throws IOException {
         Objects.requireNonNull(name, "name");
-        // No SecureDirectoryStream API exists for reading symlinks; see
-        // {@link #verifyParent} for the residual window.
-        verifyParent(name);
-        return delegate.readSymlink(name);
+        // No SecureDirectoryStream API exists for reading symlinks; see the
+        // class comment for the residual window.
+        try (SecurePath parent = requireParent(name)) {
+            return delegate.readSymlink(name);
+        }
     }
 
     @Override
@@ -531,7 +572,15 @@ final class SecurePathStore implements CipherStore {
 
     /**
      * Resolves a ciphertext name to its parent, throwing when the name has no
-     * parent (the root itself).
+     * parent (the root itself). The returned handle pins the parent directory:
+     * it descends from the cached {@link #secureRoot} with {@code NOFOLLOW_LINKS},
+     * so a symlink already in place as an intermediate component is rejected, and
+     * the directory is held open for the duration of the operation. Closing the
+     * handle releases the directory unless it is the cached root. The residual
+     * window is that the delegated path-based syscall re-resolves the parent's
+     * path rather than using the open directory descriptor, so a directory
+     * swapped or moved after this call still redirects that syscall; NIO exposes
+     * no {@code *at} primitive to close it.
      */
     private SecurePath requireParent(String name) throws IOException {
         SecurePath parent = resolveParent(name);
@@ -539,21 +588,6 @@ final class SecurePathStore implements CipherStore {
             throw new IOException("no parent directory for " + name);
         }
         return parent;
-    }
-
-    /**
-     * Verifies that every intermediate directory of {@code name} is a real
-     * directory, not a symlink. Used as a best-effort hardening for the
-     * operations {@code SecureDirectoryStream} cannot perform directly
-     * ({@link #mkdir}, {@link #createSymlink}, {@link #readSymlink}). The
-     * traversal pins each intermediate component with {@code NOFOLLOW_LINKS}
-     * and rejects a symlink already in place, but the directory handles are
-     * closed before the delegated path-based syscall runs, so a symlink swapped
-     * in between remains a residual TOCTOU window that NIO provides no
-     * {@code *at} primitive to close.
-     */
-    private void verifyParent(String name) throws IOException {
-        requireParent(name).close();
     }
 
     /**
