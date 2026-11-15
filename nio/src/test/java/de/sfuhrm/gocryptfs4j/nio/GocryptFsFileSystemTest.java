@@ -21,6 +21,7 @@ import java.nio.file.WatchService;
 import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -107,6 +108,28 @@ class GocryptFsFileSystemTest {
     }
 
     @Test
+    void closeDeregistersFromProviderEvenWhenStoreCloseFails() throws Exception {
+        GocryptFsProvider provider = new GocryptFsProvider();
+        TrackingStore store = new TrackingStore();
+        store.failOnClose();
+        GocryptFs core = GocryptFs.create(new MapCipherStore(), "pw".toCharArray());
+        GocryptFsFileSystem fs = new GocryptFsFileSystem(
+                provider, store, core, "/cipher", false);
+
+        java.lang.reflect.Field field = GocryptFsProvider.class.getDeclaredField("filesystems");
+        field.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        Map<String, GocryptFsFileSystem> filesystems =
+                (Map<String, GocryptFsFileSystem>) field.get(provider);
+        filesystems.put(fs.registrationKey(), fs);
+
+        assertThrows(IOException.class, fs::close);
+        assertFalse(fs.isOpen());
+        assertFalse(filesystems.containsKey(fs.registrationKey()),
+                "filesystem must be deregistered even when close fails");
+    }
+
+    @Test
     void urlDecode() {
         assertEquals("a/b", GocryptFsFileSystem.urlDecode("a%2Fb"));
         assertEquals("%zz", GocryptFsFileSystem.urlDecode("%zz"));
@@ -126,9 +149,14 @@ class GocryptFsFileSystemTest {
 
         private final MapCipherStore delegate = new MapCipherStore();
         private boolean closed;
+        private boolean failOnClose;
 
         boolean isClosed() {
             return closed;
+        }
+
+        void failOnClose() {
+            failOnClose = true;
         }
 
         @Override
@@ -198,9 +226,12 @@ class GocryptFsFileSystemTest {
         }
 
         @Override
-        public void close() {
+        public void close() throws IOException {
             closed = true;
             delegate.close();
+            if (failOnClose) {
+                throw new IOException("simulated close failure");
+            }
         }
     }
 }

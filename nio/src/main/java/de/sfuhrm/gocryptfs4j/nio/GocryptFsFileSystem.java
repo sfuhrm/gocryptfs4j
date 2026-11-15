@@ -414,9 +414,12 @@ public final class GocryptFsFileSystem extends FileSystem {
             try {
                 core.close();
             } finally {
-                store.close();
+                try {
+                    store.close();
+                } finally {
+                    provider.remove(this);
+                }
             }
-            provider.remove(this);
         }
     }
 
