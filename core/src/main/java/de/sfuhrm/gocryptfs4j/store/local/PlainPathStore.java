@@ -437,11 +437,56 @@ final class PlainPathStore implements CipherStore {
                 Files.move(src, dst, StandardCopyOption.REPLACE_EXISTING);
             }
         } else {
-            Files.move(src, dst);
+            moveNoReplace(src, dst);
         }
         // The rename is only durable once both directories that gained or lost
         // an entry are forced to stable storage.
         fsyncRenameParents(src, dst);
+    }
+
+    /**
+     * Moves {@code src} to {@code dst} with create-new (no-clobber) semantics.
+     *
+     * <p>For a regular file the move is performed by hard-linking {@code src}
+     * at {@code dst} and then unlinking {@code src}: {@code link(2)} fails with
+     * {@code EEXIST} atomically, so a target created concurrently is never
+     * silently replaced. {@link Files#move} cannot provide this &mdash; the JDK
+     * only stats the target before calling {@code rename(2)}, which then
+     * replaces it.</p>
+     *
+     * <p>Directories and symbolic links cannot be hard-linked, so they fall
+     * back to a plain {@code Files.move} whose no-replace check has that same
+     * residual window: a target that appears between the existence check and
+     * the rename is replaced. That window only affects entries an external
+     * writer races to create, and is documented here for completeness.</p>
+     *
+     * @param src the source path
+     * @param dst the target path
+     * @throws FileAlreadyExistsException if {@code dst} already exists
+     * @throws IOException on filesystem errors
+     */
+    private void moveNoReplace(Path src, Path dst) throws IOException {
+        if (Files.isRegularFile(src, LinkOption.NOFOLLOW_LINKS) && supportsHardLinks()) {
+            try {
+                Files.createLink(dst, src);
+            } catch (FileAlreadyExistsException e) {
+                throw e;
+            } catch (IOException | UnsupportedOperationException | SecurityException e) {
+                // Hard links do not work on this particular directory (for
+                // example a different mount). Remember it and fall back to the
+                // non-atomic move below.
+                disableHardLinks();
+                Files.move(src, dst);
+                return;
+            }
+            // The link was created atomically (it would have failed had dst
+            // existed), so the source name is now redundant; unlinking it
+            // completes the move. A failure here leaves both names in place,
+            // matching coreutils mv, with the data preserved under dst.
+            Files.delete(src);
+            return;
+        }
+        Files.move(src, dst);
     }
 
     @Override

@@ -188,6 +188,37 @@ class PathCipherStoreTest {
     }
 
     @Test
+    void renameNoReplaceKeepsExistingTarget() throws Exception {
+        Path dir = Files.createDirectory(tmp.resolve("cipher"));
+        PathCipherStore store = new PathCipherStore(dir);
+        Path src = dir.resolve("src");
+        Files.write(src, "source".getBytes(StandardCharsets.UTF_8));
+        Path dst = dir.resolve("dst");
+        Files.write(dst, "target".getBytes(StandardCharsets.UTF_8));
+
+        assertThrows(FileAlreadyExistsException.class,
+                () -> store.rename(src.toString(), dst.toString(), false));
+
+        // The create-new rename must leave both files intact.
+        assertArrayEquals("target".getBytes(StandardCharsets.UTF_8), Files.readAllBytes(dst));
+        assertArrayEquals("source".getBytes(StandardCharsets.UTF_8), Files.readAllBytes(src));
+    }
+
+    @Test
+    void renameNoReplaceMovesRegularFile() throws Exception {
+        Path dir = Files.createDirectory(tmp.resolve("cipher"));
+        PathCipherStore store = new PathCipherStore(dir);
+        Path src = dir.resolve("src");
+        Files.write(src, "source".getBytes(StandardCharsets.UTF_8));
+        Path dst = dir.resolve("dst");
+
+        store.rename(src.toString(), dst.toString(), false);
+
+        assertFalse(Files.exists(src), "source must be moved away");
+        assertArrayEquals("source".getBytes(StandardCharsets.UTF_8), Files.readAllBytes(dst));
+    }
+
+    @Test
     void renameRejectsTargetOutsideRoot() throws Exception {
         Path dir = Files.createDirectory(tmp.resolve("cipher"));
         PathCipherStore store = new PathCipherStore(dir);
