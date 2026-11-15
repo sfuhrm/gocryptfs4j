@@ -36,6 +36,15 @@ import java.util.Set;
  * plain {@link PlainPathStore} is used, which still confines every path to the
  * root directory and rejects symlinks at the final component.</p>
  *
+ * <p>The selection fails closed: a filesystem that genuinely has no
+ * {@link SecureDirectoryStream} (for example the default Windows provider or a
+ * zip filesystem) silently falls back to the plain store, but a failure while
+ * opening the secure stream &mdash; a transient {@code EMFILE}, a permission
+ * error, or a root that is missing or not a directory &mdash; is reported
+ * instead of being silently downgraded. Callers that must not run without
+ * symlink protection can check {@link #isSymlinkSafe()} or use
+ * {@link #requireSymlinkSafe(Path)}.</p>
+ *
  * <p>A root directory that is itself a symlink is followed to its canonical
  * real path before the backing is selected, so a symlinked root (for example
  * {@code ~/Dropbox/vault}) is not silently downgraded to the plain store.</p>
@@ -48,15 +57,68 @@ public final class PathCipherStore implements CipherStore {
     /** The store to which every operation is delegated. */
     private final CipherStore delegate;
 
+    /** Whether the delegate protects against symlinks in intermediate directories. */
+    private final boolean symlinkSafe;
+
     /**
      * Creates a store over the given ciphertext root directory.
      *
      * @param root the ciphertext root directory
      * @throws NullPointerException if {@code root} is {@code null}
+     * @throws IOException if {@code root} is not an existing directory or the
+     *                     secure directory stream cannot be opened
      */
-    public PathCipherStore(Path root) {
+    public PathCipherStore(Path root) throws IOException {
         this.root = resolveRoot(Objects.requireNonNull(root, "root"));
         this.delegate = createDelegate(this.root);
+        this.symlinkSafe = delegate instanceof SecurePathStore;
+    }
+
+    /**
+     * Creates a store over the given ciphertext root directory, failing if the
+     * backing filesystem does not provide symlink-safe
+     * ({@link SecureDirectoryStream}) traversal.
+     *
+     * @param root the ciphertext root directory
+     * @return a symlink-safe store
+     * @throws NullPointerException if {@code root} is {@code null}
+     * @throws IOException if the store cannot be opened symlink-safely
+     */
+    public static PathCipherStore requireSymlinkSafe(Path root) throws IOException {
+        PathCipherStore store = new PathCipherStore(root);
+        if (!store.isSymlinkSafe()) {
+            closeQuietly(store);
+            throw new IOException("the backing filesystem does not support symlink-safe "
+                    + "directory traversal: " + store.rootPath());
+        }
+        return store;
+    }
+
+    /**
+     * Returns whether this store protects against symlinks in intermediate
+     * directories. It is {@code true} when the backing is a
+     * {@link SecurePathStore} (the filesystem provides
+     * {@link SecureDirectoryStream}) and {@code false} when the plain
+     * path-based store is used, for example on Windows or a zip filesystem.
+     *
+     * @return whether the store is symlink-safe
+     */
+    public boolean isSymlinkSafe() {
+        return symlinkSafe;
+    }
+
+    /**
+     * Closes a store, suppressing any failure so a rejected open is reported by
+     * its original exception.
+     *
+     * @param store the store to close
+     */
+    private static void closeQuietly(CipherStore store) {
+        try {
+            store.close();
+        } catch (IOException ignored) {
+            // Best effort; the open is already being rejected.
+        }
     }
 
     /**
@@ -67,7 +129,7 @@ public final class PathCipherStore implements CipherStore {
      *
      * @param root the caller-supplied root path
      * @return the canonical real path, or the absolute normalized path when
-     *         the root does not exist yet (operations then fail lazily)
+     *         the root does not exist yet (the constructor then rejects it)
      */
     private static Path resolveRoot(Path root) {
         Path normalized = root.toAbsolutePath().normalize();
@@ -75,7 +137,8 @@ public final class PathCipherStore implements CipherStore {
             return normalized.toRealPath();
         } catch (IOException e) {
             // The root does not exist yet (or is a dangling symlink): keep the
-            // normalized path and let the first operation fail lazily.
+            // normalized path so the subsequent directory check can report a
+            // precise "not a directory" error.
             return normalized;
         }
     }
@@ -93,13 +156,17 @@ public final class PathCipherStore implements CipherStore {
         this.root = Objects.requireNonNull(root, "root").toAbsolutePath().normalize();
         this.delegate = new SecurePathStore(
                 new PlainPathStore(this.root), this.root, secureRoot);
+        this.symlinkSafe = true;
     }
 
     /**
      * Selects the backing store for the given root: a secure decorator when the
      * filesystem supports it, otherwise the plain path-based store.
+     *
+     * @throws IOException if the root is not a directory or the secure
+     *                     directory stream cannot be opened
      */
-    private static CipherStore createDelegate(Path root) {
+    private static CipherStore createDelegate(Path root) throws IOException {
         PlainPathStore plain = new PlainPathStore(root);
         SecureDirectoryStream<Path> secureRoot = openSecureRoot(root);
         return secureRoot == null ? plain : new SecurePathStore(plain, root, secureRoot);
@@ -107,25 +174,44 @@ public final class PathCipherStore implements CipherStore {
 
     /**
      * Opens the root directory as a {@link SecureDirectoryStream} if the
-     * backing filesystem supports it, otherwise returns {@code null}.
+     * backing filesystem supports it.
+     *
+     * <p>This fails closed: a missing or non-directory root, or an error while
+     * opening the stream (a transient {@code EMFILE}, a permission problem, or
+     * a provider that rejects directory streaming) is reported as an
+     * {@link IOException} rather than silently downgrading the store to
+     * path-based access. Only a provider that successfully returns a plain
+     * (non-secure) {@link DirectoryStream} is treated as genuinely not
+     * supporting symlink-safe traversal and yields {@code null}.</p>
      *
      * @param root the ciphertext root directory
-     * @return a secure directory stream over {@code root}, or {@code null}
+     * @return a secure directory stream over {@code root}, or {@code null} when
+     *         the provider has no {@link SecureDirectoryStream} support
+     * @throws IOException if the root is not a directory or the stream cannot
+     *                     be opened
      */
     @SuppressWarnings("unchecked")
-    private static @Nullable SecureDirectoryStream<Path> openSecureRoot(Path root) {
+    private static @Nullable SecureDirectoryStream<Path> openSecureRoot(Path root)
+            throws IOException {
         if (!Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS)) {
-            return null;
+            throw new IOException("not a directory: " + root);
         }
+        DirectoryStream<Path> ds;
         try {
-            DirectoryStream<Path> ds = Files.newDirectoryStream(root);
-            if (ds instanceof SecureDirectoryStream<?>) {
-                return (SecureDirectoryStream<Path>) ds;
-            }
-            ds.close();
-        } catch (IOException | UnsupportedOperationException e) {
-            // Not a secure provider: fall back to path-based access.
+            ds = Files.newDirectoryStream(root);
+        } catch (UnsupportedOperationException e) {
+            throw new IOException("directory streaming is not supported: " + root, e);
         }
+        // An IOException from newDirectoryStream propagates unchanged: it is a
+        // real failure (for example EMFILE or a permission error), not proof
+        // that the provider lacks SecureDirectoryStream support.
+        if (ds instanceof SecureDirectoryStream<?>) {
+            return (SecureDirectoryStream<Path>) ds;
+        }
+        ds.close();
+        // The provider successfully returned a plain DirectoryStream, so it
+        // genuinely has no SecureDirectoryStream (for example the default
+        // Windows provider or a zip filesystem): fall back to the plain store.
         return null;
     }
 

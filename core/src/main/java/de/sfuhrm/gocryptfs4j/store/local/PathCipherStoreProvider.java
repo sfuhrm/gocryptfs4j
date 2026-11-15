@@ -3,6 +3,7 @@ package de.sfuhrm.gocryptfs4j.store.local;
 import de.sfuhrm.gocryptfs4j.store.CipherStore;
 import de.sfuhrm.gocryptfs4j.store.CipherStoreProvider;
 
+import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Paths;
 import java.util.Map;
@@ -24,7 +25,7 @@ public final class PathCipherStoreProvider implements CipherStoreProvider {
     }
 
     @Override
-    public CipherStore newStore(URI uri, Map<String, ?> env) {
+    public CipherStore newStore(URI uri, Map<String, ?> env) throws IOException {
         return new PathCipherStore(Paths.get(Objects.requireNonNull(uri, "uri")));
     }
 }

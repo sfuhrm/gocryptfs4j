@@ -31,6 +31,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -343,6 +344,62 @@ class PathCipherStoreTest {
         assumeTrue(Files.isDirectory(root), "filesystem root '/' is not a directory");
         PathCipherStore store = new PathCipherStore(root);
         assertTrue(store.stat(root.toString()).isDirectory());
+    }
+
+    @Test
+    void constructorRejectsMissingRoot() {
+        Path missing = tmp.resolve("missing");
+        assertThrows(IOException.class, () -> new PathCipherStore(missing));
+    }
+
+    @Test
+    void constructorRejectsNonDirectoryRoot() throws Exception {
+        Path file = Files.createFile(tmp.resolve("file"));
+        assertThrows(IOException.class, () -> new PathCipherStore(file));
+    }
+
+    @Test
+    void isSymlinkSafeIsTrueOnSecureFilesystem() throws Exception {
+        Path dir = Files.createDirectory(tmp.resolve("cipher"));
+        assumeTrue(secureDirectoryStreamsAvailable(dir),
+                "filesystem does not provide SecureDirectoryStream");
+        try (PathCipherStore store = new PathCipherStore(dir)) {
+            assertTrue(store.isSymlinkSafe());
+        }
+    }
+
+    @Test
+    void requireSymlinkSafeReturnsSecureStore() throws Exception {
+        Path dir = Files.createDirectory(tmp.resolve("cipher"));
+        assumeTrue(secureDirectoryStreamsAvailable(dir),
+                "filesystem does not provide SecureDirectoryStream");
+        try (PathCipherStore store = PathCipherStore.requireSymlinkSafe(dir)) {
+            assertTrue(store.isSymlinkSafe());
+        }
+    }
+
+    @Test
+    void isSymlinkSafeIsFalseOnNonSecureFilesystem() throws Exception {
+        Path zip = tmp.resolve("vault.zip");
+        try (FileSystem fs = FileSystems.newFileSystem(
+                URI.create("jar:" + zip.toUri()),
+                Collections.singletonMap("create", "true"))) {
+            Path dir = Files.createDirectory(fs.getPath("/cipher"));
+            try (PathCipherStore store = new PathCipherStore(dir)) {
+                assertFalse(store.isSymlinkSafe());
+            }
+        }
+    }
+
+    @Test
+    void requireSymlinkSafeRejectsNonSecureFilesystem() throws Exception {
+        Path zip = tmp.resolve("vault.zip");
+        try (FileSystem fs = FileSystems.newFileSystem(
+                URI.create("jar:" + zip.toUri()),
+                Collections.singletonMap("create", "true"))) {
+            Path dir = Files.createDirectory(fs.getPath("/cipher"));
+            assertThrows(IOException.class, () -> PathCipherStore.requireSymlinkSafe(dir));
+        }
     }
 
     private static void assertNoTempFiles(Path dir) throws IOException {
