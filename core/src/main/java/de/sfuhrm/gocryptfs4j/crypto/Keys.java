@@ -22,6 +22,16 @@ public final class Keys {
      * Derives a key using scrypt (RFC 7914), identical to
      * {@code golang.org/x/crypto/scrypt}.
      *
+     * <p><b>Memory-hygiene caveat.</b> scrypt is built on HMAC-SHA256, and the
+     * HMAC key schedule copies the password into the digest's internal state
+     * (Bouncy Castle's {@code SCrypt} does this inside its PBKDF2 step). That
+     * copy is not wiped when derivation finishes and cannot be reached through
+     * any public API; it is only released when the heap object is eventually
+     * garbage collected. Wiping {@code password} after this call therefore
+     * clears the caller's buffer but not this internal copy. This is inherent
+     * to HMAC-based scrypt &mdash; the JDK's own {@code Mac} copies its key the
+     * same way &mdash; so it is not a defect specific to this method.</p>
+     *
      * @param password password bytes
      * @param salt     salt bytes
      * @param n        CPU/memory cost parameter
