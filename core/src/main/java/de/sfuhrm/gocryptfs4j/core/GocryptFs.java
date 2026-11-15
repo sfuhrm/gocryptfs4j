@@ -2362,6 +2362,16 @@ public final class GocryptFs implements AutoCloseable {
      * idempotent. A store supplied directly to {@code open}/{@code create} is
      * owned by the caller and is left open.</p>
      *
+     * <p><b>Data-loss warning.</b> If the final flush fails &mdash; for example
+     * because the underlying storage is full &mdash; the keys are wiped and the
+     * filesystem is closed anyway. The buffered plaintext of the affected
+     * entries is then destroyed and can never be written, even after space is
+     * freed later. The {@link IOException} thrown from this method is the only
+     * signal that data was lost, and there is no way to retry the flush. To
+     * avoid losing data, close every open stream, channel and handle yourself
+     * (under the default sync policy each close forces and reports its own
+     * writes) and handle their errors <i>before</i> calling this method.</p>
+     *
      * @throws IOException if a pending write cannot be flushed or the store cannot be closed
      */
     @Override
