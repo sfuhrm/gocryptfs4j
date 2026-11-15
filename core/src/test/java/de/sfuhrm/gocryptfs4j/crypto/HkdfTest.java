@@ -7,6 +7,7 @@ import org.bouncycastle.util.encoders.Hex;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class HkdfTest {
 
@@ -46,6 +47,15 @@ class HkdfTest {
         for (int len : new int[]{0, 1, 16, 31, 32, 33, 64, 100}) {
             assertEquals(len, Hkdf.derive(ikm, "info", len).length);
         }
+    }
+
+    @Test
+    void outputLengthBeyondLimitIsRejected() {
+        byte[] ikm = {1, 2, 3, 4};
+        assertEquals(8160, Hkdf.derive(ikm, "info", 8160).length,
+                "255 blocks must be derivable");
+        assertThrows(IllegalArgumentException.class, () -> Hkdf.derive(ikm, "info", 8161));
+        assertThrows(IllegalArgumentException.class, () -> Hkdf.derive(ikm, "info", Integer.MAX_VALUE));
     }
 
     /**

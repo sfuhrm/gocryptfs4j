@@ -19,6 +19,12 @@ public final class Hkdf {
     /** The SHA-256 output length in bytes. */
     private static final int HASH_LEN = 32; // SHA-256
 
+    /**
+     * The maximum derivable output length: the HKDF counter is a single byte,
+     * so at most 255 blocks of {@link #HASH_LEN} bytes can be produced.
+     */
+    private static final int MAX_OUT_LEN = 255 * HASH_LEN;
+
     /** Prevents instantiation. */
     private Hkdf() {
     }
@@ -32,13 +38,18 @@ public final class Hkdf {
      * @param outLen the desired output length in bytes
      * @return the derived key
      * @throws NullPointerException if {@code ikm} or {@code info} is {@code null}
-     * @throws IllegalArgumentException if {@code outLen} is negative
+     * @throws IllegalArgumentException if {@code outLen} is negative or exceeds
+     *                                  {@value #MAX_OUT_LEN}
      */
     public static byte[] derive(byte[] ikm, String info, int outLen) {
         Objects.requireNonNull(ikm, "ikm");
         Objects.requireNonNull(info, "info");
         if (outLen < 0) {
             throw new IllegalArgumentException("negative output length: " + outLen);
+        }
+        if (outLen > MAX_OUT_LEN) {
+            throw new IllegalArgumentException("output length exceeds HKDF limit "
+                    + MAX_OUT_LEN + ": " + outLen);
         }
         byte[] salt = new byte[HASH_LEN];
         byte[] prk = null;
