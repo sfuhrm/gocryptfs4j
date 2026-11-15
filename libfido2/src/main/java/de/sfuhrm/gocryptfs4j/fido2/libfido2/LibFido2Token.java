@@ -156,10 +156,12 @@ public final class LibFido2Token implements Fido2Token {
             Arrays.fill(output, (byte) 0);
         }
         if (secret.length < MIN_SECRET_LEN) {
+            Arrays.fill(secret, (byte) 0);
             throw new IOException("FIDO2 HMAC secret too short ("
                     + secret.length + " bytes, want at least " + MIN_SECRET_LEN + ")");
         }
         if (isAllZero(secret)) {
+            Arrays.fill(secret, (byte) 0);
             throw new IOException("FIDO2 HMAC secret is all zero");
         }
         return secret;
