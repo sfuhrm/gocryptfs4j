@@ -691,9 +691,11 @@ final class FileManager {
         Objects.requireNonNull(plainFile, "plainFile");
         Objects.requireNonNull(syncPolicy, "syncPolicy");
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
-        try (SharedCipherFile cf = openCipherFileByName(r.cipherPath(), true, syncPolicy)) {
-            cf.truncate(0);
-            return Channels.newOutputStream(cf.newChannel(0, true, syncPolicy));
+        synchronized (fileLock(r.cipherPath())) {
+            try (SharedCipherFile cf = openCipherFileByName(r.cipherPath(), true, syncPolicy)) {
+                cf.truncate(0);
+                return Channels.newOutputStream(cf.newChannel(0, true, syncPolicy));
+            }
         }
     }
 

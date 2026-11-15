@@ -528,6 +528,31 @@ class GocryptFsProviderOperationsTest {
         assertNoScratchFiles();
     }
 
+    @Test
+    void copyOntoNewTargetLeavesNoPartialFileWhenSourceIsCorrupt() throws IOException {
+        Set<String> before = cipherFileNames();
+        Path source = nio.getPath("/copy-new-src.txt");
+        Files.write(source, "SOURCE-DATA".getBytes(StandardCharsets.UTF_8));
+        Set<String> after = cipherFileNames();
+        after.removeAll(before);
+        assertEquals(1, after.size());
+        Path sourceCipher = cipherDir.resolve(after.iterator().next());
+
+        // Corrupt the source ciphertext so reading it fails mid-copy.
+        byte[] bytes = Files.readAllBytes(sourceCipher);
+        bytes[bytes.length - 1] ^= 0x01;
+        Files.write(sourceCipher, bytes);
+
+        Path target = nio.getPath("/copy-new-dst.txt");
+        assertThrows(IOException.class, () -> Files.copy(source, target));
+
+        // A failed copy onto a previously non-existing target must leave no
+        // partial or scratch file behind.
+        assertFalse(Files.exists(target),
+                "a failed copy must not leave a partial target");
+        assertNoScratchFiles();
+    }
+
     private static Set<String> cipherFileNames() throws IOException {
         Set<String> names = new HashSet<>();
         try (java.util.stream.Stream<Path> entries = Files.list(cipherDir)) {

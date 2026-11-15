@@ -855,10 +855,12 @@ public final class GocryptFsProvider extends FileSystemProvider {
     }
 
     /**
-     * Copies a regular file. When the target already exists and must be replaced,
-     * the content is first copied to a sibling temporary file that is then renamed
-     * over the target, so a decryption error on the source never leaves an
-     * existing target deleted.
+     * Copies a regular file. The content is always copied to a sibling
+     * temporary file that is then renamed over the target, so a decryption
+     * error or write failure never leaves the target truncated or half-written,
+     * whether the target already existed or not. The {@code replace} flag is
+     * enforced by the rename: without {@code REPLACE_EXISTING} a target that
+     * appears concurrently is rejected atomically instead of being overwritten.
      *
      * @param fs             the filesystem
      * @param s              the absolute source
@@ -869,17 +871,6 @@ public final class GocryptFsProvider extends FileSystemProvider {
      */
     private void copyFile(GocryptFs fs, GocryptFsPath s, GocryptFsPath t,
                           boolean replace, boolean copyAttributes) throws IOException {
-        if (!replace || !exists(t)) {
-            fs.createFile(t.toString());
-            try (InputStream in = fs.openRead(s.toString());
-                 OutputStream out = fs.openWrite(t.toString())) {
-                copyBytes(in, out);
-            }
-            if (copyAttributes) {
-                copyAttributes(s, t, false);
-            }
-            return;
-        }
         GocryptFsPath temp = tempSibling(t);
         boolean done = false;
         try {
@@ -888,7 +879,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
                  OutputStream out = fs.openWrite(temp.toString())) {
                 copyBytes(in, out);
             }
-            fs.rename(temp.toString(), t.toString(), true);
+            fs.rename(temp.toString(), t.toString(), replace);
             done = true;
         } finally {
             if (!done) {
