@@ -2,6 +2,7 @@ package de.sfuhrm.gocryptfs4j.store.memory;
 
 import de.sfuhrm.gocryptfs4j.core.DirEntry;
 import de.sfuhrm.gocryptfs4j.core.GocryptFs;
+import de.sfuhrm.gocryptfs4j.store.CipherChannel;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -13,6 +14,7 @@ import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -80,6 +82,18 @@ class MapCipherStoreTest {
             fs.write("/f.txt", 0, content);
             assertArrayEquals(content, fs.readAll("/f.txt"));
             assertEquals(1, fs.list("/").size());
+        }
+    }
+
+    @Test
+    void channelRejectsSizeBeyondIntMax() throws IOException {
+        MapCipherStore store = new MapCipherStore();
+        store.createFile("f");
+
+        try (CipherChannel channel = store.open("f", true)) {
+            assertThrows(IOException.class, () -> channel.truncate(2_147_483_648L));
+            assertThrows(IOException.class,
+                    () -> channel.position(2_147_483_648L).write(java.nio.ByteBuffer.wrap(new byte[1])));
         }
     }
 }

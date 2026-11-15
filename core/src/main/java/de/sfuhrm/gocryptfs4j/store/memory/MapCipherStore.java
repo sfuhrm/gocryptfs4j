@@ -518,6 +518,9 @@ public final class MapCipherStore implements CipherStore {
             if (size < 0) {
                 throw new IllegalArgumentException("negative size");
             }
+            if (size > Integer.MAX_VALUE) {
+                throw new IOException("file too large for the in-memory store: " + size);
+            }
             data = Arrays.copyOf(data, (int) size);
             return this;
         }
@@ -548,7 +551,10 @@ public final class MapCipherStore implements CipherStore {
             }
         }
 
-        private void ensureCapacity(long capacity) {
+        private void ensureCapacity(long capacity) throws IOException {
+            if (capacity > Integer.MAX_VALUE) {
+                throw new IOException("file too large for the in-memory store: " + capacity);
+            }
             if (capacity > data.length) {
                 data = Arrays.copyOf(data, (int) capacity);
             }
