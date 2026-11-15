@@ -76,12 +76,47 @@ class NameManagerTest {
     }
 
     @Test
+    void isValidPlainNameRejectsSurrogateEscapedUnsafeNames() {
+        assertFalse(NameManager.isValidPlainName("\uDC2F"));
+        assertFalse(NameManager.isValidPlainName("\uDC2E"));
+        assertFalse(NameManager.isValidPlainName("\uDC2E\uDC2E"));
+        assertFalse(NameManager.isValidPlainName("\uDC00"));
+    }
+
+    @Test
     void cipherNameForRejectsNulByte() throws IOException {
         ManagerHarness h = ManagerHarness.encrypted();
         byte[] iv = h.directoryManager.readDirIV(h.store.root());
 
         assertThrows(FileSystemException.class,
                 () -> h.nameManager.cipherNameFor("a\u0000b", iv));
+    }
+
+    @Test
+    void cipherNameForRejectsSurrogateEscapedSeparator() throws IOException {
+        ManagerHarness h = ManagerHarness.encrypted();
+        byte[] iv = h.directoryManager.readDirIV(h.store.root());
+
+        assertThrows(FileSystemException.class,
+                () -> h.nameManager.cipherNameFor("\uDC2F", iv));
+    }
+
+    @Test
+    void cipherNameForRejectsSurrogateEscapedDotDot() throws IOException {
+        ManagerHarness h = ManagerHarness.encrypted();
+        byte[] iv = h.directoryManager.readDirIV(h.store.root());
+
+        assertThrows(FileSystemException.class,
+                () -> h.nameManager.cipherNameFor("\uDC2E\uDC2E", iv));
+    }
+
+    @Test
+    void cipherNameForRejectsSurrogateEscapedNulByte() throws IOException {
+        ManagerHarness h = ManagerHarness.encrypted();
+        byte[] iv = h.directoryManager.readDirIV(h.store.root());
+
+        assertThrows(FileSystemException.class,
+                () -> h.nameManager.cipherNameFor("\uDC00", iv));
     }
 
     @Test

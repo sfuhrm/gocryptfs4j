@@ -100,10 +100,11 @@ final class NameManager {
     String cipherNameFor(String plainName, byte[] dirIV) throws IOException {
         Objects.requireNonNull(plainName, "plainName");
         Objects.requireNonNull(dirIV, "dirIV");
-        if (!isValidPlainName(plainName)) {
+        byte[] nameBytes = NameTransform.encodeName(plainName);
+        if (!isValidNameBytes(nameBytes)) {
             throw new FileSystemException(plainName, null, "invalid file name");
         }
-        if (NameTransform.encodeName(plainName).length > Constants.NAME_MAX) {
+        if (nameBytes.length > Constants.NAME_MAX) {
             throw new FileSystemException(plainName, null, "File name too long");
         }
         if (plaintextNames) {
@@ -241,17 +242,39 @@ final class NameManager {
      * rejected. A backslash is an ordinary character on Linux, so it is
      * allowed.</p>
      *
+     * <p>The check runs on the encoded name bytes, so a name in the
+     * surrogate-escaped form produced by {@link NameTransform#decodeName(byte[])}
+     * is validated by the bytes it decodes to rather than by the escape
+     * characters themselves.</p>
+     *
      * @param name the decrypted name
      * @return {@code false} if {@code name} is empty, {@code "."}, {@code ".."},
      *         or contains a {@code "/"} or a NUL byte
      */
     static boolean isValidPlainName(String name) {
-        if (name.isEmpty() || name.equals(".") || name.equals("..")) {
+        return isValidNameBytes(NameTransform.encodeName(name));
+    }
+
+    /**
+     * Returns whether encoded name bytes are safe to use as a single path
+     * component.
+     *
+     * @param name the encoded name bytes
+     * @return {@code false} if {@code name} is empty, {@code "."}, {@code ".."},
+     *         or contains a {@code "/"} or a NUL byte
+     */
+    private static boolean isValidNameBytes(byte[] name) {
+        if (name.length == 0) {
             return false;
         }
-        for (int i = 0; i < name.length(); i++) {
-            char c = name.charAt(i);
-            if (c == '/' || c == '\0') {
+        if (name.length == 1 && name[0] == '.') {
+            return false;
+        }
+        if (name.length == 2 && name[0] == '.' && name[1] == '.') {
+            return false;
+        }
+        for (byte b : name) {
+            if (b == '/' || b == '\0') {
                 return false;
             }
         }
