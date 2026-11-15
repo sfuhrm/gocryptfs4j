@@ -85,6 +85,10 @@ final class SecurePathStore implements CipherStore {
             Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
                     StandardOpenOption.WRITE, StandardOpenOption.CREATE_NEW)));
 
+    /** The owner-only permissions of a freshly written file when none are requested. */
+    private static final Set<PosixFilePermission> DEFAULT_FILE_PERMISSIONS =
+            PosixFilePermissions.fromString("rw-------");
+
     /**
      * Creates a secure store over the given root, decorating {@code delegate}
      * for the operations that have no secure variant.
@@ -191,21 +195,13 @@ final class SecurePathStore implements CipherStore {
         Path temp = Paths.get(".gocryptfs-" + UUID.randomUUID() + ".tmp");
         boolean moved = false;
         try {
-            try (SeekableByteChannel channel = parent.dir().newByteChannel(temp,
-                    WRITE_CREATE_NEW)) {
+            try (SeekableByteChannel channel = openTempChannel(parent, temp, permissions)) {
                 ByteBuffer buffer = ByteBuffer.wrap(data);
                 while (buffer.hasRemaining()) {
                     channel.write(buffer);
                 }
                 if (channel instanceof FileChannel) {
                     ((FileChannel) channel).force(true);
-                }
-            }
-            if (permissions != null) {
-                PosixFileAttributeView view = parent.dir().getFileAttributeView(temp,
-                        PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
-                if (view != null) {
-                    view.setPermissions(permissions);
                 }
             }
             parent.dir().move(temp, parent.dir(), parent.name());
@@ -218,6 +214,35 @@ final class SecurePathStore implements CipherStore {
                     // Already gone.
                 }
             }
+        }
+    }
+
+    /**
+     * Opens the temporary file for {@link #writeSecure} with the permissions
+     * the published file should have, so the content is never written to a file
+     * whose umask-derived mode (typically {@code 0644}) is more permissive than
+     * the final file. When no explicit permissions are requested the file is
+     * created owner-only ({@code 0600}), matching the plain path store.
+     *
+     * @param parent      the pinned parent handle
+     * @param temp        the temporary file name
+     * @param permissions the requested POSIX permissions, or {@code null} for
+     *                    the owner-only default
+     * @return the opened channel
+     * @throws IOException on filesystem errors
+     */
+    private SeekableByteChannel openTempChannel(SecurePath parent, Path temp,
+                                                @Nullable Set<PosixFilePermission> permissions)
+            throws IOException {
+        Set<PosixFilePermission> mode =
+                permissions != null ? permissions : DEFAULT_FILE_PERMISSIONS;
+        try {
+            return parent.dir().newByteChannel(temp, WRITE_CREATE_NEW,
+                    PosixFilePermissions.asFileAttribute(mode));
+        } catch (UnsupportedOperationException e) {
+            // The provider has no POSIX attribute support; create with the
+            // default mode instead.
+            return parent.dir().newByteChannel(temp, WRITE_CREATE_NEW);
         }
     }
 
