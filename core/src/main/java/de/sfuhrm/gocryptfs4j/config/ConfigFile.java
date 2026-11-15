@@ -20,6 +20,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.CharBuffer;
+import java.nio.charset.CharsetEncoder;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
@@ -512,21 +514,45 @@ public final class ConfigFile {
      *
      * <p>The encoding is written straight into a mutable byte array; no
      * intermediate {@link String} is created, so the password never lingers in
-     * an immutable object that cannot be wiped.</p>
+     * an immutable object that cannot be wiped. The output buffer is sized up
+     * front to the maximum possible encoded length, so the encoder never has to
+     * grow it and leave an unwiped copy behind (which
+     * {@link StandardCharsets.UTF_8#encode(CharBuffer)} would, because it
+     * reallocates a larger buffer on overflow and discards the old one).</p>
      *
      * @param chars the characters
      * @return the UTF-8 encoded bytes
      */
     private static byte[] charsToBytes(char[] chars) {
-        ByteBuffer encoded = StandardCharsets.UTF_8.encode(CharBuffer.wrap(chars));
-        byte[] out = new byte[encoded.remaining()];
-        encoded.get(out);
-        if (encoded.hasArray()) {
-            byte[] backing = encoded.array();
-            Arrays.fill(backing, encoded.arrayOffset(),
-                    encoded.arrayOffset() + encoded.limit(), (byte) 0);
+        CharsetEncoder encoder = StandardCharsets.UTF_8.newEncoder()
+                .onMalformedInput(CodingErrorAction.REPLACE)
+                .onUnmappableCharacter(CodingErrorAction.REPLACE);
+        // Each UTF-16 code unit encodes to at most maxBytesPerChar() bytes, so
+        // this buffer is always large enough and never has to be reallocated.
+        ByteBuffer encoded = ByteBuffer.allocate(
+                (int) Math.ceil(chars.length * encoder.maxBytesPerChar()));
+        try {
+            encoder.encode(CharBuffer.wrap(chars), encoded, true);
+            encoder.flush(encoded);
+            encoded.flip();
+            byte[] out = new byte[encoded.remaining()];
+            encoded.get(out);
+            return out;
+        } finally {
+            wipeBuffer(encoded);
         }
-        return out;
+    }
+
+    /**
+     * Wipes the entire backing array of a heap {@link ByteBuffer}, including
+     * any capacity beyond the buffer's current limit.
+     *
+     * @param buffer the buffer to wipe
+     */
+    private static void wipeBuffer(ByteBuffer buffer) {
+        if (buffer.hasArray()) {
+            Arrays.fill(buffer.array(), (byte) 0);
+        }
     }
 
     /**
