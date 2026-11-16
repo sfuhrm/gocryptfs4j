@@ -248,6 +248,25 @@ class GocryptFsPathTest {
     }
 
     @Test
+    void toRealPathResolvesDotDotAfterSymlinkInsideLinkTarget() throws IOException {
+        Files.createDirectories(nio.getPath("/deep/dir"));
+        Files.createFile(nio.getPath("/deep/file"));
+        Files.createSymbolicLink(nio.getPath("/sub"), nio.getPath("/deep/dir"));
+        Files.createSymbolicLink(nio.getPath("/s"), nio.getPath("sub/../file"));
+        try {
+            // POSIX resolves /s -> sub/../file: sub -> /deep/dir, then ".." ->
+            // /deep, so the result is /deep/file and not the lexical /file.
+            assertEquals("/deep/file", nio.getPath("/s").toRealPath().toString());
+        } finally {
+            Files.deleteIfExists(nio.getPath("/s"));
+            Files.deleteIfExists(nio.getPath("/sub"));
+            Files.deleteIfExists(nio.getPath("/deep/dir"));
+            Files.deleteIfExists(nio.getPath("/deep/file"));
+            Files.deleteIfExists(nio.getPath("/deep"));
+        }
+    }
+
+    @Test
     void registerValidatesArguments() throws IOException {
         Path p = nio.getPath("/a");
         GocryptFsWatchService watcher = new GocryptFsWatchService((GocryptFsFileSystem) nio, 50L);

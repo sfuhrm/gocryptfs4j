@@ -546,7 +546,12 @@ final class GocryptFsPath implements Path {
                 String target = core.readSymlinkTarget(candidate.toString());
                 Path t = target.startsWith("/")
                         ? fs.getPath(target) : result.resolve(target);
-                result = resolveLinks(t.normalize(), depth + 1, strict);
+                // Do not lexically normalize the target before recursing: a
+                // ".." that follows a symlink component inside the target must
+                // be resolved from the symlink's target directory (POSIX), not
+                // from the symlink's lexical parent. The recursive walk already
+                // resolves "." and ".." component by component.
+                result = resolveLinks(t, depth + 1, strict);
             } else {
                 result = candidate;
             }
