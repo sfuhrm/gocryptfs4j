@@ -657,8 +657,18 @@ final class DirectoryManager {
             } else if (node.isRegularFile()) {
                 kind = DirEntry.Kind.FILE;
                 if (fileManager != null) {
-                    size = fileManager.plainSizeIncludingWriteBack(
-                            PathResolver.join(cipherDir, cName), node.size());
+                    try {
+                        size = fileManager.plainSizeIncludingWriteBack(
+                                PathResolver.join(cipherDir, cName), node.size());
+                    } catch (IOException e) {
+                        // A sticky flush failure makes the write-back-aware
+                        // plaintext size uncomputable. Skip only this entry so a
+                        // single failed file cannot make its whole directory
+                        // unlistable, and report it if a listener was supplied.
+                        reportSkipped(listener, cipherName,
+                                new IOException("cannot determine plaintext size", e));
+                        continue;
+                    }
                 } else {
                     size = contentGeometry.cipherSizeToPlainSize(node.size());
                 }

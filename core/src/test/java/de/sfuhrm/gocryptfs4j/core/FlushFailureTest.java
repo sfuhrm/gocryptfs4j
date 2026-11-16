@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class FlushFailureTest {
 
@@ -73,6 +74,30 @@ class FlushFailureTest {
         h.fileManager.delete("/f.txt");
         h.fileManager.createFile("/f.txt");
         assertEquals(0, h.fileManager.readAll("/f.txt").length);
+    }
+
+    @Test
+    void stickyFailureDoesNotMakeDirectoryUnlistable() throws Exception {
+        FailingWriteStore store = new FailingWriteStore();
+        ManagerHarness h = ManagerHarness.encrypted(store);
+        h.fileManager.createFile("/f.txt");
+
+        SharedCipherFile cf = h.fileManager.openCipherFile("/f.txt", true);
+        BlockBufferedChannel ch = cf.newChannel(0, true);
+        ch.write(ByteBuffer.wrap(new byte[100]));
+
+        store.failWrites = true;
+        assertThrows(IOException.class, ch::close);
+        assertThrows(IOException.class, cf::close);
+        store.failWrites = false;
+
+        byte[] iv = h.directoryManager.readDirIV(h.store.root());
+        List<String> skipped = new ArrayList<>();
+        List<DirEntry> entries = h.directoryManager.listCipherDir(h.store.root(), iv,
+                (cipherName, reason) -> skipped.add(cipherName));
+
+        assertTrue(entries.isEmpty(), "the failed file must be skipped, not abort the listing");
+        assertEquals(1, skipped.size(), "the skipped file must be reported");
     }
 
     @Test
