@@ -211,4 +211,42 @@ class NameManagerTest {
         assertThrows(IOException.class,
                 () -> h.nameManager.resolveLongName(h.store.root(), cipher));
     }
+
+    @Test
+    void prepareLongNameRejectsTamperedExistingSupportFile() throws IOException {
+        ManagerHarness h = ManagerHarness.encrypted();
+        byte[] iv = h.directoryManager.readDirIV(h.store.root());
+        String plain = repeat('a', 200);
+        String cipher = h.nameManager.cipherNameFor(plain, iv);
+
+        PathResolver.Resolved r = new PathResolver.Resolved(
+                PathResolver.join(h.store.root(), cipher), h.store.root(), iv, cipher, plain);
+
+        // A pre-existing .name file whose content does not hash back to the
+        // long name must not be silently kept.
+        String nameFile = PathResolver.join(h.store.root(), cipher + Constants.LONG_NAME_SUFFIX);
+        h.store.writeSmall(nameFile, "tampered".getBytes(StandardCharsets.UTF_8), false);
+
+        assertThrows(IOException.class, () -> h.nameManager.prepareLongName(r));
+    }
+
+    @Test
+    void prepareLongNameAcceptsExistingMatchingSupportFile() throws IOException {
+        ManagerHarness h = ManagerHarness.encrypted();
+        byte[] iv = h.directoryManager.readDirIV(h.store.root());
+        String plain = repeat('a', 200);
+        String cipher = h.nameManager.cipherNameFor(plain, iv);
+        String fullCipher = h.nameManager.encryptName(plain, iv);
+
+        PathResolver.Resolved r = new PathResolver.Resolved(
+                PathResolver.join(h.store.root(), cipher), h.store.root(), iv, cipher, plain);
+
+        // A .name file that already holds the matching full cipher name (for
+        // example from a rename/overwrite) is kept.
+        String nameFile = PathResolver.join(h.store.root(), cipher + Constants.LONG_NAME_SUFFIX);
+        h.store.writeSmall(nameFile, fullCipher.getBytes(StandardCharsets.UTF_8), false);
+
+        assertFalse(h.nameManager.prepareLongName(r));
+        assertEquals(fullCipher, h.nameManager.resolveLongName(h.store.root(), cipher));
+    }
 }

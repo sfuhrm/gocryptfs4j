@@ -210,7 +210,12 @@ final class NameManager {
             store.writeSmall(nameFile, fullCipher, false);
             return true;
         } catch (FileAlreadyExistsException ignored) {
-            // Allowed on rename/overwrite; the existing file is not ours to remove.
+            // The .name file already exists (for example when renaming onto an
+            // existing long-named entry). Keep it only if its content actually
+            // hashes back to this cipher name; a stale or tampered file would
+            // otherwise be kept and then make the entry undecryptable at
+            // listing time (a denial of service).
+            resolveLongName(cipherParent, cipherName);
             return false;
         }
     }
