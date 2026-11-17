@@ -104,6 +104,43 @@ class PathResolverTest {
     }
 
     @Test
+    void resolveRejectsCaseInsensitiveReservedNamesInPlaintextMode() throws IOException {
+        ManagerHarness h = ManagerHarness.plaintext();
+        h.fileManager.mkdir("/sub");
+
+        for (String name : Arrays.asList("GOCRYPTFS.CONF", "Gocryptfs.Diriv",
+                "gOcRyPtFs.anything", ".GoCryptFs.lock")) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> h.pathResolver.resolve("/" + name), name);
+        }
+        assertThrows(IllegalArgumentException.class,
+                () -> h.pathResolver.resolve("/sub/.GOCRYPTFS.lock"));
+    }
+
+    @Test
+    void resolveRejectsWindowsSeparatorsAndAdsInPlaintextMode() throws IOException {
+        ManagerHarness h = ManagerHarness.plaintext();
+        h.fileManager.mkdir("/sub");
+
+        for (String path : Arrays.asList("/x\\..\\gocryptfs.conf", "/sub/a\\b",
+                "/sub/a:b", "/GOCRYPTFS.CONF:stream")) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> h.pathResolver.resolve(path), path);
+        }
+    }
+
+    @Test
+    void resolveRejectsSurrogateEscapedReservedNamesInPlaintextMode() throws IOException {
+        ManagerHarness h = ManagerHarness.plaintext();
+        h.fileManager.mkdir("/sub");
+
+        assertThrows(IllegalArgumentException.class,
+                () -> h.pathResolver.resolve("/" + surrogateEscape("GOCRYPTFS.CONF")));
+        assertThrows(IllegalArgumentException.class,
+                () -> h.pathResolver.resolve("/sub/" + surrogateEscape(".gocryptfs.lock")));
+    }
+
+    @Test
     void resolveRejectsHiddenInternalNamesInEveryDirectory() throws IOException {
         ManagerHarness h = ManagerHarness.plaintext();
         h.fileManager.mkdir("/sub");
@@ -152,5 +189,20 @@ class PathResolverTest {
         h.fileManager.createFile("/file");
 
         assertThrows(NotDirectoryException.class, () -> h.pathResolver.resolve("/file/sub"));
+    }
+
+    /**
+     * Returns the surrogate-escaped form that {@code NameTransform.encodeName}
+     * maps back to the given ASCII bytes.
+     *
+     * @param ascii the ASCII name
+     * @return the surrogate-escaped name
+     */
+    private static String surrogateEscape(String ascii) {
+        StringBuilder escaped = new StringBuilder(ascii.length());
+        for (int i = 0; i < ascii.length(); i++) {
+            escaped.append((char) (0xDC00 + ascii.charAt(i)));
+        }
+        return escaped.toString();
     }
 }

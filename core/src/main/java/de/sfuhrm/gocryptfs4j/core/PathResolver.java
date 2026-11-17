@@ -1,5 +1,6 @@
 package de.sfuhrm.gocryptfs4j.core;
 
+import de.sfuhrm.gocryptfs4j.crypto.Constants;
 import de.sfuhrm.gocryptfs4j.store.CipherStore;
 import org.jspecify.annotations.Nullable;
 
@@ -19,6 +20,13 @@ import java.util.Objects;
  * {@link Resolved}.</p>
  */
 final class PathResolver {
+
+    /** Names of the control files directly in the ciphertext root. */
+    private static final String[] CONTROL_FILE_NAMES = {
+            Constants.CONF_DEFAULT_NAME,
+            Constants.CONF_DEFAULT_NAME + ".bak",
+            Constants.DIR_IV_FILENAME,
+    };
 
     /** Result of resolving a plaintext path to a cipher-side path. */
     static final class Resolved {
@@ -143,7 +151,9 @@ final class PathResolver {
         }
         String plainName = comps.get(comps.size() - 1);
         String cName = nameManager.cipherNameFor(plainName, curIV);
-        return new Resolved(join(cur, cName), cur, curIV, cName, plainName);
+        Resolved resolved = new Resolved(join(cur, cName), cur, curIV, cName, plainName);
+        checkResolvedPathNotControlFile(resolved.cipherPath());
+        return resolved;
     }
 
     /**
@@ -173,7 +183,9 @@ final class PathResolver {
             curIV = directoryManager.readDirIV(cur, create);
         }
         String cName = nameManager.cipherNameFor(plainName, curIV);
-        return new Resolved(join(cur, cName), cur, curIV, cName, plainName);
+        Resolved resolved = new Resolved(join(cur, cName), cur, curIV, cName, plainName);
+        checkResolvedPathNotControlFile(resolved.cipherPath());
+        return resolved;
     }
 
     /**
@@ -216,6 +228,53 @@ final class PathResolver {
                 throw new IllegalArgumentException("reserved gocryptfs name: " + component);
             }
         }
+    }
+
+    /**
+     * Rejects a resolved cipher path that canonicalizes to a root control file.
+     * This is a second line of defense behind {@link #checkNotReserved}: path
+     * normalization in the backing store may interpret separators or relative
+     * segments differently from the plaintext component check, so the fully
+     * resolved path is compared case-insensitively with the control files.
+     *
+     * @param cipherPath the resolved ciphertext path
+     * @throws IllegalArgumentException if the path resolves to a control file
+     */
+    private void checkResolvedPathNotControlFile(String cipherPath) {
+        if (!plaintextNames) {
+            return;
+        }
+        String resolved = canonicalPath(cipherPath);
+        for (String controlName : CONTROL_FILE_NAMES) {
+            if (resolved.equalsIgnoreCase(canonicalPath(join(rootName, controlName)))) {
+                throw new IllegalArgumentException(
+                        "reserved gocryptfs name: " + cipherPath);
+            }
+        }
+    }
+
+    /**
+     * Canonicalizes a cipher path for comparison, treating both slash styles as
+     * separators and resolving {@code "."} and {@code ".."} segments.
+     *
+     * @param path the cipher path
+     * @return the canonical path without leading, trailing or repeated separators
+     */
+    private static String canonicalPath(String path) {
+        List<String> segments = new ArrayList<>();
+        for (String segment : path.replace('\\', '/').split("/", -1)) {
+            if (segment.isEmpty() || segment.equals(".")) {
+                continue;
+            }
+            if (segment.equals("..")) {
+                if (!segments.isEmpty()) {
+                    segments.remove(segments.size() - 1);
+                }
+                continue;
+            }
+            segments.add(segment);
+        }
+        return String.join("/", segments);
     }
 
     /**

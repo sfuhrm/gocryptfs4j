@@ -71,6 +71,13 @@ final class NameManager {
      * subdirectory possible; such an entry cannot collide with a control
      * file.</p>
      *
+     * <p>The comparison is case-insensitive because the local store may be on a
+     * case-insensitive filesystem (Windows, macOS), and it runs on the encoded
+     * name bytes so a surrogate-escaped spelling cannot hide a reserved name.
+     * Names containing a backslash or colon are also rejected: the former is a
+     * path separator on Windows and the latter introduces an alternate data
+     * stream there.</p>
+     *
      * @param name the plaintext (and, in plaintext-names mode, cipher) name
      * @param root whether the name is directly in the ciphertext root
      * @return {@code true} if the name is reserved
@@ -81,10 +88,62 @@ final class NameManager {
         if (!plaintextNames) {
             return false;
         }
-        if (name.startsWith(Constants.INTERNAL_NAME_PREFIX)) {
+        byte[] encoded = NameTransform.encodeName(name);
+        if (containsEither(encoded, (byte) '\\', (byte) ':')) {
             return true;
         }
-        return root && name.startsWith(Constants.RESERVED_ROOT_PREFIX);
+        if (startsWithIgnoreCase(encoded, Constants.INTERNAL_NAME_PREFIX)) {
+            return true;
+        }
+        return root && startsWithIgnoreCase(encoded, Constants.RESERVED_ROOT_PREFIX);
+    }
+
+    /**
+     * Returns whether the encoded name bytes contain either of two bytes.
+     *
+     * @param value  the name bytes
+     * @param first  the first byte to look for
+     * @param second the second byte to look for
+     * @return {@code true} if either byte occurs in {@code value}
+     */
+    private static boolean containsEither(byte[] value, byte first, byte second) {
+        for (byte b : value) {
+            if (b == first || b == second) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Compares ASCII prefixes case-insensitively on the encoded name bytes.
+     *
+     * @param value  the encoded name
+     * @param prefix the ASCII prefix
+     * @return {@code true} if {@code value} starts with {@code prefix}
+     */
+    private static boolean startsWithIgnoreCase(byte[] value, String prefix) {
+        if (value.length < prefix.length()) {
+            return false;
+        }
+        for (int i = 0; i < prefix.length(); i++) {
+            int actual = value[i] & 0xFF;
+            int expected = prefix.charAt(i);
+            if (asciiLowerCase(actual) != asciiLowerCase(expected)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Lower-cases an ASCII character, leaving every other value unchanged.
+     *
+     * @param c the character value
+     * @return the lower-case ASCII character, or {@code c}
+     */
+    private static int asciiLowerCase(int c) {
+        return c >= 'A' && c <= 'Z' ? c + ('a' - 'A') : c;
     }
 
     /**

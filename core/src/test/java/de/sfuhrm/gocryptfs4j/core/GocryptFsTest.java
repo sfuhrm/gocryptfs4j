@@ -760,6 +760,17 @@ class GocryptFsTest {
             assertThrows(IllegalArgumentException.class, () -> fs.list("/gocryptfs.conf"));
             assertThrows(IllegalArgumentException.class, () -> fs.openRead("/gocryptfs.conf"));
 
+            // Case variants, Windows separators, and alternate data streams must
+            // not reach the control file either.
+            for (String attack : Arrays.asList("/GOCRYPTFS.CONF",
+                    "/x\\..\\gocryptfs.conf", "/gocryptfs.conf:stream")) {
+                assertThrows(IllegalArgumentException.class,
+                        () -> fs.readAll(attack), attack);
+                assertThrows(IllegalArgumentException.class,
+                        () -> fs.write(attack, 0, new byte[]{2}), attack);
+                assertThrows(IllegalArgumentException.class, () -> fs.delete(attack), attack);
+            }
+
             // The control file is untouched.
             assertArrayEquals(before, Files.readAllBytes(conf));
 
