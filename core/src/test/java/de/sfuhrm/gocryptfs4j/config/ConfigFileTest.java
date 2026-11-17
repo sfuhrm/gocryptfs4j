@@ -10,6 +10,7 @@ import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -446,14 +447,170 @@ class ConfigFileTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "[\"HKDF\",\"GCMIV128\",\"PlaintextNames\",\"EMENames\"]",
+        "[\"HKDF\",\"GCMIV128\",\"PlaintextNames\",\"DirIV\"]",
+        "[\"HKDF\",\"GCMIV128\",\"PlaintextNames\",\"LongNames\"]",
+        "[\"HKDF\",\"GCMIV128\",\"PlaintextNames\",\"Raw64\"]",
+        "[\"HKDF\",\"GCMIV128\",\"PlaintextNames\",\"LongNameMax\"]"
+    })
+    void loadRejectsPlaintextNamesWithEncryptedNameFlags(String flags) throws Exception {
+        Path dir = Files.createTempDirectory("gocryptfs4j-");
+        String salt32 = Base64.getEncoder().encodeToString(new byte[32]);
+        try {
+            IOException thrown = assertThrows(IOException.class, () -> ConfigFile.load(
+                    writeConf(dir, salt32, 1 << 16, 8, 1, 32, flags, null)));
+            assertTrue(thrown.getMessage().contains("PlaintextNames"), thrown.getMessage());
+        } finally {
+            Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
+    void loadRejectsLongNameMaxFieldWithoutFlag() throws Exception {
+        Path dir = Files.createTempDirectory("gocryptfs4j-");
+        String salt32 = Base64.getEncoder().encodeToString(new byte[32]);
+        try {
+            IOException thrown = assertThrows(IOException.class, () -> ConfigFile.load(
+                    writeConf(dir, salt32, 1 << 16, 8, 1, 32,
+                            "[\"HKDF\",\"GCMIV128\",\"EMENames\"]", null, 200)));
+            assertTrue(thrown.getMessage().contains("LongNameMax"), thrown.getMessage());
+        } finally {
+            Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
+    void loadRejectsLongNameMaxFlagWithoutField() throws Exception {
+        Path dir = Files.createTempDirectory("gocryptfs4j-");
+        String salt32 = Base64.getEncoder().encodeToString(new byte[32]);
+        try {
+            IOException thrown = assertThrows(IOException.class, () -> ConfigFile.load(
+                    writeConf(dir, salt32, 1 << 16, 8, 1, 32,
+                            "[\"HKDF\",\"GCMIV128\",\"EMENames\",\"LongNameMax\"]", null)));
+            assertTrue(thrown.getMessage().contains("LongNameMax"), thrown.getMessage());
+        } finally {
+            Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
+    void loadAllowsConsistentLongNameMax() throws Exception {
+        Path dir = Files.createTempDirectory("gocryptfs4j-");
+        String salt32 = Base64.getEncoder().encodeToString(new byte[32]);
+        try {
+            ConfigFile cf = ConfigFile.load(
+                    writeConf(dir, salt32, 1 << 16, 8, 1, 32,
+                            "[\"HKDF\",\"GCMIV128\",\"EMENames\",\"LongNames\","
+                                    + "\"LongNameMax\"]", null, 200));
+            assertEquals(200, cf.longNameMax());
+        } finally {
+            Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
+    void loadRejectsXchachaWithGcmIv128() throws Exception {
+        Path dir = Files.createTempDirectory("gocryptfs4j-");
+        String salt32 = Base64.getEncoder().encodeToString(new byte[32]);
+        try {
+            IOException thrown = assertThrows(IOException.class, () -> ConfigFile.load(
+                    writeConf(dir, salt32, 1 << 16, 8, 1, 32,
+                            "[\"HKDF\",\"GCMIV128\",\"XChaCha20Poly1305\",\"EMENames\"]",
+                            null)));
+            assertTrue(thrown.getMessage().contains("GCMIV128"), thrown.getMessage());
+        } finally {
+            Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
+    void loadRejectsXchachaWithoutHkdf() throws Exception {
+        Path dir = Files.createTempDirectory("gocryptfs4j-");
+        String salt32 = Base64.getEncoder().encodeToString(new byte[32]);
+        try {
+            IOException thrown = assertThrows(IOException.class, () -> ConfigFile.load(
+                    writeConf(dir, salt32, 1 << 16, 8, 1, 32,
+                            "[\"XChaCha20Poly1305\",\"EMENames\"]", null)));
+            assertTrue(thrown.getMessage().contains("HKDF"), thrown.getMessage());
+        } finally {
+            Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
+    void loadRejectsAesSivWithoutGcmIv128() throws Exception {
+        Path dir = Files.createTempDirectory("gocryptfs4j-");
+        String salt32 = Base64.getEncoder().encodeToString(new byte[32]);
+        try {
+            // XCHACHA satisfies the required content flag, so the AESSIV
+            // coherence check is what rejects this config.
+            IOException thrown = assertThrows(IOException.class, () -> ConfigFile.load(
+                    writeConf(dir, salt32, 1 << 16, 8, 1, 32,
+                            "[\"HKDF\",\"XChaCha20Poly1305\",\"AESSIV\",\"EMENames\"]", null)));
+            assertTrue(thrown.getMessage().contains("requires GCMIV128"), thrown.getMessage());
+        } finally {
+            Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
+    void loadRejectsAesSivWithXchacha() throws Exception {
+        Path dir = Files.createTempDirectory("gocryptfs4j-");
+        String salt32 = Base64.getEncoder().encodeToString(new byte[32]);
+        try {
+            IOException thrown = assertThrows(IOException.class, () -> ConfigFile.load(
+                    writeConf(dir, salt32, 1 << 16, 8, 1, 32,
+                            "[\"HKDF\",\"GCMIV128\",\"XChaCha20Poly1305\",\"AESSIV\",\"EMENames\"]",
+                            null)));
+            assertTrue(thrown.getMessage().contains("both"), thrown.getMessage());
+        } finally {
+            Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
+    void loadAllowsLegacyEmeNamesWithoutDirIv() throws Exception {
+        Path dir = Files.createTempDirectory("gocryptfs4j-");
+        String salt32 = Base64.getEncoder().encodeToString(new byte[32]);
+        try {
+            ConfigFile cf = ConfigFile.load(
+                    writeConf(dir, salt32, 1 << 16, 8, 1, 32,
+                            "[\"HKDF\",\"GCMIV128\",\"EMENames\"]", null));
+            assertTrue(cf.isFeatureFlagSet(Constants.FLAG_EME_NAMES));
+            assertFalse(cf.dirIv());
+        } finally {
+            Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
+            Files.deleteIfExists(dir);
+        }
+    }
+
     private static CipherStore writeConf(Path dir, String saltB64, int n, int r, int p, int keyLen,
                                          String featureFlags, String fido2) throws IOException {
+        return writeConf(dir, saltB64, n, r, p, keyLen, featureFlags, fido2, null);
+    }
+
+    private static CipherStore writeConf(Path dir, String saltB64, int n, int r, int p, int keyLen,
+                                         String featureFlags, String fido2, Integer longNameMax)
+            throws IOException {
         StringBuilder json = new StringBuilder();
         json.append("{\"Creator\":\"test\",\"EncryptedKey\":\"").append(VALID_ENCRYPTED_KEY).append("\",");
         json.append("\"ScryptObject\":{\"Salt\":\"").append(saltB64).append("\",");
         json.append("\"N\":").append(n).append(",\"R\":").append(r)
                 .append(",\"P\":").append(p).append(",\"KeyLen\":").append(keyLen).append("},");
         json.append("\"Version\":2,\"FeatureFlags\":").append(featureFlags);
+        if (longNameMax != null) {
+            json.append(",\"LongNameMax\":").append(longNameMax);
+        }
         if (fido2 != null) {
             json.append(",\"FIDO2\":").append(fido2);
         }

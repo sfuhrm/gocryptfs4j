@@ -217,6 +217,7 @@ public final class ConfigFile {
             }
         }
         validateRequiredFlags();
+        validateFlagCoherence();
         validateEncryptedKey();
         validateScrypt();
         if (isFeatureFlagSet(Constants.FLAG_FIDO2)) {
@@ -276,6 +277,70 @@ public final class ConfigFile {
         if (!isFeatureFlagSet(Constants.FLAG_XCHACHA)
                 && !isFeatureFlagSet(Constants.FLAG_GCM_IV128)) {
             throw new IOException("GCMIV128 feature flag is missing (legacy 96-bit IVs)");
+        }
+    }
+
+    /**
+     * Rejects feature-flag combinations that describe contradictory formats.
+     *
+     * <p>The config file is not authenticated together with the master key, so
+     * its flags can be edited independently of {@code EncryptedKey}. A coherent
+     * set of flags is still required: for example, {@code PlaintextNames}
+     * disables name encryption and therefore cannot be combined with any of the
+     * encrypted-name flags, and AES-SIV needs the 128-bit IVs selected by
+     * {@code GCMIV128}. Rejecting these combinations makes the common flag-flip
+     * downgrades fail instead of silently selecting a different on-disk
+     * format. The rules mirror gocryptfs's own config validation.</p>
+     *
+     * <p>Note that {@code EMENames} without {@code DirIV} is deliberately
+     * allowed: that is the legacy deterministic-name mode, not a contradiction.
+     * Likewise {@code LongNames} and {@code Raw64} are optional refinements of
+     * EME name encryption.</p>
+     *
+     * @throws IOException if the flags contradict each other
+     */
+    private void validateFlagCoherence() throws IOException {
+        if (isFeatureFlagSet(Constants.FLAG_AES_SIV)
+                && !isFeatureFlagSet(Constants.FLAG_GCM_IV128)) {
+            throw new IOException("AESSIV feature flag requires GCMIV128");
+        }
+        if (isFeatureFlagSet(Constants.FLAG_XCHACHA)
+                && isFeatureFlagSet(Constants.FLAG_AES_SIV)) {
+            throw new IOException(
+                    "can't have both XChaCha20Poly1305 and AESSIV feature flags");
+        }
+        if (isFeatureFlagSet(Constants.FLAG_XCHACHA)) {
+            if (isFeatureFlagSet(Constants.FLAG_GCM_IV128)) {
+                throw new IOException(
+                        "XChaCha20Poly1305 conflicts with GCMIV128 feature flag");
+            }
+            if (!isFeatureFlagSet(Constants.FLAG_HKDF)) {
+                throw new IOException(
+                        "XChaCha20Poly1305 requires HKDF feature flag");
+            }
+        }
+        if (isFeatureFlagSet(Constants.FLAG_PLAINTEXT_NAMES)) {
+            String[] encryptedNameFlags = {
+                Constants.FLAG_EME_NAMES,
+                Constants.FLAG_DIR_IV,
+                Constants.FLAG_LONG_NAMES,
+                Constants.FLAG_RAW64,
+                Constants.FLAG_LONG_NAME_MAX
+            };
+            for (String flag : encryptedNameFlags) {
+                if (isFeatureFlagSet(flag)) {
+                    throw new IOException("feature flag " + flag
+                            + " is incompatible with PlaintextNames");
+                }
+            }
+        }
+        boolean longNameMaxSet = longNameMax != null && longNameMax != 0;
+        if (longNameMaxSet && !isFeatureFlagSet(Constants.FLAG_LONG_NAME_MAX)) {
+            throw new IOException("LongNameMax=" + longNameMax
+                    + " but the LongNameMax feature flag is NOT set");
+        }
+        if (!longNameMaxSet && isFeatureFlagSet(Constants.FLAG_LONG_NAME_MAX)) {
+            throw new IOException("LongNameMax feature flag is set but LongNameMax is missing");
         }
     }
 
