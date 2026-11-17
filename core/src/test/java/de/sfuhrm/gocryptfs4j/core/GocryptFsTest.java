@@ -2,6 +2,7 @@ package de.sfuhrm.gocryptfs4j.core;
 
 import de.sfuhrm.gocryptfs4j.config.ConfigFile;
 import de.sfuhrm.gocryptfs4j.crypto.Constants;
+import de.sfuhrm.gocryptfs4j.crypto.ContentEnc;
 import de.sfuhrm.gocryptfs4j.store.CipherChannel;
 import de.sfuhrm.gocryptfs4j.store.CipherNode;
 import de.sfuhrm.gocryptfs4j.store.CipherStore;
@@ -16,6 +17,7 @@ import java.io.OutputStream;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
 import java.nio.channels.ClosedChannelException;
 import java.nio.charset.StandardCharsets;
@@ -211,6 +213,80 @@ class GocryptFsTest {
             assertArrayEquals(data, fs.readAll("/f.txt"),
                     "the pre-close write must be flushed before the keys are wiped");
         }
+    }
+
+    @Test
+    void closeWipesContentKeyOfStillOpenFile() throws Exception {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray());
+        fs.createFile("/f.txt");
+        fs.write("/f.txt", 0, "data".getBytes(StandardCharsets.UTF_8));
+        SharedCipherFile cf = fs.openCipherFile("/f.txt", false);
+
+        Field entryField = SharedCipherFile.class.getDeclaredField("entry");
+        entryField.setAccessible(true);
+        SharedCipherFile.Entry entry = (SharedCipherFile.Entry) entryField.get(cf);
+        CipherFile file = entry.file;
+        assertNotNull(file);
+
+        Field encField = CipherFile.class.getDeclaredField("enc");
+        encField.setAccessible(true);
+        ContentEnc enc = (ContentEnc) encField.get(file);
+
+        fs.close();
+
+        assertNull(entry.file, "the backing file must be detached on filesystem close");
+        assertThrows(IllegalStateException.class,
+                () -> enc.encryptBlock(new byte[16], 0, null),
+                "the detached file's content key must be wiped");
+        cf.close();
+    }
+
+    @Test
+    void closeWipesContentKeyOfDeletedStillOpenFile() throws Exception {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray());
+        fs.createFile("/f.txt");
+        fs.write("/f.txt", 0, "data".getBytes(StandardCharsets.UTF_8));
+        SharedCipherFile cf = fs.openCipherFile("/f.txt", false);
+
+        Field entryField = SharedCipherFile.class.getDeclaredField("entry");
+        entryField.setAccessible(true);
+        SharedCipherFile.Entry entry = (SharedCipherFile.Entry) entryField.get(cf);
+        CipherFile file = entry.file;
+        assertNotNull(file);
+
+        Field encField = CipherFile.class.getDeclaredField("enc");
+        encField.setAccessible(true);
+        ContentEnc enc = (ContentEnc) encField.get(file);
+
+        fs.delete("/f.txt");
+        fs.close();
+
+        assertNull(entry.file, "the unlinked backing file must be detached on filesystem close");
+        assertThrows(IllegalStateException.class,
+                () -> enc.encryptBlock(new byte[16], 0, null),
+                "the unlinked file's content key must be wiped");
+        cf.close();
+    }
+
+    @Test
+    void deriveContentEncFailsAfterClose() throws Exception {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray());
+        fs.close();
+
+        Method derive = GocryptFs.class.getDeclaredMethod("deriveContentEnc");
+        derive.setAccessible(true);
+        InvocationTargetException thrown = assertThrows(InvocationTargetException.class,
+                () -> derive.invoke(fs));
+        assertInstanceOf(IllegalStateException.class, thrown.getCause());
     }
 
     @Test

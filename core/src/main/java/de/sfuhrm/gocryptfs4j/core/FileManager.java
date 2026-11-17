@@ -94,6 +94,13 @@ final class FileManager {
     private final Map<String, SharedCipherFile.Entry> sharedFiles = new ConcurrentHashMap<>();
 
     /**
+     * Every entry that currently has a live backing file, including entries
+     * removed from {@link #sharedFiles} by a delete or a replace. Filesystem
+     * close uses this set to wipe content keys even when their path is gone.
+     */
+    private final Set<SharedCipherFile.Entry> openEntries = ConcurrentHashMap.newKeySet();
+
+    /**
      * Guards channel I/O against the owning filesystem closing. Every entry
      * created here shares this guard so a close can exclude all channels at
      * once while it flushes pending writes and then wipes the keys.
@@ -271,7 +278,7 @@ final class FileManager {
             if (entry == null) {
                 entry = new SharedCipherFile.Entry();
                 entry.guard = channelGuard;
-                entry.releaseAction = this::pruneSharedFile;
+                entry.releaseAction = this::releaseEntry;
             }
             synchronized (entry.lock) {
                 entry.key = cipherFile;
@@ -304,6 +311,7 @@ final class FileManager {
                         }
                     }
                     entry.refs++;
+                    openEntries.add(entry);
                     opened[0] = entry;
                     return entry;
                 } catch (IOException e) {
@@ -430,6 +438,22 @@ final class FileManager {
     }
 
     /**
+     * Drops a fully released entry from the open-file registry and prunes its
+     * path entry. A failed close stays registered by path so the next open
+     * reports the loss, but its backing file is already gone.
+     *
+     * @param entry the entry whose last handle was released
+     */
+    private void releaseEntry(SharedCipherFile.Entry entry) {
+        synchronized (entry.lock) {
+            if (entry.refs == 0) {
+                openEntries.remove(entry);
+            }
+        }
+        pruneSharedFile(entry);
+    }
+
+    /**
      * Removes a shared entry after its last handle has been released, unless a
      * concurrent open already acquired it again. The entry remembers its
      * current key because a rename may move it while handles are open.
@@ -552,9 +576,35 @@ final class FileManager {
      */
     void flushSharedFiles() throws IOException {
         IOException failure = null;
-        for (SharedCipherFile.Entry entry : sharedFiles.values()) {
+        for (SharedCipherFile.Entry entry : openEntries) {
             try {
                 SharedCipherFile.flushEntry(entry);
+            } catch (IOException e) {
+                if (failure == null) {
+                    failure = e;
+                } else {
+                    failure.addSuppressed(e);
+                }
+            }
+        }
+        if (failure != null) {
+            throw failure;
+        }
+    }
+
+    /**
+     * Closes every shared cipher file, wiping its block cache and the
+     * content-encryption key of its backing file, so no derived content key
+     * survives a filesystem close even when handles are still open. The
+     * underlying store is not closed.
+     *
+     * @throws IOException on filesystem errors while closing a file
+     */
+    void closeSharedFiles() throws IOException {
+        IOException failure = null;
+        for (SharedCipherFile.Entry entry : openEntries) {
+            try {
+                SharedCipherFile.closeEntry(entry);
             } catch (IOException e) {
                 if (failure == null) {
                     failure = e;

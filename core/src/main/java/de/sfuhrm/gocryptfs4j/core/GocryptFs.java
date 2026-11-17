@@ -84,7 +84,8 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * the EME name-encryption sub-key are owned by this instance and wiped on
  * {@link #close()}. The content-encryption sub-key is scoped to the resource
  * that requires it: each file, stream and handle derives its own copy and wipes
- * it when it closes. A raw master-key array is
+ * it when it closes; {@link #close()} also closes any still-open files so no
+ * copy survives it. A raw master-key array is
  * cloned internally, so closing the filesystem never modifies the caller's
  * array. Secrets obtained from a {@link Fido2Token} are owned and wiped by
  * this class.</p>
@@ -2595,17 +2596,19 @@ public final class GocryptFs implements AutoCloseable {
      * wiped only on {@link #close()}.
      *
      * @return a new content-encryption helper
+     * @throws IllegalStateException if this filesystem has been closed
      */
     private ContentEnc deriveContentEnc() {
+        ensureOpen();
         return config.contentEnc(masterKey);
     }
 
     /**
      * Wipes the master key and the EME name-encryption key, and clears the
      * directory-IV cache. This is the secret-destruction part of
-     * {@link #close()}; it deliberately does not touch the store. Content keys
-     * are owned per resource and are wiped by those resources on their own
-     * close.
+     * {@link #close()}; it deliberately does not touch the store. The content
+     * keys of files that are still open are wiped separately, before this runs,
+     * by closing their backing files.
      */
     private void wipeSecrets() {
         directoryManager.clearDirIvCache();
@@ -2660,6 +2663,17 @@ public final class GocryptFs implements AutoCloseable {
                     fileManager.flushSharedFiles();
                 } catch (IOException e) {
                     failure = e;
+                }
+                try {
+                    // Close files whose handles are still open so their
+                    // per-file content keys are wiped along with the master key.
+                    fileManager.closeSharedFiles();
+                } catch (IOException e) {
+                    if (failure == null) {
+                        failure = e;
+                    } else {
+                        failure.addSuppressed(e);
+                    }
                 }
                 try {
                     wipeSecrets();

@@ -520,6 +520,51 @@ public final class SharedCipherFile implements AutoCloseable {
     }
 
     /**
+     * Wipes the shared block cache and closes the backing file and any retired
+     * files of an entry, which wipes their content-encryption keys. Used when
+     * the owning filesystem closes while handles on the entry are still open;
+     * those handles later release without a backing file.
+     *
+     * @param entry the shared entry
+     * @throws IOException on filesystem errors while closing a file
+     */
+    static void closeEntry(Entry entry) throws IOException {
+        synchronized (entry.lock) {
+            BlockCache cache = entry.cache;
+            if (cache != null) {
+                cache.wipe();
+            }
+            entry.cache = null;
+            CipherFile file = entry.file;
+            entry.file = null;
+            List<CipherFile> retired = new ArrayList<>(entry.retired);
+            entry.retired.clear();
+            IOException failure = null;
+            if (file != null) {
+                try {
+                    file.close();
+                } catch (IOException e) {
+                    failure = e;
+                }
+            }
+            for (CipherFile old : retired) {
+                try {
+                    old.close();
+                } catch (IOException e) {
+                    if (failure == null) {
+                        failure = e;
+                    } else {
+                        failure.addSuppressed(e);
+                    }
+                }
+            }
+            if (failure != null) {
+                throw failure;
+            }
+        }
+    }
+
+    /**
      * Releases this handle's reference to the shared file, closing the
      * underlying channel when the last reference is released. Calling this
      * method more than once has no effect.
@@ -646,7 +691,7 @@ public final class SharedCipherFile implements AutoCloseable {
                 // gone, so the next open on this path can report the lost write
                 // instead of silently starting over. A delete/recreate clears
                 // it through FileManager.
-                releaseAction = last && entry.failure == null ? entry.releaseAction : null;
+                releaseAction = last ? entry.releaseAction : null;
             }
             // The registry callback must run outside this entry's monitor: it
             // takes the map's lock and then re-checks the entry under this lock.
