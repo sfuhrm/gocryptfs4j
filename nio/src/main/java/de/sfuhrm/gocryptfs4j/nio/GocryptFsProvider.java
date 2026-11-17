@@ -2,6 +2,7 @@ package de.sfuhrm.gocryptfs4j.nio;
 
 import de.sfuhrm.gocryptfs4j.core.DirEntry;
 import de.sfuhrm.gocryptfs4j.core.GocryptFs;
+import de.sfuhrm.gocryptfs4j.core.OpenOptions;
 import de.sfuhrm.gocryptfs4j.core.SharedCipherFile;
 import de.sfuhrm.gocryptfs4j.fido2.Fido2Token;
 import de.sfuhrm.gocryptfs4j.store.CipherStore;
@@ -67,7 +68,10 @@ import java.util.concurrent.locks.Lock;
  * {@code windowsSeparators} entry (a {@code Boolean}) controls whether
  * backslashes are treated as path separators, and the optional {@code readOnly}
  * entry (a {@code Boolean}) opens the filesystem without a writer lock and for
- * reading only.</p>
+ * reading only. The optional {@code allowPlaintextNames} and
+ * {@code allowDeterministicNames} entries (both {@code Boolean}, default
+ * {@code false}) opt in to the downgrade-prone name modes; without them opening
+ * such a config fails.</p>
  *
  * <p>This provider only backs the cipher directory with a local
  * {@link PathCipherStore}, so {@code cipherDir} must refer to a directory on a
@@ -98,7 +102,23 @@ public final class GocryptFsProvider extends FileSystemProvider {
      * @throws NullPointerException if {@code cipherDir} or {@code password} is {@code null}
      */
     public FileSystem newFileSystem(Path cipherDir, char[] password) throws IOException {
-        return newFileSystem(cipherDir, password, false);
+        return newFileSystem(cipherDir, password, OpenOptions.defaults());
+    }
+
+    /**
+     * Opens a filesystem directly, without a URI, with an explicit open policy.
+     *
+     * @param cipherDir the ciphertext directory
+     * @param password  the password to unlock the master key with
+     * @param options   the policy for downgrade-prone config modes
+     * @return the opened filesystem
+     * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code cipherDir}, {@code password} or
+     *                              {@code options} is {@code null}
+     */
+    public FileSystem newFileSystem(Path cipherDir, char[] password, OpenOptions options)
+            throws IOException {
+        return newFileSystem(cipherDir, password, false, false, options);
     }
 
     /**
@@ -129,15 +149,36 @@ public final class GocryptFsProvider extends FileSystemProvider {
      */
     public FileSystem newFileSystem(Path cipherDir, char[] password, boolean windowsSeparators,
                                     boolean readOnly) throws IOException {
+        return newFileSystem(cipherDir, password, windowsSeparators, readOnly,
+                OpenOptions.defaults());
+    }
+
+    /**
+     * Opens a filesystem directly, without a URI, optionally read-only and with
+     * an explicit open policy.
+     *
+     * @param cipherDir         the ciphertext directory
+     * @param password          the password to unlock the master key with
+     * @param windowsSeparators whether {@code "\"} is treated as a path separator
+     * @param readOnly          whether to open without a writer lock and for reading only
+     * @param options           the policy for downgrade-prone config modes
+     * @return the opened filesystem
+     * @throws IOException on filesystem errors
+     * @throws NullPointerException if {@code cipherDir}, {@code password} or
+     *                              {@code options} is {@code null}
+     */
+    public FileSystem newFileSystem(Path cipherDir, char[] password, boolean windowsSeparators,
+                                    boolean readOnly, OpenOptions options) throws IOException {
         Objects.requireNonNull(cipherDir, "cipherDir");
         Objects.requireNonNull(password, "password");
+        Objects.requireNonNull(options, "options");
         ensureNotRegistered(cipherDir, readOnly);
         PathCipherStore store = new PathCipherStore(cipherDir);
         GocryptFs core;
         try {
             core = readOnly
-                    ? GocryptFs.openReadOnly(store, password)
-                    : GocryptFs.open(store, password);
+                    ? GocryptFs.openReadOnly(store, password, options)
+                    : GocryptFs.open(store, password, options);
         } catch (IOException | RuntimeException e) {
             closeQuietly(store);
             throw e;
@@ -155,7 +196,24 @@ public final class GocryptFsProvider extends FileSystemProvider {
      * @throws NullPointerException if {@code cipherDir} or {@code token} is {@code null}
      */
     public FileSystem newFileSystem(Path cipherDir, Fido2Token token) throws IOException {
-        return newFileSystem(cipherDir, token, false);
+        return newFileSystem(cipherDir, token, OpenOptions.defaults());
+    }
+
+    /**
+     * Opens a FIDO2-protected filesystem directly, without a URI, with an
+     * explicit open policy.
+     *
+     * @param cipherDir the ciphertext directory
+     * @param token     the FIDO2 token implementation to unlock the master key with
+     * @param options   the policy for downgrade-prone config modes
+     * @return the opened filesystem
+     * @throws IOException on filesystem errors or if the token interaction fails
+     * @throws NullPointerException if {@code cipherDir}, {@code token} or
+     *                              {@code options} is {@code null}
+     */
+    public FileSystem newFileSystem(Path cipherDir, Fido2Token token, OpenOptions options)
+            throws IOException {
+        return newFileSystem(cipherDir, token, false, false, options);
     }
 
     /**
@@ -187,20 +245,61 @@ public final class GocryptFsProvider extends FileSystemProvider {
      */
     public FileSystem newFileSystem(Path cipherDir, Fido2Token token, boolean windowsSeparators,
                                     boolean readOnly) throws IOException {
+        return newFileSystem(cipherDir, token, windowsSeparators, readOnly,
+                OpenOptions.defaults());
+    }
+
+    /**
+     * Opens a FIDO2-protected filesystem directly, without a URI, optionally
+     * read-only and with an explicit open policy.
+     *
+     * @param cipherDir         the ciphertext directory
+     * @param token             the FIDO2 token implementation to unlock the master key with
+     * @param windowsSeparators whether {@code "\"} is treated as a path separator
+     * @param readOnly          whether to open without a writer lock and for reading only
+     * @param options           the policy for downgrade-prone config modes
+     * @return the opened filesystem
+     * @throws IOException on filesystem errors or if the token interaction fails
+     * @throws NullPointerException if {@code cipherDir}, {@code token} or
+     *                              {@code options} is {@code null}
+     */
+    public FileSystem newFileSystem(Path cipherDir, Fido2Token token, boolean windowsSeparators,
+                                    boolean readOnly, OpenOptions options) throws IOException {
         Objects.requireNonNull(cipherDir, "cipherDir");
         Objects.requireNonNull(token, "token");
+        Objects.requireNonNull(options, "options");
         ensureNotRegistered(cipherDir, readOnly);
         PathCipherStore store = new PathCipherStore(cipherDir);
         GocryptFs core;
         try {
             core = readOnly
-                    ? GocryptFs.openReadOnly(store, token)
-                    : GocryptFs.open(store, token);
+                    ? GocryptFs.openReadOnly(store, token, options)
+                    : GocryptFs.open(store, token, options);
         } catch (IOException | RuntimeException e) {
             closeQuietly(store);
             throw e;
         }
         return register(cipherDir, store, core, windowsSeparators, readOnly);
+    }
+
+    /**
+     * Reads an optional {@code Boolean} entry from an environment map.
+     *
+     * @param env  the environment map, possibly {@code null}
+     * @param name the entry name
+     * @return the value, or {@code false} when the entry is absent
+     * @throws IllegalArgumentException if the entry is present but not a
+     *                                  {@code Boolean}
+     */
+    private static boolean booleanEnv(Map<String, ?> env, String name) {
+        Object value = env == null ? null : env.get(name);
+        if (value == null) {
+            return false;
+        }
+        if (!(value instanceof Boolean)) {
+            throw new IllegalArgumentException(name + " must be a Boolean");
+        }
+        return (Boolean) value;
     }
 
     /**
@@ -292,7 +391,9 @@ public final class GocryptFsProvider extends FileSystemProvider {
      * {@code false}) controls whether {@code "\"} is treated as a path
      * separator, and the optional {@code readOnly} entry (a {@code Boolean},
      * default {@code false}) opens the filesystem without a writer lock and for
-     * reading only.</p>
+     * reading only. The optional {@code allowPlaintextNames} and
+     * {@code allowDeterministicNames} entries (both {@code Boolean}, default
+     * {@code false}) opt in to downgrade-prone name modes.</p>
      *
      * @throws NullPointerException if {@code uri} is {@code null}
      * @throws IllegalArgumentException if the scheme is not {@code gocryptfs}, the
@@ -334,17 +435,21 @@ public final class GocryptFsProvider extends FileSystemProvider {
             }
             ro = (Boolean) readOnly;
         }
+        OpenOptions options = OpenOptions.builder()
+                .allowPlaintextNames(booleanEnv(env, "allowPlaintextNames"))
+                .allowDeterministicNames(booleanEnv(env, "allowDeterministicNames"))
+                .build();
         if (password != null) {
             if (!(password instanceof char[])) {
                 throw new IllegalArgumentException("password must be a char[]");
             }
-            return newFileSystem(dir, (char[]) password, wsep, ro);
+            return newFileSystem(dir, (char[]) password, wsep, ro, options);
         }
         if (fido2Token != null) {
             if (!(fido2Token instanceof Fido2Token)) {
                 throw new IllegalArgumentException("fido2Token must be a Fido2Token");
             }
-            return newFileSystem(dir, (Fido2Token) fido2Token, wsep, ro);
+            return newFileSystem(dir, (Fido2Token) fido2Token, wsep, ro, options);
         }
         throw new IllegalArgumentException("environment must contain 'password' or 'fido2Token'");
     }

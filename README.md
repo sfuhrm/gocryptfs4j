@@ -214,6 +214,24 @@ in another process, fails to open until the first one is closed. Use
 overload) for a reader that takes no lock and never writes, including on
 read-only media; it may coexist with a writable instance.
 
+Opening a config that selects a downgrade-prone name mode is opt-in. By default
+`GocryptFs.open(...)` rejects `PlaintextNames` and legacy deterministic names
+(`EMENames` without `DirIV`); pass an `OpenOptions` to accept them:
+
+```java
+import de.sfuhrm.gocryptfs4j.core.OpenOptions;
+
+OpenOptions options = OpenOptions.builder()
+        .allowPlaintextNames(true)       // or .allowDeterministicNames(true)
+        .build();
+try (GocryptFs fs = GocryptFs.open(store, "my-password".toCharArray(), options)) {
+    // ...
+}
+```
+
+Creating a plaintext-names filesystem remains explicit through
+`GocryptFs.create(store, password, true)`.
+
 Passwords are encoded as UTF-8 before they reach scrypt, matching the raw bytes
 gocryptfs reads from a UTF-8 terminal, passfile or extpass program. Non-ASCII
 passwords, such as German umlauts, therefore interoperate with gocryptfs.
@@ -274,6 +292,10 @@ separator, as on Windows.
 Set the `readOnly` environment key to `true` (or use the
 `newFileSystem(Path, char[], boolean, boolean)` overload) to open the NIO view
 without a writer lock and reject writes.
+
+Set the `allowPlaintextNames` or `allowDeterministicNames` environment key to
+`true` (or pass an `OpenOptions` to the `newFileSystem` overloads) to accept the
+corresponding downgrade-prone name mode. Both are rejected by default.
 
 > Note: the NIO view exposes basic attributes (type, size, times) and, when the
 > backing filesystem supports it, the POSIX attributes (permissions, owner and

@@ -3,10 +3,11 @@
  *
  * <p>This package contains the plain Java API for working with gocryptfs
  * forward-mode cipher directories: {@link GocryptFs} is the central entry point
- * for creating and opening a filesystem, {@link DirEntry} describes a single
- * directory entry, {@link ContentCipherType} selects the content-encryption
- * cipher and {@link CipherFile} provides random-access read/write access to a
- * single encrypted file.</p>
+ * for creating and opening a filesystem, {@link OpenOptions} controls which
+ * downgrade-prone name modes an open may accept, {@link DirEntry} describes a
+ * single directory entry, {@link ContentCipherType} selects the
+ * content-encryption cipher and {@link CipherFile} provides random-access
+ * read/write access to a single encrypted file.</p>
  *
  * <p>A minimal round trip looks like this:</p>
  *

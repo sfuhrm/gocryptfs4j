@@ -62,6 +62,84 @@ class GocryptFsTest {
     }
 
     @Test
+    void openRejectsPlaintextNamesByDefault() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        try (PathCipherStore store = new PathCipherStore(cipherDir);
+             GocryptFs fs = GocryptFs.create(store, "pw".toCharArray(), true)) {
+            fs.createFile("/a.txt");
+        }
+
+        try (PathCipherStore store = new PathCipherStore(cipherDir)) {
+            IOException thrown = assertThrows(IOException.class,
+                    () -> GocryptFs.open(store, "pw".toCharArray()));
+            assertTrue(thrown.getMessage().contains("PlaintextNames"), thrown.getMessage());
+
+            try (GocryptFs fs = GocryptFs.open(store, "pw".toCharArray(),
+                    OpenOptions.builder().allowPlaintextNames(true).build())) {
+                assertEquals(DirEntry.Kind.FILE, fs.stat("/a.txt").kind());
+            }
+        }
+    }
+
+    @Test
+    void openWithMasterKeyRejectsPlaintextNamesByDefault() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        try (PathCipherStore store = new PathCipherStore(cipherDir);
+             GocryptFs fs = GocryptFs.create(store, "pw".toCharArray(), true)) {
+            fs.createFile("/a.txt");
+        }
+
+        byte[] masterKey;
+        try (PathCipherStore store = new PathCipherStore(cipherDir)) {
+            masterKey = ConfigFile.load(store).decryptMasterKey("pw".toCharArray());
+        }
+
+        try (PathCipherStore store = new PathCipherStore(cipherDir)) {
+            assertThrows(IOException.class, () -> GocryptFs.open(store, masterKey));
+            try (GocryptFs fs = GocryptFs.open(store, masterKey,
+                    OpenOptions.builder().allowPlaintextNames(true).build())) {
+                assertEquals(DirEntry.Kind.FILE, fs.stat("/a.txt").kind());
+            }
+        }
+    }
+
+    @Test
+    void openRejectsDeterministicNamesByDefault() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        try (PathCipherStore store = new PathCipherStore(cipherDir);
+             GocryptFs fs = GocryptFs.create(store, "pw".toCharArray())) {
+            // Just create an empty encrypted-names filesystem.
+        }
+
+        // Turn it into the legacy deterministic-names mode by dropping DirIV.
+        try (PathCipherStore store = new PathCipherStore(cipherDir)) {
+            String json = new String(ConfigFile.load(store).toBytes(), StandardCharsets.UTF_8);
+            store.writeConfig(PathResolver.join(store.root(), Constants.CONF_DEFAULT_NAME),
+                    json.replace("\"DirIV\",", "").getBytes(StandardCharsets.UTF_8), true);
+        }
+
+        try (PathCipherStore store = new PathCipherStore(cipherDir)) {
+            IOException thrown = assertThrows(IOException.class,
+                    () -> GocryptFs.open(store, "pw".toCharArray()));
+            assertTrue(thrown.getMessage().contains("deterministic"), thrown.getMessage());
+
+            try (GocryptFs fs = GocryptFs.open(store, "pw".toCharArray(),
+                    OpenOptions.builder().allowDeterministicNames(true).build())) {
+                fs.createFile("/a.txt");
+                fs.write("/a.txt", 0, "deterministic".getBytes(StandardCharsets.UTF_8));
+                assertEquals("deterministic", new String(fs.readAll("/a.txt"),
+                        StandardCharsets.UTF_8));
+            }
+        }
+    }
+
+    @Test
     void writeLockIsReentrantAcrossOperations() throws IOException {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);

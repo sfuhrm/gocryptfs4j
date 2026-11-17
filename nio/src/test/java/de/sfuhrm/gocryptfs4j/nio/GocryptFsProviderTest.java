@@ -3,6 +3,7 @@ package de.sfuhrm.gocryptfs4j.nio;
 import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
 
 import de.sfuhrm.gocryptfs4j.core.GocryptFs;
+import de.sfuhrm.gocryptfs4j.core.OpenOptions;
 import de.sfuhrm.gocryptfs4j.fido2.Fido2Token;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -62,6 +63,52 @@ class GocryptFsProviderTest {
             assertArrayEquals("one".getBytes(StandardCharsets.UTF_8),
                     Files.readAllBytes(one));
         }
+    }
+
+    @Test
+    void plaintextNamesRequiresOptIn() throws IOException {
+        Path cipherDir = tmp.resolve("cipher-plaintext");
+        Files.createDirectory(cipherDir);
+        try (PathCipherStore store = new PathCipherStore(cipherDir);
+             GocryptFs fs = GocryptFs.create(store, "pw".toCharArray(), true)) {
+            fs.createFile("/a.txt");
+        }
+
+        GocryptFsProvider provider = new GocryptFsProvider();
+        IOException thrown = assertThrows(IOException.class,
+                () -> provider.newFileSystem(cipherDir, "pw".toCharArray()));
+        assertTrue(thrown.getMessage().contains("PlaintextNames"), thrown.getMessage());
+
+        try (FileSystem nio = provider.newFileSystem(cipherDir, "pw".toCharArray(),
+                OpenOptions.builder().allowPlaintextNames(true).build())) {
+            assertTrue(Files.exists(nio.getPath("/a.txt")));
+        }
+    }
+
+    @Test
+    void plaintextNamesOptInViaUriEnvironment() throws IOException {
+        Path cipherDir = tmp.resolve("cipher-plaintext-env");
+        Files.createDirectory(cipherDir);
+        try (PathCipherStore store = new PathCipherStore(cipherDir);
+             GocryptFs fs = GocryptFs.create(store, "pw".toCharArray(), true)) {
+            fs.createFile("/a.txt");
+        }
+
+        GocryptFsProvider provider = new GocryptFsProvider();
+        Map<String, Object> env = new HashMap<>();
+        env.put("cipherDir", cipherDir);
+        env.put("password", "pw".toCharArray());
+        assertThrows(IOException.class,
+                () -> provider.newFileSystem(URI.create("gocryptfs:///"), env));
+
+        env.put("allowPlaintextNames", Boolean.TRUE);
+        try (FileSystem nio = provider.newFileSystem(URI.create("gocryptfs:///"), env)) {
+            assertTrue(Files.exists(nio.getPath("/a.txt")));
+        }
+
+        env.put("allowPlaintextNames", "not-a-boolean");
+        assertThrows(IllegalArgumentException.class,
+                () -> provider.newFileSystem(URI.create("gocryptfs:///"), env));
     }
 
     @Test

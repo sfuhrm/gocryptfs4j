@@ -4,6 +4,7 @@ import de.sfuhrm.gocryptfs4j.store.local.PathCipherStore;
 
 import de.sfuhrm.gocryptfs4j.core.ContentCipherType;
 import de.sfuhrm.gocryptfs4j.core.GocryptFs;
+import de.sfuhrm.gocryptfs4j.core.OpenOptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -172,7 +173,11 @@ class LinuxKernelNioInteropIT {
         }
 
         GocryptFsProvider provider = new GocryptFsProvider();
-        try (FileSystem nio = provider.newFileSystem(cipherDir, PASSWORD.toCharArray())) {
+        OpenOptions openOptions = plaintextNames
+                ? OpenOptions.builder().allowPlaintextNames(true).build()
+                : OpenOptions.defaults();
+        try (FileSystem nio = provider.newFileSystem(cipherDir, PASSWORD.toCharArray(),
+                openOptions)) {
             assertManifestEquals(reference, manifest(nio.getPath("/linux")));
         }
     }
@@ -192,7 +197,11 @@ class LinuxKernelNioInteropIT {
         }
 
         GocryptFsProvider provider = new GocryptFsProvider();
-        try (FileSystem nio = provider.newFileSystem(cipherDir, PASSWORD.toCharArray())) {
+        OpenOptions openOptions = plaintextNames
+                ? OpenOptions.builder().allowPlaintextNames(true).build()
+                : OpenOptions.defaults();
+        try (FileSystem nio = provider.newFileSystem(cipherDir, PASSWORD.toCharArray(),
+                openOptions)) {
             Path linux = nio.getPath("/linux");
             Files.createDirectory(linux);
             copyInto(linuxSource, linux);

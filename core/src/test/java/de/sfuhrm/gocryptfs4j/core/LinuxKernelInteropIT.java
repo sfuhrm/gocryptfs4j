@@ -153,7 +153,11 @@ class LinuxKernelInteropIT {
             }
         }
 
-        try (GocryptFs fs = GocryptFs.open(new PathCipherStore(cipherDir), PASSWORD.toCharArray())) {
+        OpenOptions openOptions = plaintextNames
+                ? OpenOptions.builder().allowPlaintextNames(true).build()
+                : OpenOptions.defaults();
+        try (GocryptFs fs = GocryptFs.open(new PathCipherStore(cipherDir),
+                PASSWORD.toCharArray(), openOptions)) {
             assertManifestEquals(reference, manifest(fs, "/linux"));
         }
     }

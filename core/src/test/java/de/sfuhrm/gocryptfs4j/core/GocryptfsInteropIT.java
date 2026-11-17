@@ -125,7 +125,11 @@ class GocryptfsInteropIT {
             }
         }
 
-        try (GocryptFs fs = GocryptFs.open(new PathCipherStore(cipherDir), PASSWORD.toCharArray())) {
+        OpenOptions openOptions = plaintextNames
+                ? OpenOptions.builder().allowPlaintextNames(true).build()
+                : OpenOptions.defaults();
+        try (GocryptFs fs = GocryptFs.open(new PathCipherStore(cipherDir),
+                PASSWORD.toCharArray(), openOptions)) {
             Set<String> root = fs.list("/").stream()
                     .map(DirEntry::plainName).collect(Collectors.toSet());
             assertEquals(new HashSet<>(Arrays.asList("sub", "hello.txt", longName())), root);
