@@ -534,6 +534,12 @@ final class PlainPathStore implements CipherStore {
     public void checkAccess(String name, AccessMode... modes) throws IOException {
         Objects.requireNonNull(name, "name");
         Path p = resolve(name);
+        // The provider's access check follows a final-component symlink. Refuse
+        // the link itself instead, matching the no-follow behavior of every
+        // other entry operation in this store.
+        if (Files.isSymbolicLink(p)) {
+            throw new IOException("symbolic link: " + p);
+        }
         p.getFileSystem().provider().checkAccess(p, modes);
     }
 

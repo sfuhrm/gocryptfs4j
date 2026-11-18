@@ -12,6 +12,7 @@ import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.channels.SeekableByteChannel;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AccessMode;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileSystem;
@@ -104,6 +105,19 @@ class PathCipherStoreTest {
         Files.createSymbolicLink(link, target);
         PathCipherStore store = new PathCipherStore(dir);
         assertThrows(IOException.class, () -> store.readSmall(link.toString(), 100));
+    }
+
+    @Test
+    void plainCheckAccessRejectsSymlink() throws Exception {
+        Path dir = Files.createDirectory(tmp.resolve("cipher"));
+        Path target = dir.resolve("real");
+        Files.write(target, "hello".getBytes(StandardCharsets.UTF_8));
+        Path link = dir.resolve("link");
+        Files.createSymbolicLink(link, target);
+        PlainPathStore store = new PlainPathStore(dir);
+
+        assertThrows(IOException.class, () -> store.checkAccess(link.toString(), AccessMode.READ));
+        store.checkAccess(target.toString(), AccessMode.READ);
     }
 
     @Test
@@ -543,6 +557,22 @@ class PathCipherStoreTest {
         PathCipherStore store = new PathCipherStore(tmp.resolve("cipher"), root);
         assertTrue(store.list(store.root()).isEmpty(),
                 "a disappearing entry must be skipped, not abort the listing");
+    }
+
+    @Test
+    void secureOpenRejectsNonFileChannelInsteadOfFallingBack() throws Exception {
+        SecureDirectoryStream<Path> root = mockSecureDirectory();
+        CipherStore delegate = mock(CipherStore.class);
+        Path cipher = tmp.resolve("cipher");
+        SecurePathStore store = new SecurePathStore(delegate, cipher, root);
+        SeekableByteChannel channel = mock(SeekableByteChannel.class);
+        when(root.newByteChannel(Mockito.eq(Paths.get("f")), any())).thenReturn(channel);
+
+        String name = cipher.resolve("f").toString();
+        assertThrows(IOException.class, () -> store.open(name, false));
+
+        verify(channel).close();
+        verify(delegate, never()).open(any(), anyBoolean());
     }
 
     @Test

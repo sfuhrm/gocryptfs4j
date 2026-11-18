@@ -428,10 +428,12 @@ final class SecurePathStore implements CipherStore {
         if (channel instanceof FileChannel) {
             return new FileChannelAdapter((FileChannel) channel);
         }
-        // A provider that yields a non-file channel cannot provide force();
-        // fall back to the plain path-based open so force() keeps working.
+        // Falling back to the path-based open here would silently drop the
+        // parent-handle protection this store exists to provide. Fail closed
+        // instead; a provider that cannot yield a FileChannel cannot support
+        // the required force() semantics either.
         channel.close();
-        return delegate.open(name, writable);
+        throw new IOException("provider returned a non-file channel for " + name);
     }
 
     @Override
