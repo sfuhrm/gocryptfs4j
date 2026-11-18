@@ -32,11 +32,11 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  */
 public final class AesSiv implements ContentCipher {
 
-    /** The S2V/CMAC sub-key, the first half of the 64-byte key. */
-    private final byte[] k1;
+    /** The wipeable S2V/CMAC sub-key, the first half of the 64-byte key. */
+    private final KeyParameter k1;
 
-    /** The CTR sub-key, the second half of the 64-byte key. */
-    private final byte[] k2;
+    /** The wipeable CTR sub-key, the second half of the 64-byte key. */
+    private final KeyParameter k2;
 
     /** Whether this cipher has been wiped. */
     private volatile boolean wiped;
@@ -69,8 +69,8 @@ public final class AesSiv implements ContentCipher {
             throw new IllegalArgumentException("AES-SIV key must be "
                     + Constants.SIV_KEY_LEN + " bytes");
         }
-        this.k1 = Arrays.copyOfRange(key, 0, Constants.KEY_LEN);
-        this.k2 = Arrays.copyOfRange(key, Constants.KEY_LEN, 2 * Constants.KEY_LEN);
+        this.k1 = new KeyParameter(key, 0, Constants.KEY_LEN);
+        this.k2 = new KeyParameter(key, Constants.KEY_LEN, Constants.KEY_LEN);
     }
 
     /**
@@ -83,12 +83,10 @@ public final class AesSiv implements ContentCipher {
      * Because the scratch is per instance, wiping this cipher never affects
      * another {@code AesSiv} instance.</p>
      *
-     * <p>The per-operation {@link KeyParameter} objects are created from
-     * {@link #k1} and {@link #k2} while the read lock is held, so this class
-     * retains no additional long-lived key copies. Re-initialising the scratch
-     * ciphers with a zero key replaces the key material held inside
-     * BouncyCastle's cipher objects, which is the strongest clearing that API
-     * exposes.</p>
+     * <p>The two sub-key parameters are created once and reused for every
+     * operation, so no per-operation key copies are left behind. Re-initialising
+     * the scratch ciphers with a zero key replaces the key material held inside
+     * BouncyCastle's cipher objects.</p>
      */
     @Override
     public void wipe() {
@@ -97,8 +95,8 @@ public final class AesSiv implements ContentCipher {
         try {
             if (!wiped) {
                 wiped = true;
-                Arrays.fill(k1, (byte) 0);
-                Arrays.fill(k2, (byte) 0);
+                Arrays.fill(k1.getKey(), (byte) 0);
+                Arrays.fill(k2.getKey(), (byte) 0);
                 // Overwrite every scratch key schedule with a zero key so the
                 // real key schedule can be garbage-collected. No operation can
                 // be using a scratch cipher here because wipe holds the write
@@ -107,6 +105,7 @@ public final class AesSiv implements ContentCipher {
                 cmacScratch.wipeAll(mac -> mac.init(zero));
                 ctrScratch.wipeAll(c -> c.init(true,
                         new ParametersWithIV(zero, new byte[Constants.AES_BLOCK_SIZE])));
+                Arrays.fill(zero.getKey(), (byte) 0);
             }
         } finally {
             writeLock.unlock();
@@ -134,12 +133,10 @@ public final class AesSiv implements ContentCipher {
         try {
             checkUsable();
             checkNonce(nonce);
-            KeyParameter k1Key = new KeyParameter(k1);
-            KeyParameter k2Key = new KeyParameter(k2);
-            byte[] siv = s2v(k1Key, new byte[][]{orEmpty(aad), nonce}, plaintext,
+            byte[] siv = s2v(k1, new byte[][]{orEmpty(aad), nonce}, plaintext,
                     cmacScratch.get());
             checkUsable();
-            byte[] ct = ctr(k2Key, siv, plaintext, ctrScratch.get());
+            byte[] ct = ctr(k2, siv, plaintext, ctrScratch.get());
             checkUsable();
             byte[] out = new byte[siv.length + ct.length];
             System.arraycopy(siv, 0, out, 0, siv.length);
@@ -177,11 +174,9 @@ public final class AesSiv implements ContentCipher {
             }
             byte[] siv = Arrays.copyOfRange(ciphertext, 0, Constants.AES_BLOCK_SIZE);
             byte[] ct = Arrays.copyOfRange(ciphertext, Constants.AES_BLOCK_SIZE, ciphertext.length);
-            KeyParameter k1Key = new KeyParameter(k1);
-            KeyParameter k2Key = new KeyParameter(k2);
-            byte[] plaintext = ctr(k2Key, siv, ct, ctrScratch.get());
+            byte[] plaintext = ctr(k2, siv, ct, ctrScratch.get());
             checkUsable();
-            byte[] expected = s2v(k1Key, new byte[][]{orEmpty(aad), nonce}, plaintext,
+            byte[] expected = s2v(k1, new byte[][]{orEmpty(aad), nonce}, plaintext,
                     cmacScratch.get());
             checkUsable();
             if (!MessageDigest.isEqual(expected, siv)) {
@@ -237,7 +232,12 @@ public final class AesSiv implements ContentCipher {
      * @return the 16-byte synthetic IV
      */
     static byte[] s2v(byte[] k1, byte[][] ad, byte[] last, CMac mac) {
-        return s2v(new KeyParameter(k1), ad, last, mac);
+        KeyParameter key = new KeyParameter(k1);
+        try {
+            return s2v(key, ad, last, mac);
+        } finally {
+            Arrays.fill(key.getKey(), (byte) 0);
+        }
     }
 
     /**
@@ -288,7 +288,12 @@ public final class AesSiv implements ContentCipher {
      * @return the encrypted/decrypted data
      */
     static byte[] ctr(byte[] k2, byte[] siv, byte[] data, CTRModeCipher cipher) {
-        return ctr(new KeyParameter(k2), siv, data, cipher);
+        KeyParameter key = new KeyParameter(k2);
+        try {
+            return ctr(key, siv, data, cipher);
+        } finally {
+            Arrays.fill(key.getKey(), (byte) 0);
+        }
     }
 
     /**

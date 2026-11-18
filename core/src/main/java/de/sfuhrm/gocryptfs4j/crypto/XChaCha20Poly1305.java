@@ -20,8 +20,8 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  */
 public final class XChaCha20Poly1305 implements ContentCipher {
 
-    /** A copy of the 32-byte key, kept so it can be wiped. */
-    private final byte[] key;
+    /** The wipeable 32-byte key parameter, reused for every operation. */
+    private final KeyParameter keyParam;
 
     /** Whether this cipher has been wiped. */
     private volatile boolean wiped;
@@ -50,7 +50,7 @@ public final class XChaCha20Poly1305 implements ContentCipher {
             throw new IllegalArgumentException("XChaCha20-Poly1305 key must be "
                     + Constants.KEY_LEN + " bytes");
         }
-        this.key = Arrays.copyOf(key, key.length);
+        this.keyParam = new KeyParameter(key);
     }
 
     /**
@@ -62,11 +62,10 @@ public final class XChaCha20Poly1305 implements ContentCipher {
      * Because the scratch is per instance, wiping this cipher never affects
      * another {@code XChaCha20Poly1305} instance.</p>
      *
-     * <p>The per-operation {@link KeyParameter} is created from {@link #key}
-     * while the read lock is held, so this class retains no additional
-     * long-lived key copy. Re-initialising the scratch ciphers with a zero key
-     * replaces the key material held inside BouncyCastle's cipher objects,
-     * which is the strongest clearing that API exposes.</p>
+     * <p>The key parameter is created once and reused for every operation, so no
+     * per-operation key copies are left behind. Re-initialising the scratch
+     * ciphers with a zero key replaces the key material held inside
+     * BouncyCastle's cipher objects.</p>
      */
     @Override
     public void wipe() {
@@ -75,7 +74,7 @@ public final class XChaCha20Poly1305 implements ContentCipher {
         try {
             if (!wiped) {
                 wiped = true;
-                Arrays.fill(key, (byte) 0);
+                Arrays.fill(keyParam.getKey(), (byte) 0);
                 // Overwrite every scratch cipher with a zero key so the real key
                 // schedule can be garbage-collected. No operation can be using a
                 // scratch cipher here because wipe holds the write lock.
@@ -85,6 +84,7 @@ public final class XChaCha20Poly1305 implements ContentCipher {
                         new AEADParameters(zero, Constants.AUTH_TAG_LEN * 8, zeroNonce)));
                 decryptCipher.wipeAll(c -> c.init(false,
                         new AEADParameters(zero, Constants.AUTH_TAG_LEN * 8, zeroNonce)));
+                Arrays.fill(zero.getKey(), (byte) 0);
             }
         } finally {
             writeLock.unlock();
@@ -134,7 +134,6 @@ public final class XChaCha20Poly1305 implements ContentCipher {
         try {
             checkUsable();
             checkNonce(nonce);
-            KeyParameter keyParam = new KeyParameter(key);
             AEADCipher cipher = encryptCipher.get();
             cipher.init(true, new AEADParameters(keyParam, Constants.AUTH_TAG_LEN * 8, nonce, aad));
             checkUsable();
@@ -173,7 +172,6 @@ public final class XChaCha20Poly1305 implements ContentCipher {
         try {
             checkUsable();
             checkNonce(nonce);
-            KeyParameter keyParam = new KeyParameter(key);
             AEADCipher cipher = decryptCipher.get();
             cipher.init(false, new AEADParameters(keyParam, Constants.AUTH_TAG_LEN * 8, nonce, aad));
             checkUsable();
@@ -215,7 +213,6 @@ public final class XChaCha20Poly1305 implements ContentCipher {
         try {
             checkUsable();
             checkNonce(nonce);
-            KeyParameter keyParam = new KeyParameter(key);
             AEADCipher cipher = encryptCipher.get();
             cipher.init(true, new AEADParameters(keyParam, Constants.AUTH_TAG_LEN * 8, nonce));
             checkUsable();
@@ -259,7 +256,6 @@ public final class XChaCha20Poly1305 implements ContentCipher {
         try {
             checkUsable();
             checkNonce(nonce);
-            KeyParameter keyParam = new KeyParameter(key);
             AEADCipher cipher = decryptCipher.get();
             cipher.init(false, new AEADParameters(keyParam, Constants.AUTH_TAG_LEN * 8, nonce));
             checkUsable();

@@ -1,10 +1,14 @@
 package de.sfuhrm.gocryptfs4j.crypto;
 
+import org.bouncycastle.crypto.InvalidCipherTextException;
+import org.bouncycastle.crypto.engines.AESEngine;
+import org.bouncycastle.crypto.modes.AEADCipher;
+import org.bouncycastle.crypto.modes.GCMBlockCipher;
+import org.bouncycastle.crypto.params.AEADParameters;
+import org.bouncycastle.crypto.params.KeyParameter;
 import org.jspecify.annotations.Nullable;
 
-import javax.crypto.Cipher;
-import javax.crypto.spec.GCMParameterSpec;
-import javax.crypto.spec.SecretKeySpec;
+import javax.crypto.AEADBadTagException;
 import java.security.GeneralSecurityException;
 import java.util.Arrays;
 import java.util.Objects;
@@ -21,8 +25,8 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  */
 public final class Gcm implements ContentCipher {
 
-    /** A copy of the AES key, kept so it can be wiped. */
-    private final byte[] key;
+    /** The wipeable AES key parameter, reused for every operation. */
+    private final KeyParameter keyParam;
 
     /** Whether this cipher has been wiped. */
     private volatile boolean wiped;
@@ -30,25 +34,13 @@ public final class Gcm implements ContentCipher {
     /** Guards operations against a concurrent {@link #wipe()}. */
     private final ReentrantReadWriteLock stateLock = new ReentrantReadWriteLock();
 
-    /** A thread-local cipher for encryption, reused because {@link Cipher} is not thread-safe. */
-    private final TrackedThreadLocal<Cipher> encryptCipher = new TrackedThreadLocal<>(Gcm::newCipher);
+    /** A thread-local cipher for encryption, reused because it is not thread-safe. */
+    private final TrackedThreadLocal<AEADCipher> encryptCipher = new TrackedThreadLocal<>(
+            () -> GCMBlockCipher.newInstance(AESEngine.newInstance()));
 
-    /** A thread-local cipher for decryption, reused because {@link Cipher} is not thread-safe. */
-    private final TrackedThreadLocal<Cipher> decryptCipher = new TrackedThreadLocal<>(Gcm::newCipher);
-
-    /**
-     * Creates a new AES/GCM/NoPadding cipher.
-     *
-     * @return the cipher
-     * @throws IllegalStateException if AES-GCM is unavailable
-     */
-    private static Cipher newCipher() {
-        try {
-            return Cipher.getInstance("AES/GCM/NoPadding");
-        } catch (GeneralSecurityException e) {
-            throw new IllegalStateException("AES-GCM unavailable", e);
-        }
-    }
+    /** A thread-local cipher for decryption, reused because it is not thread-safe. */
+    private final TrackedThreadLocal<AEADCipher> decryptCipher = new TrackedThreadLocal<>(
+            () -> GCMBlockCipher.newInstance(AESEngine.newInstance()));
 
     /**
      * Creates an AES-256-GCM instance.
@@ -62,7 +54,7 @@ public final class Gcm implements ContentCipher {
         if (key.length != Constants.KEY_LEN) {
             throw new IllegalArgumentException("GCM key must be " + Constants.KEY_LEN + " bytes");
         }
-        this.key = Arrays.copyOf(key, key.length);
+        this.keyParam = new KeyParameter(key);
     }
 
     /**
@@ -74,13 +66,10 @@ public final class Gcm implements ContentCipher {
      * Because the scratch is per instance, wiping this cipher never affects
      * another {@code Gcm} instance.</p>
      *
-     * <p>The JCE provider owns the AES key schedule inside a {@link Cipher};
-     * neither that schedule nor the provider's internal copy of the key can be
-     * overwritten directly. Re-initialising each scratch cipher with a zero key
-     * replaces those schedules, which is the strongest clearing a JCE
-     * implementation exposes. The {@link SecretKeySpec} used for an operation
-     * is created from {@link #key} while the read lock is held, so this class
-     * retains no additional long-lived key copy.</p>
+     * <p>The key parameter is created once and reused for every operation, so no
+     * per-operation key copies are left behind. Re-initialising the scratch
+     * ciphers with a zero key replaces the key material held inside
+     * BouncyCastle's cipher objects.</p>
      */
     @Override
     public void wipe() {
@@ -89,35 +78,20 @@ public final class Gcm implements ContentCipher {
         try {
             if (!wiped) {
                 wiped = true;
-                Arrays.fill(key, (byte) 0);
+                Arrays.fill(keyParam.getKey(), (byte) 0);
                 // Overwrite every scratch cipher with a zero key so the real key
                 // schedule can be garbage-collected. No operation can be using a
                 // scratch cipher here because wipe holds the write lock.
-                SecretKeySpec zero = new SecretKeySpec(new byte[Constants.KEY_LEN], "AES");
-                GCMParameterSpec params = new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8,
-                        new byte[Constants.DEFAULT_IV_BITS / 8]);
-                encryptCipher.wipeAll(c -> zeroCipher(c, Cipher.ENCRYPT_MODE, zero, params));
-                decryptCipher.wipeAll(c -> zeroCipher(c, Cipher.DECRYPT_MODE, zero, params));
+                KeyParameter zero = new KeyParameter(new byte[Constants.KEY_LEN]);
+                byte[] zeroNonce = new byte[Constants.DEFAULT_IV_BITS / 8];
+                encryptCipher.wipeAll(c -> c.init(true,
+                        new AEADParameters(zero, Constants.AUTH_TAG_LEN * 8, zeroNonce)));
+                decryptCipher.wipeAll(c -> c.init(false,
+                        new AEADParameters(zero, Constants.AUTH_TAG_LEN * 8, zeroNonce)));
+                Arrays.fill(zero.getKey(), (byte) 0);
             }
         } finally {
             writeLock.unlock();
-        }
-    }
-
-    /**
-     * Re-initializes a scratch cipher with a zero key.
-     *
-     * @param cipher the scratch cipher to clear
-     * @param mode   the cipher mode (encrypt or decrypt)
-     * @param zero   the all-zero key
-     * @param params the GCM parameters
-     */
-    private static void zeroCipher(Cipher cipher, int mode, SecretKeySpec zero,
-                                   GCMParameterSpec params) {
-        try {
-            cipher.init(mode, zero, params);
-        } catch (GeneralSecurityException e) {
-            // A zero key and IV of the correct size cannot fail; ignore.
         }
     }
 
@@ -150,17 +124,18 @@ public final class Gcm implements ContentCipher {
         readLock.lock();
         try {
             checkUsable();
-            SecretKeySpec keySpec = new SecretKeySpec(key, "AES");
-            Cipher cipher = encryptCipher.get();
-            cipher.init(Cipher.ENCRYPT_MODE, keySpec,
-                    new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8, nonce));
+            AEADCipher cipher = encryptCipher.get();
+            cipher.init(true, new AEADParameters(keyParam,
+                    Constants.AUTH_TAG_LEN * 8, nonce, aad));
             checkUsable();
-            if (aad != null && aad.length > 0) {
-                cipher.updateAAD(aad);
+            byte[] out = new byte[cipher.getOutputSize(plaintext.length)];
+            int len = cipher.processBytes(plaintext, 0, plaintext.length, out, 0);
+            try {
+                len += cipher.doFinal(out, len);
+            } catch (InvalidCipherTextException e) {
+                throw new IllegalStateException("AES-GCM encryption failed", e);
             }
-            return cipher.doFinal(plaintext);
-        } catch (GeneralSecurityException e) {
-            throw new IllegalStateException("AES-GCM encryption failed", e);
+            return out;
         } finally {
             readLock.unlock();
         }
@@ -187,15 +162,20 @@ public final class Gcm implements ContentCipher {
         readLock.lock();
         try {
             checkUsable();
-            SecretKeySpec keySpec = new SecretKeySpec(key, "AES");
-            Cipher cipher = decryptCipher.get();
-            cipher.init(Cipher.DECRYPT_MODE, keySpec,
-                    new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8, nonce));
+            AEADCipher cipher = decryptCipher.get();
+            cipher.init(false, new AEADParameters(keyParam,
+                    Constants.AUTH_TAG_LEN * 8, nonce, aad));
             checkUsable();
-            if (aad != null && aad.length > 0) {
-                cipher.updateAAD(aad);
+            byte[] out = new byte[cipher.getOutputSize(ciphertext.length)];
+            int len = cipher.processBytes(ciphertext, 0, ciphertext.length, out, 0);
+            try {
+                len += cipher.doFinal(out, len);
+            } catch (InvalidCipherTextException e) {
+                AEADBadTagException ex = new AEADBadTagException("AES-GCM authentication failed");
+                ex.initCause(e);
+                throw ex;
             }
-            return cipher.doFinal(ciphertext);
+            return len == out.length ? out : Arrays.copyOf(out, len);
         } finally {
             readLock.unlock();
         }
@@ -223,17 +203,20 @@ public final class Gcm implements ContentCipher {
         readLock.lock();
         try {
             checkUsable();
-            SecretKeySpec keySpec = new SecretKeySpec(key, "AES");
-            Cipher cipher = encryptCipher.get();
-            cipher.init(Cipher.ENCRYPT_MODE, keySpec,
-                    new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8, nonce));
+            AEADCipher cipher = encryptCipher.get();
+            cipher.init(true, new AEADParameters(keyParam,
+                    Constants.AUTH_TAG_LEN * 8, nonce));
             checkUsable();
             if (aadLen > 0) {
-                cipher.updateAAD(aad, aadOff, aadLen);
+                cipher.processAADBytes(aad, aadOff, aadLen);
             }
-            return cipher.doFinal(in, inOff, inLen, out, outOff);
-        } catch (GeneralSecurityException e) {
-            throw new IllegalStateException("AES-GCM encryption failed", e);
+            int len = cipher.processBytes(in, inOff, inLen, out, outOff);
+            try {
+                len += cipher.doFinal(out, outOff + len);
+            } catch (InvalidCipherTextException e) {
+                throw new IllegalStateException("AES-GCM encryption failed", e);
+            }
+            return len;
         } finally {
             readLock.unlock();
         }
@@ -263,15 +246,22 @@ public final class Gcm implements ContentCipher {
         readLock.lock();
         try {
             checkUsable();
-            SecretKeySpec keySpec = new SecretKeySpec(key, "AES");
-            Cipher cipher = decryptCipher.get();
-            cipher.init(Cipher.DECRYPT_MODE, keySpec,
-                    new GCMParameterSpec(Constants.AUTH_TAG_LEN * 8, nonce));
+            AEADCipher cipher = decryptCipher.get();
+            cipher.init(false, new AEADParameters(keyParam,
+                    Constants.AUTH_TAG_LEN * 8, nonce));
             checkUsable();
             if (aadLen > 0) {
-                cipher.updateAAD(aad, aadOff, aadLen);
+                cipher.processAADBytes(aad, aadOff, aadLen);
             }
-            return cipher.doFinal(in, inOff, inLen, out, outOff);
+            int len = cipher.processBytes(in, inOff, inLen, out, outOff);
+            try {
+                len += cipher.doFinal(out, outOff + len);
+            } catch (InvalidCipherTextException e) {
+                AEADBadTagException ex = new AEADBadTagException("AES-GCM authentication failed");
+                ex.initCause(e);
+                throw ex;
+            }
+            return len;
         } finally {
             readLock.unlock();
         }

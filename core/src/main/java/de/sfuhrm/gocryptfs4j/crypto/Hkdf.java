@@ -1,9 +1,10 @@
 package de.sfuhrm.gocryptfs4j.crypto;
 
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
+import org.bouncycastle.crypto.digests.SHA256Digest;
+import org.bouncycastle.crypto.macs.HMac;
+import org.bouncycastle.crypto.params.KeyParameter;
+
 import java.nio.charset.StandardCharsets;
-import java.security.GeneralSecurityException;
 import java.util.Arrays;
 import java.util.Objects;
 
@@ -54,20 +55,29 @@ public final class Hkdf {
         byte[] salt = new byte[HASH_LEN];
         byte[] prk = null;
         byte[] t = new byte[0];
+        KeyParameter saltKey = new KeyParameter(salt);
+        KeyParameter prkKey = null;
+        HMac mac = new HMac(SHA256Digest.newInstance());
         try {
-            prk = hmac(salt, ikm);
+            mac.init(saltKey);
+            mac.update(ikm, 0, ikm.length);
+            prk = new byte[mac.getMacSize()];
+            mac.doFinal(prk, 0);
+            Arrays.fill(saltKey.getKey(), (byte) 0);
+
+            prkKey = new KeyParameter(prk);
+            mac.init(prkKey);
 
             byte[] okm = new byte[outLen];
             byte[] infoBytes = info.getBytes(StandardCharsets.UTF_8);
             int pos = 0;
             int counter = 1;
             while (pos < outLen) {
-                Mac mac = Mac.getInstance("HmacSHA256");
-                mac.init(new SecretKeySpec(prk, "HmacSHA256"));
-                mac.update(t);
-                mac.update(infoBytes);
+                mac.update(t, 0, t.length);
+                mac.update(infoBytes, 0, infoBytes.length);
                 mac.update((byte) counter);
-                byte[] next = mac.doFinal();
+                byte[] next = new byte[mac.getMacSize()];
+                mac.doFinal(next, 0);
                 Keys.wipe(t);
                 t = next;
                 int copyLen = Math.min(t.length, outLen - pos);
@@ -76,26 +86,32 @@ public final class Hkdf {
                 counter++;
             }
             return okm;
-        } catch (GeneralSecurityException e) {
-            throw new IllegalStateException("HKDF failed", e);
         } finally {
             Keys.wipe(salt);
             Keys.wipe(prk);
             Keys.wipe(t);
+            if (saltKey != null) {
+                Arrays.fill(saltKey.getKey(), (byte) 0);
+            }
+            if (prkKey != null) {
+                Arrays.fill(prkKey.getKey(), (byte) 0);
+            }
+            wipeMac(mac);
         }
     }
 
     /**
-     * Computes HMAC-SHA256.
+     * Re-initializes an HMAC with a zero key so its key schedule no longer holds
+     * the real key, then wipes the zero-key parameter as well.
      *
-     * @param key  the HMAC key
-     * @param data the data to authenticate
-     * @return the 32-byte MAC
-     * @throws GeneralSecurityException if HMAC-SHA256 is unavailable
+     * @param mac the HMAC to clear
      */
-    private static byte[] hmac(byte[] key, byte[] data) throws GeneralSecurityException {
-        Mac mac = Mac.getInstance("HmacSHA256");
-        mac.init(new SecretKeySpec(key, "HmacSHA256"));
-        return mac.doFinal(data);
+    private static void wipeMac(HMac mac) {
+        KeyParameter zero = new KeyParameter(new byte[HASH_LEN]);
+        try {
+            mac.init(zero);
+        } finally {
+            Arrays.fill(zero.getKey(), (byte) 0);
+        }
     }
 }
