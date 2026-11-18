@@ -55,7 +55,8 @@ holds SHALL be wiped (overwritten) so it no longer exists in memory.
 ### Requirement: The master key is wiped only on filesystem close
 
 The raw 32-byte master key SHALL remain owned by the filesystem instance and
-SHALL be wiped only when the filesystem itself is closed.
+SHALL be wiped only when the filesystem is closed successfully; a close aborted
+by a failed flush SHALL leave the key material alive for a retry.
 
 #### Scenario: Master key survives resource close
 
@@ -66,8 +67,15 @@ SHALL be wiped only when the filesystem itself is closed.
 
 #### Scenario: Master key is wiped on filesystem close
 
-- **WHEN** the filesystem is closed
+- **WHEN** the filesystem is closed successfully
 - **THEN** the master key and all remaining derived key material are wiped
+
+#### Scenario: Failed close keeps keys alive for retry
+
+- **WHEN** the final flush fails while closing the filesystem
+- **THEN** the close is aborted, the master key and remaining derived key
+  material are not wiped, and the filesystem remains usable so the close can be
+  retried
 
 ### Requirement: Transient content-key uses are wiped after use
 

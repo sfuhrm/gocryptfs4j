@@ -404,15 +404,20 @@ public final class GocryptFsFileSystem extends FileSystem {
      * backing cipher store, and unregistering it from the provider. Closing an
      * already-closed filesystem has no effect.
      *
+     * <p>If the underlying {@link GocryptFs} close fails while flushing pending
+     * writes, this filesystem stays open, its keys stay alive and the store is
+     * not closed, so the close can be retried after the storage problem is
+     * resolved.</p>
+     *
      * @throws IOException on filesystem errors
      */
     @Override
     public void close() throws IOException {
         if (open) {
+            core.close();
             open = false;
-            closeWatchServices();
             try {
-                core.close();
+                closeWatchServices();
             } finally {
                 try {
                     store.close();

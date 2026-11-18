@@ -81,11 +81,12 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * and should clear them once they are no longer needed. A password is encoded
  * as UTF-8 before it is passed to scrypt, matching the raw bytes gocryptfs
  * reads from a UTF-8 terminal, passfile or extpass program. The master key and
- * the EME name-encryption sub-key are owned by this instance and wiped on
- * {@link #close()}. The content-encryption sub-key is scoped to the resource
- * that requires it: each file, stream and handle derives its own copy and wipes
- * it when it closes; {@link #close()} also closes any still-open files so no
- * copy survives it. A raw master-key array is
+ * the EME name-encryption sub-key are owned by this instance and wiped by a
+ * successful {@link #close()}. The content-encryption sub-key is scoped to the
+ * resource that requires it: each file, stream and handle derives its own copy
+ * and wipes it when it closes; a successful {@link #close()} also closes any
+ * still-open files so no copy survives it. If the final flush fails, close is
+ * aborted without wiping keys so it can be retried. A raw master-key array is
  * cloned internally, so closing the filesystem never modifies the caller's
  * array. Secrets obtained from a {@link Fido2Token} are owned and wiped by
  * this class.</p>

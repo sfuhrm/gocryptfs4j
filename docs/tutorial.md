@@ -6,7 +6,8 @@ of the three approaches. Every filesystem goes through the same four phases:
 1. **init** — create a new encrypted filesystem or open an existing one,
 2. **directory listing** — list the plaintext view of a directory,
 3. **access** — read and write file content,
-4. **deinit** — close the filesystem, which wipes the key material.
+4. **deinit** — close the filesystem; a successful close wipes the key material,
+   while a failed final flush leaves the filesystem open for a retry.
 
 All snippets assume the cipher directory exists and (for `create`) is empty.
 
@@ -107,18 +108,25 @@ Other operations include `mkdir`, `delete`, `rename`, `createSymlink`,
 
 ### deinit
 
-`GocryptFs` is `AutoCloseable`. Closing it wipes the master key and every
-derived key from memory — use try-with-resources so this always happens. The
-`CipherStore` is also `AutoCloseable` and, when you create it yourself, is yours
-to close (releasing the directory handle); `GocryptFs` only closes stores it
-created from a URI:
+`GocryptFs` is `AutoCloseable`. A successful close flushes pending writes and
+then wipes the master key and every derived key from memory — use
+try-with-resources so this normally always happens. If the final flush fails,
+`close()` throws without wiping any keys or closing the store. The filesystem
+remains usable, buffered data stays alive, and you can resolve the storage
+problem and call `close()` again. To retry, keep the `GocryptFs` reference and
+call `close()` explicitly; try-with-resources does not offer a retry point.
+
+The `CipherStore` is also `AutoCloseable` and, when you create it yourself, is
+yours to close (releasing the directory handle); `GocryptFs` only closes stores
+it created from a URI:
 
 ```java
 try (CipherStore store = new PathCipherStore(Paths.get("/data/cipher"));
      GocryptFs fs = GocryptFs.open(store, "my-password".toCharArray())) {
     // ... init, listing, access ...
 }
-// the master key, all derived keys and the store have been closed here
+// after a successful close: the master key, all derived keys and the store
+// have been closed here
 ```
 
 ---
@@ -193,8 +201,10 @@ attribute views are also supported where the backing filesystem allows them.
 
 ### deinit
 
-`FileSystem` is `AutoCloseable`; closing it closes the underlying `GocryptFs`
-and wipes its keys:
+`FileSystem` is `AutoCloseable`; a successful close closes the underlying
+`GocryptFs` and wipes its keys. If the final flush fails, `close()` throws, the
+filesystem and its keys remain alive, and the close can be retried after the
+storage problem is fixed:
 
 ```java
 try (FileSystem fs = FileSystems.newFileSystem(URI.create("gocryptfs:///"), env)) {
@@ -255,8 +265,9 @@ byte[] content = fs.readAll("/hello.txt");
 
 ### deinit
 
-Identical to the plain API — `GocryptFs` is `AutoCloseable`, and closing wipes
-the master key, the derived keys and the token secret:
+Identical to the plain API — `GocryptFs` is `AutoCloseable`, and a successful
+close wipes the master key, the derived keys and the token secret. A failed
+final flush aborts the close and leaves all of them alive for a retry:
 
 ```java
 try (GocryptFs fs = GocryptFs.open(store, token)) {

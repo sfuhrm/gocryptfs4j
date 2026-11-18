@@ -199,13 +199,19 @@ try (CipherStore store = new PathCipherStore(cipherDir)) {
 }
 ```
 
-The `GocryptFs` object is `AutoCloseable` and wipes the master key and derived
-keys from memory on `close()`. A store you supply yourself is also yours to
-close — `GocryptFs` closes only stores it created from a URI — so pass it to
-try-with-resources as shown above. Other operations include `size`, `truncate`,
-`delete`, `createSymlink`, `readSymlinkTarget`, `setTimes`, `openRead` (a
-streaming decrypting `InputStream`) and `openWrite` (a streaming encrypting
-`OutputStream`).
+The `GocryptFs` object is `AutoCloseable`. A successful `close()` flushes
+pending writes, then wipes the master key and derived keys from memory. If the
+final flush fails, `close()` throws without wiping any keys or closing the
+filesystem: buffered data and key material stay alive, normal operations resume,
+and you can fix the underlying problem (for example free disk space) and call
+`close()` again. A store you supply yourself is also yours to close —
+`GocryptFs` closes only stores it created from a URI — so pass it to
+try-with-resources as shown above. If you need to retry a failed close, call
+`close()` explicitly instead of relying on try-with-resources, because the
+resource is still open when the exception is thrown. Other operations include
+`size`, `truncate`, `delete`, `createSymlink`, `readSymlinkTarget`, `setTimes`,
+`openRead` (a streaming decrypting `InputStream`) and `openWrite` (a streaming
+encrypting `OutputStream`).
 
 A writable `GocryptFs` holds an exclusive advisory lock on its cipher directory
 for its whole lifetime. A second writable instance, whether in the same JVM or
@@ -278,6 +284,11 @@ try (FileSystem fs = new GocryptFsProvider()
     // ... use java.nio.file.Files on fs.getPath("/") as above
 }
 ```
+
+Closing the NIO `FileSystem` has the same flush/retry semantics as the plain
+API: the keys are wiped only after the final flush succeeds. If `close()` throws
+because of a failed flush, the filesystem stays open and can be closed again
+after the storage problem is fixed.
 
 FIDO2-protected filesystems work the same way: pass a `Fido2Token` to
 `newFileSystem(Path, Fido2Token)`, or put it under the `fido2Token` environment

@@ -42,10 +42,13 @@
  * }
  * }</pre>
  *
- * <p>{@link GocryptFs} is {@link AutoCloseable} and wipes the master key and all
- * derived keys from memory on {@link GocryptFs#close() close()}. For use through
- * the standard {@code java.nio.file} API, see the
- * {@code de.sfuhrm.gocryptfs4j.nio} package instead.</p>
+ * <p>{@link GocryptFs} is {@link AutoCloseable}. A successful
+ * {@link GocryptFs#close() close()} flushes pending writes and then wipes the
+ * master key and all derived keys from memory. If the final flush fails,
+ * {@code close()} throws without wiping the keys or closing the store, so the
+ * filesystem remains usable and the close can be retried after the storage
+ * problem is resolved. For use through the standard {@code java.nio.file} API,
+ * see the {@code de.sfuhrm.gocryptfs4j.nio} package instead.</p>
  */
 @NullMarked
 package de.sfuhrm.gocryptfs4j.core;
