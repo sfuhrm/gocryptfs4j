@@ -3,7 +3,9 @@ package de.sfuhrm.gocryptfs4j.core;
 import de.sfuhrm.gocryptfs4j.crypto.Constants;
 import de.sfuhrm.gocryptfs4j.store.CipherChannel;
 import de.sfuhrm.gocryptfs4j.store.CipherStore;
+import de.sfuhrm.gocryptfs4j.store.memory.MapCipherStore;
 import org.junit.jupiter.api.Test;
+import org.mockito.AdditionalAnswers;
 
 import java.io.IOException;
 import java.lang.reflect.Field;
@@ -16,10 +18,13 @@ import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -31,6 +36,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -421,6 +427,110 @@ class FileManagerTest {
                 assertArrayEquals(data, buf.array());
             }
         }
+    }
+
+    @Test
+    void slowOpenDoesNotStallUnrelatedPathsInSameBin() throws Exception {
+        MapCipherStore real = new MapCipherStore();
+        CipherStore store = mock(CipherStore.class, AdditionalAnswers.delegatesTo(real));
+        CountDownLatch openEntered = new CountDownLatch(1);
+        CountDownLatch releaseOpen = new CountDownLatch(1);
+        String slow = "slowFile";
+        String unrelated = sameBinName(slow);
+
+        doAnswer(invocation -> {
+            String name = invocation.getArgument(0);
+            if (slow.equals(name)) {
+                openEntered.countDown();
+                releaseOpen.await(10, TimeUnit.SECONDS);
+            }
+            return real.open(name, invocation.getArgument(1));
+        }).when(store).open(anyString(), anyBoolean());
+
+        ManagerHarness h = ManagerHarness.plaintext(store);
+        real.createFile(slow);
+        real.createFile(unrelated);
+
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        Thread slowOpen = new Thread(
+                () -> openAndClose(h, slow, failure), "slow-open");
+        Thread samePathOpen = new Thread(
+                () -> openAndClose(h, slow, failure), "same-path-open");
+        CountDownLatch unrelatedOpened = new CountDownLatch(1);
+        Thread unrelatedOpen = new Thread(() -> {
+            try (SharedCipherFile ignored =
+                         h.fileManager.openCipherFileByName(unrelated, false)) {
+                unrelatedOpened.countDown();
+            } catch (Throwable t) {
+                failure.compareAndSet(null, t);
+            }
+        }, "unrelated-open");
+
+        try {
+            slowOpen.start();
+            assertTrue(openEntered.await(5, TimeUnit.SECONDS),
+                    "the slow open must reach the store");
+
+            samePathOpen.start();
+            // A second open of the same path necessarily waits for the first
+            // one's entry monitor. That wait must happen outside the registry
+            // bin lock.
+            assertTrue(awaitBlocked(samePathOpen),
+                    "the second open must wait on the entry monitor");
+
+            unrelatedOpen.start();
+            assertTrue(unrelatedOpened.await(5, TimeUnit.SECONDS),
+                    "an unrelated path in the same hash bin must not wait for the slow open");
+        } finally {
+            releaseOpen.countDown();
+            slowOpen.join(TimeUnit.SECONDS.toMillis(10));
+            samePathOpen.join(TimeUnit.SECONDS.toMillis(10));
+            unrelatedOpen.join(TimeUnit.SECONDS.toMillis(10));
+        }
+
+        Throwable t = failure.get();
+        if (t != null) {
+            throw new AssertionError(t);
+        }
+    }
+
+    private static void openAndClose(ManagerHarness h, String cipherPath,
+                                     AtomicReference<Throwable> failure) {
+        try (SharedCipherFile ignored =
+                     h.fileManager.openCipherFileByName(cipherPath, false)) {
+            // Opening is the operation under test.
+        } catch (Throwable t) {
+            failure.compareAndSet(null, t);
+        }
+    }
+
+    private static boolean awaitBlocked(Thread thread) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (System.nanoTime() < deadline) {
+            if (thread.getState() == Thread.State.BLOCKED) {
+                return true;
+            }
+            if (!thread.isAlive()) {
+                return false;
+            }
+            Thread.sleep(5);
+        }
+        return false;
+    }
+
+    private static String sameBinName(String first) {
+        int wanted = bin(first);
+        for (int i = 0; ; i++) {
+            String candidate = "other" + i;
+            if (bin(candidate) == wanted) {
+                return candidate;
+            }
+        }
+    }
+
+    private static int bin(String key) {
+        int hash = key.hashCode();
+        return (hash ^ (hash >>> 16)) & 15;
     }
 
     @Test

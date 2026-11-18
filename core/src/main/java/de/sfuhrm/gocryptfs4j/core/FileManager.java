@@ -323,32 +323,46 @@ final class FileManager {
 
     /**
      * Reserves a reference to the shared entry for a ciphertext file. The entry
-     * is created or found under the map's bin lock, but no I/O or key derivation
-     * happens there. Incrementing the reference inside the mapping function
-     * keeps the entry from being pruned while its backing file is opened
-     * outside the lock.
+     * is created or found with a plain map operation and its reference is then
+     * incremented under {@code entry.lock}, never while holding the map's bin
+     * lock. Holding the bin lock only for the lookup keeps a slow open (which
+     * may hold {@code entry.lock} for its store I/O) from stalling unrelated
+     * paths that hash to the same bin.
+     *
+     * <p>If a concurrent prune or rename detaches the entry between the lookup
+     * and the reference increment, the reservation is retried against the
+     * current mapping.</p>
      *
      * @param cipherFile the ciphertext file name
      * @return the reserved entry
      */
     private SharedCipherFile.Entry reserveSharedEntry(String cipherFile) {
-        return sharedFiles.compute(cipherFile, (key, existing) -> {
-            SharedCipherFile.Entry entry = existing;
+        for (;;) {
+            SharedCipherFile.Entry entry = sharedFiles.get(cipherFile);
             if (entry == null) {
-                entry = new SharedCipherFile.Entry();
-                entry.guard = channelGuard;
-                entry.releaseAction = this::releaseEntry;
+                SharedCipherFile.Entry fresh = new SharedCipherFile.Entry();
+                fresh.guard = channelGuard;
+                fresh.releaseAction = this::releaseEntry;
+                fresh.key = cipherFile;
+                entry = sharedFiles.putIfAbsent(cipherFile, fresh);
+                if (entry == null) {
+                    entry = fresh;
+                }
             }
-            // refs is protected by entry.lock everywhere else. Taking it here
-            // as well (inside the map's bin lock, matching the map-then-entry
-            // order used by pruning and moving) prevents a lost update that
-            // could close the backing file while a handle still uses it.
+            // refs is protected by entry.lock everywhere else. Taking it
+            // outside the map's bin lock prevents a slow I/O in another holder
+            // of this entry from blocking unrelated keys in the same bin.
             synchronized (entry.lock) {
+                if (sharedFiles.get(cipherFile) != entry) {
+                    // A prune or rename detached the entry after the lookup;
+                    // reserve against the mapping that replaced it.
+                    continue;
+                }
                 entry.key = cipherFile;
                 entry.refs++;
+                return entry;
             }
-            return entry;
-        });
+        }
     }
 
     /**
@@ -503,34 +517,31 @@ final class FileManager {
      * concurrent open already acquired it again. The entry remembers its
      * current key because a rename may move it while handles are open.
      *
+     * <p>The entry monitor is taken before the map is touched, so this never
+     * waits for a slow channel I/O while holding a bin lock. A rename moves the
+     * entry under the same monitor, so the key stays stable while it is held
+     * and no retry loop is needed.</p>
+     *
      * @param entry the entry to prune
      */
     private void pruneSharedFile(SharedCipherFile.Entry entry) {
-        for (;;) {
+        synchronized (entry.lock) {
+            if (entry.refs != 0 || entry.failure != null) {
+                // A concurrent failed close may have marked the entry after the
+                // release that scheduled this prune. Keep it so the failure
+                // stays visible to the next open.
+                return;
+            }
             String key = entry.key;
             if (key == null) {
                 return;
             }
-            boolean[] removed = new boolean[1];
-            sharedFiles.compute(key, (k, current) -> {
-                if (current != entry) {
-                    return current;
-                }
-                synchronized (entry.lock) {
-                    if (entry.refs != 0 || entry.failure != null) {
-                        // A concurrent failed close may have marked the entry
-                        // after the release that scheduled this prune. Keep it
-                        // so the failure stays visible to the next open.
-                        return current;
-                    }
-                    entry.key = null;
-                    removed[0] = true;
-                    return null;
-                }
-            });
-            if (removed[0] || Objects.equals(key, entry.key)) {
-                return;
+            if (sharedFiles.remove(key, entry)) {
+                entry.key = null;
             }
+            // If the key now maps to another entry (or was already removed by
+            // a delete or replace), this entry is already detached. Leave it
+            // alone; handles that still hold it release without a backing file.
         }
     }
 
@@ -560,41 +571,44 @@ final class FileManager {
 
     /**
      * Moves a single shared entry, dropping it instead when it has no live
-     * handles any more.
+     * handles any more. The entry monitor is taken outside the map's bin lock
+     * and then guards the key update and the map move, so a rename never waits
+     * for a slow open while holding a bin lock.
      *
      * @param from the source ciphertext path
      * @param to   the target ciphertext path
      */
     private void moveSharedFileEntry(String from, String to) {
-        SharedCipherFile.Entry[] moved = new SharedCipherFile.Entry[1];
-        sharedFiles.compute(from, (key, entry) -> {
+        for (;;) {
+            SharedCipherFile.Entry entry = sharedFiles.get(from);
             if (entry == null) {
-                return null;
+                // Nothing live to move. Drop any entry at the target so later
+                // opens see the renamed file; open handles keep their own entry.
+                sharedFiles.remove(to);
+                return;
             }
             synchronized (entry.lock) {
+                if (sharedFiles.get(from) != entry) {
+                    // A concurrent prune, move or replace changed the mapping
+                    // between the lookup and taking the entry monitor.
+                    continue;
+                }
                 if (entry.refs == 0 && entry.failure == null) {
+                    if (!sharedFiles.remove(from, entry)) {
+                        continue;
+                    }
                     entry.key = null;
-                    return null;
+                    sharedFiles.remove(to);
+                    return;
+                }
+                if (!sharedFiles.remove(from, entry)) {
+                    continue;
                 }
                 entry.key = to;
-                moved[0] = entry;
-                return null;
+                sharedFiles.put(to, entry);
+                return;
             }
-        });
-        SharedCipherFile.Entry entry = moved[0];
-        if (entry == null) {
-            sharedFiles.remove(to);
-            return;
         }
-        sharedFiles.compute(to, (key, existing) -> {
-            synchronized (entry.lock) {
-                if (entry.refs == 0) {
-                    entry.key = null;
-                    return null;
-                }
-                return entry;
-            }
-        });
     }
 
     /**

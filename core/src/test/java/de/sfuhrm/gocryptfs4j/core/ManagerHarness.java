@@ -120,6 +120,16 @@ final class ManagerHarness {
     }
 
     /**
+     * Returns a harness with unencrypted (plaintext) names over the given store.
+     *
+     * @param store the ciphertext-side store
+     * @return the harness
+     */
+    static ManagerHarness plaintext(CipherStore store) throws IOException {
+        return new ManagerHarness(store, true, false);
+    }
+
+    /**
      * Returns a harness with deterministic (no per-directory IV) name encryption.
      *
      * @return the harness
