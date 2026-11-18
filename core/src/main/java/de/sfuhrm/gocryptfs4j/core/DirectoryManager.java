@@ -16,10 +16,13 @@ import java.nio.file.NoSuchFileException;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableSet;
 import java.util.Objects;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.TreeSet;
 import java.util.function.Supplier;
 
 /**
@@ -69,12 +72,24 @@ final class DirectoryManager {
      */
     private @Nullable FileManager fileManager;
 
+    /** Maximum number of directory IVs kept in the cache. */
+    private static final int MAX_CACHED_DIR_IVS = 1024;
+
     /**
-     * Cache of per-directory IVs, keyed by cipher directory name. Each entry
+     * Cache of per-directory IVs, keyed by cipher directory name. Access order
+     * drives LRU eviction so the cache cannot grow without bound. Each entry
      * remembers the metadata of the diriv file it was read from so a later read
      * can detect that the file was replaced.
      */
-    private final Map<String, CachedDirIV> dirIvCache = new ConcurrentHashMap<>();
+    private final Map<String, CachedDirIV> dirIvCache =
+            new LinkedHashMap<>(16, 0.75f, true);
+
+    /**
+     * The keys of {@link #dirIvCache} in sorted order, so invalidating a
+     * directory subtree does not require scanning the whole cache. Guarded by
+     * the {@link #dirIvCache} monitor together with the cache itself.
+     */
+    private final NavigableSet<String> dirIvCacheKeys = new TreeSet<>();
 
     /**
      * Whether directory IVs may be cached. Read-only instances bypass the
@@ -189,7 +204,7 @@ final class DirectoryManager {
                 // A missing diriv is handled below; it must not be served from
                 // the cache either.
             }
-            CachedDirIV cached = dirIvCache.get(cipherDir);
+            CachedDirIV cached = cachedDirIV(cipherDir);
             if (cached != null) {
                 if (stamp != null && cached.matches(stamp)) {
                     return cached.data.clone();
@@ -197,7 +212,7 @@ final class DirectoryManager {
                 // The diriv was replaced (for example a directory was deleted
                 // and recreated at the same cipher path, or another gocryptfs
                 // instance minted a new one). Drop the stale IV.
-                dirIvCache.remove(cipherDir, cached);
+                removeCachedDirIV(cipherDir, cached);
             }
         }
         byte[] data = readDirIVInternal(cipherDir, create);
@@ -218,7 +233,7 @@ final class DirectoryManager {
                 // without file keys cannot cheaply prove that the bytes it
                 // would serve are still current.
                 if (cacheDirIVs && stamp != null && stamp.fileKey() != null) {
-                    dirIvCache.put(cipherDir, new CachedDirIV(data, stamp));
+                    putCachedDirIV(cipherDir, new CachedDirIV(data, stamp));
                 }
                 return data.clone();
             }
@@ -369,7 +384,7 @@ final class DirectoryManager {
         }
         store.writeSmall(PathResolver.join(cipherDir, Constants.DIR_IV_FILENAME),
                 Keys.randomBytes(Constants.DIR_IV_LEN), overwrite);
-        dirIvCache.remove(cipherDir);
+        removeCachedDirIV(cipherDir);
     }
 
     /**
@@ -427,7 +442,7 @@ final class DirectoryManager {
             store.rename(aside, dirIV, false);
         } catch (FileAlreadyExistsException ignored) {
             // Keep the externally created diriv and discard the stale one.
-            dirIvCache.remove(cipherDir);
+            removeCachedDirIV(cipherDir);
             deleteIfExists(aside);
         }
     }
@@ -458,22 +473,112 @@ final class DirectoryManager {
     }
 
     /**
-     * Removes any cached directory IVs at or below {@code dir}.
+     * Removes any cached directory IVs at or below {@code dir}. The sorted key
+     * index limits the work to the affected subtree instead of scanning every
+     * cached directory.
      *
      * @param dir the cipher directory whose subtree is no longer valid
      */
     void invalidateDirIvCache(String dir) {
-        if (dirIvCache.isEmpty()) {
-            return;
+        synchronized (dirIvCache) {
+            removeCachedDirIVLocked(dir);
+            // All descendants start with "dir/". Because '/' sorts directly
+            // before '0', the half-open range [dir/, dir0) is exactly the
+            // subtree below dir.
+            String from = dir + "/";
+            String to = dir + "0";
+            Iterator<String> keys = dirIvCacheKeys.subSet(from, true, to, false).iterator();
+            while (keys.hasNext()) {
+                String key = keys.next();
+                keys.remove();
+                dirIvCache.remove(key);
+            }
         }
-        dirIvCache.keySet().removeIf(k -> k.equals(dir) || k.startsWith(dir + "/"));
     }
 
     /**
      * Clears the directory-IV cache, wiping the cached IVs.
      */
     void clearDirIvCache() {
-        dirIvCache.clear();
+        synchronized (dirIvCache) {
+            dirIvCache.clear();
+            dirIvCacheKeys.clear();
+        }
+    }
+
+    /**
+     * Returns a cached directory IV and records it as recently used.
+     *
+     * @param cipherDir the ciphertext directory name
+     * @return the cached IV, or {@code null}
+     */
+    private @Nullable CachedDirIV cachedDirIV(String cipherDir) {
+        synchronized (dirIvCache) {
+            return dirIvCache.get(cipherDir);
+        }
+    }
+
+    /**
+     * Caches a directory IV, evicting the least recently used entry when the
+     * cache is full.
+     *
+     * @param cipherDir the ciphertext directory name
+     * @param cached    the IV to cache
+     */
+    private void putCachedDirIV(String cipherDir, CachedDirIV cached) {
+        synchronized (dirIvCache) {
+            if (dirIvCache.containsKey(cipherDir)) {
+                dirIvCache.put(cipherDir, cached);
+                return;
+            }
+            while (dirIvCache.size() >= MAX_CACHED_DIR_IVS) {
+                Iterator<String> eldest = dirIvCache.keySet().iterator();
+                if (!eldest.hasNext()) {
+                    break;
+                }
+                String key = eldest.next();
+                eldest.remove();
+                dirIvCacheKeys.remove(key);
+            }
+            dirIvCache.put(cipherDir, cached);
+            dirIvCacheKeys.add(cipherDir);
+        }
+    }
+
+    /**
+     * Removes a cached directory IV if it is still the expected value.
+     *
+     * @param cipherDir the ciphertext directory name
+     * @param expected  the cached value that was found stale
+     */
+    private void removeCachedDirIV(String cipherDir, CachedDirIV expected) {
+        synchronized (dirIvCache) {
+            if (dirIvCache.remove(cipherDir, expected)) {
+                dirIvCacheKeys.remove(cipherDir);
+            }
+        }
+    }
+
+    /**
+     * Removes a cached directory IV.
+     *
+     * @param cipherDir the ciphertext directory name
+     */
+    private void removeCachedDirIV(String cipherDir) {
+        synchronized (dirIvCache) {
+            removeCachedDirIVLocked(cipherDir);
+        }
+    }
+
+    /**
+     * Removes a cached directory IV while the cache monitor is held.
+     *
+     * @param cipherDir the ciphertext directory name
+     */
+    private void removeCachedDirIVLocked(String cipherDir) {
+        if (dirIvCache.remove(cipherDir) != null) {
+            dirIvCacheKeys.remove(cipherDir);
+        }
     }
 
     /**

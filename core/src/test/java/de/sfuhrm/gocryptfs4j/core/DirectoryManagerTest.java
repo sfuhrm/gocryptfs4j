@@ -12,19 +12,23 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -397,6 +401,110 @@ class DirectoryManagerTest {
         assertTrue(h.directoryManager.listCipherDir(h.store.root(), iv).isEmpty());
     }
 
+    @Test
+    void dirIvCacheIsBounded() throws Exception {
+        ReadOnlyStore store = new ReadOnlyStore();
+        store.withFileKeys = true;
+        ManagerHarness h = ManagerHarness.encrypted(store);
+
+        for (int i = 0; i < 1100; i++) {
+            String dir = "d" + i;
+            h.store.mkdir(dir);
+            h.directoryManager.writeDirIV(dir);
+            h.directoryManager.readDirIV(dir);
+        }
+
+        int size = dirIvCache(h).size();
+        assertTrue(size <= 1024, "the cache must evict entries instead of growing without bound");
+        assertTrue(size > 0, "the cache must still hold recently used entries");
+    }
+
+    @Test
+    void invalidateDirIvCacheRemovesOnlyTheSubtree() throws Exception {
+        ReadOnlyStore store = new ReadOnlyStore();
+        store.withFileKeys = true;
+        ManagerHarness h = ManagerHarness.encrypted(store);
+        h.fileManager.mkdir("/a");
+        h.fileManager.mkdir("/a/b");
+        h.fileManager.mkdir("/c");
+
+        String a = h.pathResolver.resolve("/a").cipherPath();
+        String ab = h.pathResolver.resolve("/a/b").cipherPath();
+        String c = h.pathResolver.resolve("/c").cipherPath();
+        h.directoryManager.readDirIV(a);
+        h.directoryManager.readDirIV(ab);
+        h.directoryManager.readDirIV(c);
+
+        h.directoryManager.invalidateDirIvCache(a);
+
+        Map<String, Object> cache = dirIvCache(h);
+        assertFalse(cache.containsKey(a), "the invalidated directory must be dropped");
+        assertFalse(cache.containsKey(ab), "a child directory must be dropped with its parent");
+        assertTrue(cache.containsKey(c), "an unrelated directory must stay cached");
+    }
+
+    /**
+     * Returns the private directory-IV cache of a harness's directory manager.
+     *
+     * @param h the harness
+     * @return the cache keyed by cipher directory
+     */
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> dirIvCache(ManagerHarness h) throws Exception {
+        Field field = DirectoryManager.class.getDeclaredField("dirIvCache");
+        field.setAccessible(true);
+        return (Map<String, Object>) field.get(h.directoryManager);
+    }
+
+    /**
+     * A node wrapper that gives an in-memory entry a stable file key so the
+     * directory-IV cache can be exercised without a local filesystem store.
+     */
+    private static final class KeyedNode implements CipherNode {
+
+        /** The wrapped node. */
+        private final CipherNode delegate;
+
+        KeyedNode(CipherNode delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public String name() {
+            return delegate.name();
+        }
+
+        @Override
+        public Kind kind() {
+            return delegate.kind();
+        }
+
+        @Override
+        public long size() {
+            return delegate.size();
+        }
+
+        @Override
+        public FileTime lastModifiedTime() {
+            return delegate.lastModifiedTime();
+        }
+
+        @Override
+        public FileTime lastAccessTime() {
+            return delegate.lastAccessTime();
+        }
+
+        @Override
+        public FileTime creationTime() {
+            return delegate.creationTime();
+        }
+
+        @Override
+        public Object fileKey() {
+            return delegate.name();
+        }
+    }
+
     /**
      * A {@link CipherStore} over an in-memory store whose control-file writes
      * can be disabled, simulating a read-only medium.
@@ -406,6 +514,7 @@ class DirectoryManagerTest {
         private final MapCipherStore delegate = new MapCipherStore();
         boolean readOnly;
         boolean listingConsistent = true;
+        boolean withFileKeys;
 
         @Override
         public String root() {
@@ -432,12 +541,20 @@ class DirectoryManagerTest {
 
         @Override
         public CipherNode stat(String name) throws IOException {
-            return delegate.stat(name);
+            return withFileKey(delegate.stat(name));
         }
 
         @Override
         public List<CipherNode> list(String dir) throws IOException {
-            return delegate.list(dir);
+            List<CipherNode> nodes = new ArrayList<>();
+            for (CipherNode node : delegate.list(dir)) {
+                nodes.add(withFileKey(node));
+            }
+            return nodes;
+        }
+
+        private CipherNode withFileKey(CipherNode node) {
+            return withFileKeys ? new KeyedNode(node) : node;
         }
 
         @Override
