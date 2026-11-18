@@ -1691,25 +1691,30 @@ public final class GocryptFs implements AutoCloseable {
      * <p>The result can be passed directly to {@code gocryptfs -masterkey}, and
      * {@code gocryptfs} ignores the dashes when parsing it.</p>
      *
+     * <p>The returned array is a fresh copy owned by the caller and can be wiped
+     * with {@link java.util.Arrays#fill(char[], char)} once it is no longer
+     * needed; unlike a {@link String}, it does not leave an immutable copy of
+     * the key material on the heap. This method does not retain or wipe it.</p>
+     *
      * @param masterKey the master key bytes
      * @return the dash-separated hexadecimal representation
      * @throws NullPointerException if {@code masterKey} is {@code null}
      */
-    public static String formatMasterKey(byte[] masterKey) {
+    public static char[] formatMasterKey(byte[] masterKey) {
         Objects.requireNonNull(masterKey, "masterKey");
-        StringBuilder hex = new StringBuilder(masterKey.length * 2);
-        for (byte b : masterKey) {
-            hex.append(Character.forDigit((b >>> 4) & 0x0f, 16));
-            hex.append(Character.forDigit(b & 0x0f, 16));
-        }
-        StringBuilder out = new StringBuilder(hex.length() + hex.length() / 8);
-        for (int i = 0; i < hex.length(); i += 8) {
-            if (i > 0) {
-                out.append('-');
+        int hexLength = masterKey.length * 2;
+        int length = hexLength == 0 ? 0 : hexLength + (hexLength - 1) / 8;
+        char[] out = new char[length];
+        int pos = 0;
+        for (int i = 0; i < masterKey.length; i++) {
+            if (i > 0 && i % 4 == 0) {
+                out[pos++] = '-';
             }
-            out.append(hex, i, Math.min(i + 8, hex.length()));
+            int b = masterKey[i] & 0xFF;
+            out[pos++] = Character.forDigit(b >>> 4, 16);
+            out[pos++] = Character.forDigit(b & 0x0F, 16);
         }
-        return out.toString();
+        return out;
     }
 
     /**
