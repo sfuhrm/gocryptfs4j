@@ -532,7 +532,15 @@ public final class ConfigFile {
         validateScrypt();
         validateEncryptedKey();
         ScryptKdf s = scryptObject;
-        byte[] scryptHash = Keys.scrypt(secret, decode(s.salt()), s.n(), s.r(), s.p(), s.keyLen());
+        byte[] scryptHash;
+        try {
+            scryptHash = Keys.scrypt(secret, decode(s.salt()), s.n(), s.r(), s.p(), s.keyLen());
+        } catch (OutOfMemoryError e) {
+            // An attacker-controlled config can request a large scrypt buffer.
+            // Report it as an ordinary open failure instead of letting an Error
+            // escape through the IOException-based API.
+            throw new IOException("not enough memory for scrypt parameters", e);
+        }
         byte[] contentKey = null;
         try {
             // gocryptfs always protects the master key with AES-256-GCM, even

@@ -179,17 +179,18 @@ public final class Constants {
      * that a parallel scrypt implementation holds at once and, even for the
      * serial reference implementation, scales the total CPU work. Bounding only
      * {@code 128 * N * R} would let a large {@code P} request unbounded CPU. The
-     * 512 MiB ceiling keeps the allocation within a default JVM heap: the
-     * previous 1 GiB limit allowed {@code N=2^20, R=8} (1 GiB) and threw
-     * {@code OutOfMemoryError}.</p>
+     * 256 MiB ceiling is below the previous 512 MiB limit, which could still
+     * exhaust a small container's heap and throw {@code OutOfMemoryError}. The
+     * open path also maps an allocation failure to an {@link IOException}.</p>
      *
      * <p>This deliberately rejects a legitimate gocryptfs filesystem created with
-     * {@code -scryptn 20} (the maximum gocryptfs accepts): {@code N=2^20} with the
-     * default {@code R=8} requests 1 GiB, above the ceiling. Such filesystems must
-     * be re-created with a smaller {@code N} (for example the gocryptfs default
-     * {@code -scryptn 16}) to be opened here.</p>
+     * a high {@code -scryptn} value such as 19 or 20: with the default
+     * {@code R=8}, {@code N=2^19} requests 512 MiB and {@code N=2^20} requests
+     * 1 GiB, both above the ceiling. Such filesystems must be re-created with a
+     * smaller {@code N} (for example the gocryptfs default {@code -scryptn 16})
+     * to be opened here.</p>
      */
-    public static final long SCRYPT_MAX_MEMORY = 512L << 20;
+    public static final long SCRYPT_MAX_MEMORY = 256L << 20;
 
     /**
      * Maximum accepted size of a {@code gocryptfs.conf} file in bytes. A real

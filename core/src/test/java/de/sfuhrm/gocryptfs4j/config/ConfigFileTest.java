@@ -261,6 +261,9 @@ class ConfigFileTest {
             // N=2^20 with R=8 alone is 1 GiB and must now be rejected.
             assertThrows(IOException.class, () -> ConfigFile.load(
                     writeConf(dir, salt32, 1 << 20, 8, 1, 32, flags, null)));
+            // N=2^19 with R=8 is 512 MiB, above the lowered 256 MiB bound.
+            assertThrows(IOException.class, () -> ConfigFile.load(
+                    writeConf(dir, salt32, 1 << 19, 8, 1, 32, flags, null)));
             // P now scales the bound: default N,R with P=16 reaches 1 GiB as well.
             assertThrows(IOException.class, () -> ConfigFile.load(
                     writeConf(dir, salt32, 1 << 16, 8, 16, 32, flags, null)));
