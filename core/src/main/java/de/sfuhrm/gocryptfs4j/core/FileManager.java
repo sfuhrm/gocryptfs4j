@@ -102,9 +102,10 @@ final class FileManager {
     private final Set<SharedCipherFile.Entry> openEntries = ConcurrentHashMap.newKeySet();
 
     /**
-     * Guards channel I/O against the owning filesystem closing. Every entry
-     * created here shares this guard so a close can exclude all channels at
-     * once while it flushes pending writes and then wipes the keys.
+     * Guards channel I/O against the owning filesystem closing or moving and
+     * deleting paths. Every entry created here shares this guard so a close can
+     * exclude all channels at once while it flushes pending writes and then
+     * wipes the keys, and a rename or delete can wait for in-flight writes.
      */
     private final ChannelGuard channelGuard = new ChannelGuard();
 
@@ -612,6 +613,220 @@ final class FileManager {
     }
 
     /**
+     * Prepares the journals of every open file under a renamed ciphertext path
+     * to move to the new path. The caller must hold the channel write lock and
+     * call {@link #commitJournalMoves(List)} after the store rename succeeds, or
+     * {@link #rollbackJournalMoves(List, Throwable)} if it fails.
+     *
+     * @param from the source ciphertext path
+     * @param to   the target ciphertext path
+     * @return the pending journal moves
+     * @throws IOException on filesystem errors
+     */
+    private List<JournalMove> prepareJournalMoves(String from, String to) throws IOException {
+        List<JournalMove> moves = new ArrayList<>();
+        boolean exactCovered = false;
+        String prefix = from + "/";
+        List<String> keys = new ArrayList<>();
+        for (String key : sharedFiles.keySet()) {
+            if (key.equals(from) || key.startsWith(prefix)) {
+                keys.add(key);
+            }
+        }
+        try {
+            for (String key : keys) {
+                SharedCipherFile.Entry entry = sharedFiles.get(key);
+                if (entry == null) {
+                    continue;
+                }
+                CipherFile file;
+                synchronized (entry.lock) {
+                    file = entry.file;
+                    if (file != null) {
+                        CipherJournal.Move move =
+                                file.beginJournalMove(renamedCipherPath(from, to, key));
+                        if (move != null) {
+                            moves.add(JournalMove.forFile(file, move));
+                        }
+                        if (key.equals(from)) {
+                            exactCovered = true;
+                        }
+                    }
+                }
+                if (file == null) {
+                    // A failed close keeps the entry registered without a
+                    // backing file; its journal may still be pending.
+                    CipherJournal journal = new CipherJournal(store, key);
+                    CipherJournal.Move move = journal.beginMove(renamedCipherPath(from, to, key));
+                    if (move != null) {
+                        moves.add(JournalMove.forJournal(journal, move));
+                    }
+                    if (key.equals(from)) {
+                        exactCovered = true;
+                    }
+                }
+            }
+            if (!exactCovered) {
+                // No open backing file for the source path, but a crashed or
+                // failed write may still have left a journal there.
+                CipherJournal journal = new CipherJournal(store, from);
+                CipherJournal.Move move = journal.beginMove(to);
+                if (move != null) {
+                    moves.add(JournalMove.forJournal(journal, move));
+                }
+            }
+            return moves;
+        } catch (IOException | RuntimeException | Error e) {
+            rollbackJournalMoves(moves, e);
+            throw e;
+        }
+    }
+
+    /**
+     * Completes the journal moves prepared for a successful ciphertext rename.
+     *
+     * @param moves the pending moves
+     * @return the first failure, or {@code null}
+     */
+    private static @Nullable IOException commitJournalMoves(List<JournalMove> moves) {
+        IOException failure = null;
+        for (JournalMove move : moves) {
+            try {
+                move.commit();
+            } catch (IOException e) {
+                if (failure == null) {
+                    failure = e;
+                } else {
+                    failure.addSuppressed(e);
+                }
+            }
+        }
+        return failure;
+    }
+
+    /**
+     * Rolls back the journal moves prepared for a failed ciphertext rename.
+     *
+     * @param moves the pending moves
+     * @param cause the failure to attach rollback errors to
+     */
+    private static void rollbackJournalMoves(List<JournalMove> moves, Throwable cause) {
+        for (JournalMove move : moves) {
+            try {
+                move.rollback();
+            } catch (IOException e) {
+                cause.addSuppressed(e);
+            }
+        }
+    }
+
+    /**
+     * Maps a ciphertext path under a renamed source to its new path.
+     *
+     * @param from the source ciphertext path
+     * @param to   the target ciphertext path
+     * @param path the ciphertext path below the source
+     * @return the path after the rename
+     */
+    private static String renamedCipherPath(String from, String to, String path) {
+        return path.equals(from) ? to : to + path.substring(from.length());
+    }
+
+    /**
+     * Drops the journal of a deleted ciphertext file, including a pending one
+     * left by an open handle. An open handle may keep writing to the unlinked
+     * file, so its journal is disabled rather than left at a name that can be
+     * reused.
+     *
+     * @param cipherPath the deleted ciphertext path
+     * @throws IOException on filesystem errors
+     */
+    private void forgetJournal(String cipherPath) throws IOException {
+        SharedCipherFile.Entry entry = sharedFiles.get(cipherPath);
+        if (entry != null) {
+            synchronized (entry.lock) {
+                CipherFile file = entry.file;
+                if (file != null) {
+                    file.forgetJournal();
+                    return;
+                }
+            }
+        }
+        new CipherJournal(store, cipherPath).clear();
+    }
+
+    /**
+     * One prepared journal relocation, either through an open {@link CipherFile}
+     * or a standalone journal for a path without an open backing file.
+     */
+    private static final class JournalMove {
+
+        /** The open file whose journal moves, or {@code null}. */
+        private final @Nullable CipherFile file;
+
+        /** The standalone journal, or {@code null}. */
+        private final @Nullable CipherJournal journal;
+
+        /** The pending move. */
+        private final CipherJournal.Move move;
+
+        /**
+         * Creates a move for an open file.
+         *
+         * @param file the open file
+         * @param move the pending move
+         * @return the journal move
+         */
+        static JournalMove forFile(CipherFile file, CipherJournal.Move move) {
+            return new JournalMove(file, null, move);
+        }
+
+        /**
+         * Creates a move for a standalone journal.
+         *
+         * @param journal the standalone journal
+         * @param move    the pending move
+         * @return the journal move
+         */
+        static JournalMove forJournal(CipherJournal journal, CipherJournal.Move move) {
+            return new JournalMove(null, journal, move);
+        }
+
+        private JournalMove(@Nullable CipherFile file, @Nullable CipherJournal journal,
+                            CipherJournal.Move move) {
+            this.file = file;
+            this.journal = journal;
+            this.move = move;
+        }
+
+        /**
+         * Completes this move.
+         *
+         * @throws IOException on filesystem errors
+         */
+        void commit() throws IOException {
+            if (file != null) {
+                file.commitJournalMove(move);
+            } else if (journal != null) {
+                journal.commitMove(move);
+            }
+        }
+
+        /**
+         * Rolls back this move.
+         *
+         * @throws IOException on filesystem errors
+         */
+        void rollback() throws IOException {
+            if (file != null) {
+                file.rollbackJournalMove(move);
+            } else if (journal != null) {
+                journal.rollbackMove(move);
+            }
+        }
+    }
+
+    /**
      * Acquires exclusive access to every channel operation. The caller must
      * keep the returned lock until it has flushed the shared files and either
      * aborted the close or marked the channels closed and wiped the keys, then
@@ -1081,10 +1296,31 @@ final class FileManager {
         synchronized (fileLock(targetCipherPath)) {
             // Drop the old registry entry so later opens see the replacement;
             // handles already open keep their reference to the old file.
+            SharedCipherFile.Entry replaced = sharedFiles.get(targetCipherPath);
             releaseSharedFile(targetCipherPath);
             releaseSharedFile(tempCipherPath);
-            store.rename(tempCipherPath, targetCipherPath, true);
-            new CipherJournal(store, targetCipherPath).clear();
+            Lock channelLock = channelGuard.writeLock();
+            channelLock.lock();
+            try {
+                store.rename(tempCipherPath, targetCipherPath, true);
+                // A handle on the replaced target may still be open. Its
+                // journal is now at the new file's path, so disable it before
+                // that handle can publish a journal for the wrong file.
+                if (replaced != null) {
+                    synchronized (replaced.lock) {
+                        CipherFile file = replaced.file;
+                        if (file != null) {
+                            file.forgetJournal();
+                        } else {
+                            new CipherJournal(store, targetCipherPath).clear();
+                        }
+                    }
+                } else {
+                    new CipherJournal(store, targetCipherPath).clear();
+                }
+            } finally {
+                channelLock.unlock();
+            }
         }
     }
 
@@ -1340,14 +1576,26 @@ final class FileManager {
     void delete(String plainPath) throws IOException {
         Objects.requireNonNull(plainPath, "plainPath");
         PathResolver.Resolved r = pathResolver.resolve(plainPath);
-        if (store.stat(r.cipherPath()).isDirectory()) {
-            removeEmptyDir(r.cipherPath());
-        } else {
-            store.delete(r.cipherPath());
+        // Wait for in-flight channel I/O and keep new I/O out until the entry
+        // is unlinked and its journal is gone. Otherwise a write that started
+        // before the delete could publish a journal after the file was
+        // unlinked, and that journal could be replayed for a later file at the
+        // same path.
+        Lock channelLock = channelGuard.writeLock();
+        channelLock.lock();
+        try {
+            if (store.stat(r.cipherPath()).isDirectory()) {
+                removeEmptyDir(r.cipherPath());
+            } else {
+                store.delete(r.cipherPath());
+                forgetJournal(r.cipherPath());
+            }
+            releaseSharedFile(r.cipherPath());
+            nameManager.removeLongName(r);
+            directoryManager.invalidateDirIvCache(r.cipherPath());
+        } finally {
+            channelLock.unlock();
         }
-        releaseSharedFile(r.cipherPath());
-        nameManager.removeLongName(r);
-        directoryManager.invalidateDirIvCache(r.cipherPath());
     }
 
     /**
@@ -1379,6 +1627,27 @@ final class FileManager {
             throws IOException {
         Objects.requireNonNull(plainFrom, "plainFrom");
         Objects.requireNonNull(plainTo, "plainTo");
+        // Exclude in-flight channel I/O across the path move so no write can
+        // publish a journal for the old path after the file has moved.
+        Lock channelLock = channelGuard.writeLock();
+        channelLock.lock();
+        try {
+            renameLocked(plainFrom, plainTo, replaceExisting);
+        } finally {
+            channelLock.unlock();
+        }
+    }
+
+    /**
+     * Performs the rename while the channel write lock excludes channel I/O.
+     *
+     * @param plainFrom       the plaintext source path
+     * @param plainTo         the plaintext target path
+     * @param replaceExisting whether an existing target may be replaced
+     * @throws IOException on filesystem errors
+     */
+    private void renameLocked(String plainFrom, String plainTo, boolean replaceExisting)
+            throws IOException {
         List<String> fromComps = PathResolver.normalize(plainFrom);
         List<String> toComps = PathResolver.normalize(plainTo);
         if (fromComps.isEmpty() || toComps.isEmpty()) {
@@ -1426,10 +1695,13 @@ final class FileManager {
             // A non-directory target is replaced atomically by the rename below.
         }
         boolean wroteName = false;
+        List<JournalMove> journalMoves = new ArrayList<>();
         try {
             wroteName = nameManager.prepareLongName(to);
+            journalMoves = prepareJournalMoves(from.cipherPath(), to.cipherPath());
             store.rename(from.cipherPath(), to.cipherPath(), replaceExisting);
         } catch (IOException | RuntimeException e) {
+            rollbackJournalMoves(journalMoves, e);
             // Restore the target's diriv so a failed directory replace leaves
             // the target directory intact.
             if (movedDirIV != null) {
@@ -1447,6 +1719,7 @@ final class FileManager {
             }
             throw e;
         }
+        IOException journalFailure = commitJournalMoves(journalMoves);
         if (movedDirIV != null) {
             try {
                 deleteIfExists(store, movedDirIV);
@@ -1458,6 +1731,9 @@ final class FileManager {
         moveSharedFile(from.cipherPath(), to.cipherPath());
         directoryManager.invalidateDirIvCache(from.cipherPath());
         directoryManager.invalidateDirIvCache(to.cipherPath());
+        if (journalFailure != null) {
+            throw journalFailure;
+        }
     }
 
     // ------------------------------------------------------------------

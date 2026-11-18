@@ -39,7 +39,7 @@ public final class CipherFile implements AutoCloseable {
     private final ContentEnc enc;
 
     /** The crash-safety journal, or {@code null} for standalone test instances. */
-    private final @Nullable CipherJournal journal;
+    private @Nullable CipherJournal journal;
 
     /** Scratch buffer for a single ciphertext block. */
     private final byte[] blockCipher;
@@ -196,6 +196,60 @@ public final class CipherFile implements AutoCloseable {
             fileIdLoaded = false;
         }
         journal.clear();
+    }
+
+    /**
+     * Starts relocating the journal to follow a renamed ciphertext file.
+     *
+     * @param newCipherFile the ciphertext file's new path
+     * @return the pending move, or {@code null} if there is no journal
+     * @throws IOException on filesystem errors
+     */
+    synchronized CipherJournal.@Nullable Move beginJournalMove(String newCipherFile) throws IOException {
+        CipherJournal j = journal;
+        return j == null ? null : j.beginMove(newCipherFile);
+    }
+
+    /**
+     * Completes a journal relocation after the ciphertext file was renamed.
+     *
+     * @param move the pending move, or {@code null}
+     * @throws IOException on filesystem errors
+     */
+    synchronized void commitJournalMove(CipherJournal.@Nullable Move move) throws IOException {
+        CipherJournal j = journal;
+        if (j != null && move != null) {
+            j.commitMove(move);
+        }
+    }
+
+    /**
+     * Rolls back a journal relocation after the ciphertext rename failed.
+     *
+     * @param move the pending move, or {@code null}
+     * @throws IOException on filesystem errors
+     */
+    synchronized void rollbackJournalMove(CipherJournal.@Nullable Move move) throws IOException {
+        CipherJournal j = journal;
+        if (j != null && move != null) {
+            j.rollbackMove(move);
+        }
+    }
+
+    /**
+     * Drops the journal and stops journaling future writes. Called when the
+     * ciphertext file is deleted: an open handle may still write to the unlinked
+     * file, but a journal left at the old name could otherwise be replayed for a
+     * different file that later appears there.
+     *
+     * @throws IOException on filesystem errors
+     */
+    synchronized void forgetJournal() throws IOException {
+        CipherJournal j = journal;
+        journal = null;
+        if (j != null) {
+            j.clear();
+        }
     }
 
     /**

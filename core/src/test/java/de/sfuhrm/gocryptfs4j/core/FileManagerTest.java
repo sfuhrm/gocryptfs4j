@@ -24,7 +24,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.Lock;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -606,6 +608,34 @@ class FileManagerTest {
     }
 
     @Test
+    void renameWaitsForInFlightChannelIo() throws Exception {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.fileManager.createFile("/f.txt");
+
+        Lock ioLock = channelGuard(h).readLock();
+        ioLock.lock();
+        boolean held = true;
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> renamed = executor.submit(() -> {
+                h.fileManager.rename("/f.txt", "/g.txt", false);
+                return null;
+            });
+
+            assertThrows(TimeoutException.class, () -> renamed.get(200, TimeUnit.MILLISECONDS),
+                    "rename must wait for in-flight channel I/O");
+            ioLock.unlock();
+            held = false;
+            renamed.get(5, TimeUnit.SECONDS);
+        } finally {
+            if (held) {
+                ioLock.unlock();
+            }
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void pendingJournalIsReplayedOnlyByWritableOpen() throws Exception {
         ManagerHarness h = ManagerHarness.encrypted();
         h.fileManager.createFile("/f.txt");
@@ -638,6 +668,87 @@ class FileManagerTest {
                 "the writable open must remove the replayed journal");
         assertEquals(0, h.fileManager.readAll("/f.txt").length,
                 "the pending truncate journal must be applied by the writable open");
+    }
+
+    @Test
+    void renameMovesPendingJournalOfOpenFile() throws Exception {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.fileManager.createFile("/f.txt");
+        byte[] data = new byte[]{1, 2, 3};
+        h.fileManager.write("/f.txt", 0, data);
+        String from = h.pathResolver.resolve("/f.txt").cipherPath();
+        String to = h.pathResolver.resolve("/b.txt").cipherPath();
+
+        try (SharedCipherFile cf = h.fileManager.openCipherFile("/f.txt", true)) {
+            byte[] fileId = backingOf(cf).fileId();
+            CipherJournal oldJournal = new CipherJournal(h.store, from);
+            oldJournal.write(new CipherJournal.Record(-1, -1, fileId, new byte[0]));
+
+            h.fileManager.rename("/f.txt", "/b.txt", false);
+
+            assertFalse(oldJournal.exists(),
+                    "the old journal must not be left behind after a rename");
+            assertTrue(new CipherJournal(h.store, to).exists(),
+                    "the pending journal must follow the renamed file");
+        }
+
+        try (SharedCipherFile ignored = h.fileManager.openCipherFile("/b.txt", true)) {
+            // A writable open replays and removes the moved journal.
+        }
+        assertFalse(new CipherJournal(h.store, to).exists(),
+                "the moved journal must be replayed by the writable open");
+        assertArrayEquals(data, h.fileManager.readAll("/b.txt"));
+    }
+
+    @Test
+    void directoryRenameMovesPendingJournalOfOpenFile() throws Exception {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.fileManager.mkdir("/dir");
+        h.fileManager.createFile("/dir/f.txt");
+        h.fileManager.write("/dir/f.txt", 0, new byte[]{1, 2, 3});
+        String from = h.pathResolver.resolve("/dir/f.txt").cipherPath();
+        String to;
+
+        try (SharedCipherFile cf = h.fileManager.openCipherFile("/dir/f.txt", true)) {
+            byte[] fileId = backingOf(cf).fileId();
+            CipherJournal oldJournal = new CipherJournal(h.store, from);
+            oldJournal.write(new CipherJournal.Record(-1, -1, fileId, new byte[0]));
+
+            h.fileManager.rename("/dir", "/moved", false);
+            to = h.pathResolver.resolve("/moved/f.txt").cipherPath();
+
+            assertFalse(oldJournal.exists(),
+                    "the old journal must move with its directory subtree");
+            assertTrue(new CipherJournal(h.store, to).exists(),
+                    "a directory rename must relocate the journals below it");
+        }
+
+        try (SharedCipherFile ignored = h.fileManager.openCipherFile("/moved/f.txt", true)) {
+            // A writable open replays and removes the moved journal.
+        }
+        assertFalse(new CipherJournal(h.store, to).exists());
+    }
+
+    @Test
+    void deleteDisablesJournalForOpenHandle() throws Exception {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.fileManager.createFile("/f.txt");
+        h.fileManager.write("/f.txt", 0, new byte[]{1, 2, 3});
+        String cipherPath = h.pathResolver.resolve("/f.txt").cipherPath();
+        CipherJournal journal = new CipherJournal(h.store, cipherPath);
+
+        SharedCipherFile cf = h.fileManager.openCipherFile("/f.txt", true);
+        BlockBufferedChannel ch = cf.newChannel(0, true);
+        h.fileManager.delete("/f.txt");
+
+        // The open handle may still write to the unlinked file, but it must not
+        // recreate a journal at the now-reusable path.
+        ch.write(ByteBuffer.wrap(new byte[]{0x42}));
+        ch.close();
+        cf.close();
+
+        assertFalse(journal.exists(),
+                "a deleted file's open handle must not publish a journal");
     }
 
     @Test
@@ -688,6 +799,32 @@ class FileManagerTest {
 
         assertTrue(sharedFiles(h).isEmpty(),
                 "closed files must not stay in the shared-file registry");
+    }
+
+    /**
+     * Returns the private channel guard of a harness's file manager.
+     *
+     * @param h the harness
+     * @return the channel guard
+     */
+    private static ChannelGuard channelGuard(ManagerHarness h) throws Exception {
+        Field field = FileManager.class.getDeclaredField("channelGuard");
+        field.setAccessible(true);
+        return (ChannelGuard) field.get(h.fileManager);
+    }
+
+    /**
+     * Returns the backing cipher file of a shared handle.
+     *
+     * @param cf the shared handle
+     * @return the backing file
+     */
+    private static CipherFile backingOf(SharedCipherFile cf) throws Exception {
+        Field entryField = SharedCipherFile.class.getDeclaredField("entry");
+        entryField.setAccessible(true);
+        SharedCipherFile.Entry entry = (SharedCipherFile.Entry) entryField.get(cf);
+        assertNotNull(entry.file);
+        return entry.file;
     }
 
     /**

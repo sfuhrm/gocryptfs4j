@@ -4,15 +4,17 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
- * Guards channel I/O against a filesystem close and marks the filesystem as
- * closing so no new channel operation can start.
+ * Guards channel I/O against filesystem-wide structural changes and marks the
+ * filesystem as closing so no new channel operation can start.
  *
  * <p>Every channel operation takes the {@link #readLock() read lock} for the
- * duration of the I/O. {@link #writeLock() Closing} takes the write lock once,
- * marks the guard closed and then flushes and wipes while no channel can touch
- * the file or the key material. Operations that start after the close has
- * begun acquire the read lock only after the close finishes, observe
- * {@link #isClosed()} and fail instead of using wiped keys.</p>
+ * duration of the I/O. A filesystem close and a rename or delete take the write
+ * lock so no channel can write to a path while it is being moved or unlinked.
+ * {@link #writeLock() Closing} then marks the guard closed and flushes and
+ * wipes while no channel can touch the file or the key material. Operations
+ * that start after the close has begun acquire the read lock only after the
+ * close finishes, observe {@link #isClosed()} and fail instead of using wiped
+ * keys.</p>
  */
 final class ChannelGuard {
 

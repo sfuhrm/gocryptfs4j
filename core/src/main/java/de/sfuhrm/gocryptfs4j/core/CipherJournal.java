@@ -49,8 +49,12 @@ final class CipherJournal {
     /** The store holding the journal. */
     private final CipherStore store;
 
-    /** The hidden journal path. */
-    private final String journalName;
+    /**
+     * The hidden journal path. A rename moves it to follow the cipher file, so
+     * it is not final; all access is serialized by the owning {@link CipherFile}
+     * or by the rename operation's channel lock.
+     */
+    private volatile String journalName;
 
     /**
      * Creates a journal for the given ciphertext file.
@@ -61,10 +65,20 @@ final class CipherJournal {
      */
     CipherJournal(CipherStore store, String cipherFile) {
         this.store = Objects.requireNonNull(store, "store");
+        this.journalName = journalName(cipherFile);
+    }
+
+    /**
+     * Returns the hidden journal path for a ciphertext file.
+     *
+     * @param cipherFile the ciphertext file whose blocks are journalled
+     * @return the journal path
+     */
+    private static String journalName(String cipherFile) {
         Objects.requireNonNull(cipherFile, "cipherFile");
         int slash = Math.max(cipherFile.lastIndexOf('/'), cipherFile.lastIndexOf('\\'));
         String parent = slash < 0 ? "" : cipherFile.substring(0, slash + 1);
-        this.journalName = parent + NAME_PREFIX + hash(cipherFile);
+        return parent + NAME_PREFIX + hash(cipherFile);
     }
 
     /**
@@ -127,10 +141,146 @@ final class CipherJournal {
      * @throws IOException on filesystem errors
      */
     void clear() throws IOException {
+        deleteIfExists(journalName);
+    }
+
+    /**
+     * Starts relocating this journal to the path of a renamed ciphertext file.
+     *
+     * <p>The journal is copied to its new name before the caller renames the
+     * cipher file, and the old copy is kept until the rename succeeds. A crash
+     * before the cipher-file rename therefore still leaves a valid journal at
+     * the old path, and a crash after it leaves one at the new path.</p>
+     *
+     * @param newCipherFile the ciphertext file's new path
+     * @return the pending move, or {@code null} if the journal name is unchanged
+     * @throws IOException on filesystem errors
+     */
+    @Nullable Move beginMove(String newCipherFile) throws IOException {
+        String oldName = journalName;
+        String newName = journalName(newCipherFile);
+        if (newName.equals(oldName)) {
+            return null;
+        }
+        byte[] data = readIfExists(oldName);
+        byte[] replaced = readIfExists(newName);
+        boolean copied = false;
+        if (data != null) {
+            try {
+                store.writeSmall(newName, data, true);
+                copied = true;
+            } catch (NoSuchFileException e) {
+                // A directory rename moves the journal into a directory that
+                // does not exist yet. Copy it after the cipher file has moved.
+            }
+        }
+        return new Move(oldName, newName, data, replaced, copied);
+    }
+
+    /**
+     * Completes a move started by {@link #beginMove(String)}.
+     *
+     * @param move the pending move
+     * @throws IOException on filesystem errors
+     */
+    void commitMove(Move move) throws IOException {
+        journalName = move.newName;
+        if (move.data != null) {
+            if (!move.copied) {
+                store.writeSmall(move.newName, move.data, true);
+            }
+            deleteIfExists(move.oldName);
+        } else if (move.replaced != null) {
+            // The source had no pending journal. The journal at the target
+            // belonged to the entry that the rename replaced, so it must not be
+            // replayed for the new file.
+            deleteIfExists(move.newName);
+        }
+    }
+
+    /**
+     * Rolls back a move started by {@link #beginMove(String)} after the
+     * cipher-file rename failed.
+     *
+     * @param move the pending move
+     * @throws IOException on filesystem errors
+     */
+    void rollbackMove(Move move) throws IOException {
+        if (move.data == null || !move.copied) {
+            return;
+        }
+        if (move.replaced != null) {
+            store.writeSmall(move.newName, move.replaced, true);
+        } else {
+            deleteIfExists(move.newName);
+        }
+    }
+
+    /**
+     * Reads a journal file without failing when it is absent.
+     *
+     * @param name the journal path
+     * @return the bytes, or {@code null} if there is no file
+     * @throws IOException on filesystem errors
+     */
+    private byte @Nullable [] readIfExists(String name) throws IOException {
         try {
-            store.delete(journalName);
+            return store.readSmall(name, MAX_BLOCK_LEN + 64);
+        } catch (NoSuchFileException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Deletes a journal file without failing when it is absent.
+     *
+     * @param name the journal path
+     * @throws IOException on filesystem errors
+     */
+    private void deleteIfExists(String name) throws IOException {
+        try {
+            store.delete(name);
         } catch (NoSuchFileException e) {
             // Already absent.
+        }
+    }
+
+    /**
+     * One pending journal relocation.
+     */
+    static final class Move {
+
+        /** The journal path before the rename. */
+        private final String oldName;
+
+        /** The journal path after the rename. */
+        private final String newName;
+
+        /** The journal contents, or {@code null} if there was no journal. */
+        private final byte @Nullable [] data;
+
+        /** The target's previous journal contents, or {@code null}. */
+        private final byte @Nullable [] replaced;
+
+        /** Whether the journal was already copied to the new path. */
+        private final boolean copied;
+
+        /**
+         * Creates a pending move.
+         *
+         * @param oldName  the old journal path
+         * @param newName  the new journal path
+         * @param data     the journal contents, or {@code null}
+         * @param replaced the target's previous contents, or {@code null}
+         * @param copied   whether the journal was already copied
+         */
+        private Move(String oldName, String newName, byte @Nullable [] data,
+                     byte @Nullable [] replaced, boolean copied) {
+            this.oldName = oldName;
+            this.newName = newName;
+            this.data = data;
+            this.replaced = replaced;
+            this.copied = copied;
         }
     }
 
