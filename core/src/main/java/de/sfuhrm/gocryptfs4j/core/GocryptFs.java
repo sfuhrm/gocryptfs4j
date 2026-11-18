@@ -2729,19 +2729,15 @@ public final class GocryptFs implements AutoCloseable {
      * <p>Closing takes the write lock and excludes every open channel
      * operation, so it waits for every operation that already holds the read
      * or write lock (including buffered channel I/O) before flushing and
-     * wiping; operations started after the close has begun fail. Closing is
-     * idempotent. A store supplied directly to {@code open}/{@code create} is
-     * owned by the caller and is left open.</p>
+     * wiping. Closing is idempotent after it succeeds. A store supplied directly
+     * to {@code open}/{@code create} is owned by the caller and is left open.</p>
      *
-     * <p><b>Data-loss warning.</b> If the final flush fails &mdash; for example
-     * because the underlying storage is full &mdash; the keys are wiped and the
-     * filesystem is closed anyway. The buffered plaintext of the affected
-     * entries is then destroyed and can never be written, even after space is
-     * freed later. The {@link IOException} thrown from this method is the only
-     * signal that data was lost, and there is no way to retry the flush. To
-     * avoid losing data, close every open stream, channel and handle yourself
-     * (under the default sync policy each close forces and reports its own
-     * writes) and handle their errors <i>before</i> calling this method.</p>
+     * <p>If the final flush fails &mdash; for example because the underlying
+     * storage is full &mdash; the close is aborted: the keys are not wiped, the
+     * filesystem stays open and channel operations resume, so the caller can
+     * free space and retry. The {@link IOException} reports the failed flush.
+     * Data is only destroyed once the flush has succeeded and the close can no
+     * longer be retried.</p>
      *
      * @throws IOException if a pending write cannot be flushed or the store cannot be closed
      */
@@ -2752,32 +2748,25 @@ public final class GocryptFs implements AutoCloseable {
             if (closed) {
                 return;
             }
-            closed = true;
-            IOException failure = null;
-            // Exclude every open channel operation, reject new ones, and keep
-            // that exclusion across both the flush and the key wipe. Otherwise
-            // a channel write could land after flushSharedFiles() but before
-            // wipeSecrets() and be lost or fail against wiped keys.
+            // Exclude every open channel operation and keep that exclusion
+            // across the flush, the key wipe and the store close. The guard is
+            // only marked closed after the flush succeeds, so a failed flush
+            // leaves the filesystem usable for a retry.
             Lock channelLock = fileManager.lockChannelsForClose();
             try {
-                try {
-                    // Flush before the keys are wiped so buffered plaintext
-                    // can still be encrypted; every entry is flushed, with
-                    // failures collected.
-                    fileManager.flushSharedFiles();
-                } catch (IOException e) {
-                    failure = e;
-                }
+                // Flush before the keys are wiped so buffered plaintext can
+                // still be encrypted. A failure aborts the close without
+                // wiping anything.
+                fileManager.flushSharedFiles();
+                fileManager.markChannelsClosed();
+                closed = true;
+                IOException failure = null;
                 try {
                     // Close files whose handles are still open so their
                     // per-file content keys are wiped along with the master key.
                     fileManager.closeSharedFiles();
                 } catch (IOException e) {
-                    if (failure == null) {
-                        failure = e;
-                    } else {
-                        failure.addSuppressed(e);
-                    }
+                    failure = e;
                 }
                 try {
                     wipeSecrets();
@@ -2805,11 +2794,11 @@ public final class GocryptFs implements AutoCloseable {
                         }
                     }
                 }
+                if (failure != null) {
+                    throw failure;
+                }
             } finally {
                 channelLock.unlock();
-            }
-            if (failure != null) {
-                throw failure;
             }
         } finally {
             writeLock.unlock();

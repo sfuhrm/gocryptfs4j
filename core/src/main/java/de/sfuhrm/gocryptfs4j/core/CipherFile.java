@@ -38,6 +38,9 @@ public final class CipherFile implements AutoCloseable {
     /** The content-encryption helper. */
     private final ContentEnc enc;
 
+    /** The crash-safety journal, or {@code null} for standalone test instances. */
+    private final @Nullable CipherJournal journal;
+
     /** Scratch buffer for a single ciphertext block. */
     private final byte[] blockCipher;
 
@@ -59,11 +62,14 @@ public final class CipherFile implements AutoCloseable {
      * @param channel  the underlying file channel
      * @param enc      the content-encryption helper
      * @param writable whether the channel permits writes
+     * @param journal  the crash-safety journal, or {@code null}
      */
-    private CipherFile(CipherChannel channel, ContentEnc enc, boolean writable) {
+    private CipherFile(CipherChannel channel, ContentEnc enc, boolean writable,
+                       @Nullable CipherJournal journal) {
         this.channel = channel;
         this.enc = enc;
         this.writable = writable;
+        this.journal = journal;
         this.blockCipher = new byte[(int) enc.cipherBS()];
         this.blockPlain = new byte[(int) enc.plainBS()];
     }
@@ -76,7 +82,7 @@ public final class CipherFile implements AutoCloseable {
      */
     @SuppressWarnings("UnusedMethod") // accessed reflectively by tests
     private CipherFile(CipherChannel channel, ContentEnc enc) {
-        this(channel, enc, true);
+        this(channel, enc, true, null);
     }
 
     /**
@@ -89,9 +95,25 @@ public final class CipherFile implements AutoCloseable {
      * @throws NullPointerException if {@code channel} or {@code enc} is {@code null}
      */
     static CipherFile open(CipherChannel channel, ContentEnc enc, boolean writable) {
+        return open(channel, enc, writable, null);
+    }
+
+    /**
+     * Opens a cipher-side file for random access over an already-open channel,
+     * with an optional write-ahead journal for crash-safe block updates.
+     *
+     * @param channel  the underlying channel
+     * @param enc      the content-encryption helper (determines the cipher)
+     * @param writable whether the file should be opened for writing
+     * @param journal  the crash-safety journal, or {@code null}
+     * @return the opened cipher file
+     * @throws NullPointerException if {@code channel} or {@code enc} is {@code null}
+     */
+    static CipherFile open(CipherChannel channel, ContentEnc enc, boolean writable,
+                           @Nullable CipherJournal journal) {
         Objects.requireNonNull(channel, "channel");
         Objects.requireNonNull(enc, "enc");
-        return new CipherFile(channel, enc, writable);
+        return new CipherFile(channel, enc, writable, journal);
     }
 
     /**
@@ -122,6 +144,44 @@ public final class CipherFile implements AutoCloseable {
      */
     public synchronized long plainSize() throws IOException {
         return enc.cipherSizeToPlainSize(channel.size());
+    }
+
+    /**
+     * Replays a pending write-ahead journal, if one exists. Must be called
+     * before the file is used after opening it.
+     *
+     * @throws IOException if a pending journal cannot be applied
+     */
+    void recoverJournal() throws IOException {
+        if (journal == null) {
+            return;
+        }
+        CipherJournal.Record record = journal.read();
+        if (record == null) {
+            return;
+        }
+        if (!writable) {
+            throw new IOException("pending write-ahead journal for a read-only file");
+        }
+        byte[] id = fileId();
+        if (!record.matches(id)) {
+            // The journal belongs to an older file that used the same name.
+            journal.clear();
+            return;
+        }
+        if (record.blockNo >= 0 && record.block.length > 0) {
+            writeCipherRange(enc.blockNoToCipherOff(record.blockNo), record.block);
+        }
+        if (record.targetCipherSize >= 0) {
+            channel.truncate(record.targetCipherSize);
+        }
+        channel.force(true);
+        dirty = false;
+        if (record.targetCipherSize == 0) {
+            fileId = null;
+            fileIdLoaded = false;
+        }
+        journal.clear();
     }
 
     /**
@@ -205,7 +265,18 @@ public final class CipherFile implements AutoCloseable {
         }
         byte[] id = ensureFileId();
         int cipherLen = enc.encryptBlocks(plain, off, len, blockNo, id, blockCipher, 0);
-        writeCipherRange(enc.blockNoToCipherOff(blockNo), blockCipher, 0, cipherLen);
+        long cipherOffset = enc.blockNoToCipherOff(blockNo);
+        CipherJournal j = journal;
+        if (j != null && cipherOffset < channel.size()) {
+            j.write(new CipherJournal.Record(blockNo, -1, id,
+                    Arrays.copyOf(blockCipher, cipherLen)));
+            writeCipherRange(cipherOffset, blockCipher, 0, cipherLen);
+            channel.force(true);
+            dirty = false;
+            j.clear();
+        } else {
+            writeCipherRange(cipherOffset, blockCipher, 0, cipherLen);
+        }
     }
 
     /**
@@ -246,13 +317,9 @@ public final class CipherFile implements AutoCloseable {
      *
      * <p>When the new size is block-aligned only the channel is truncated; no
      * block is re-encrypted. Otherwise the final partial block is re-encrypted
-     * and written before the stale tail is truncated, so a crash in between can
-     * leave a tail that fails authentication but cannot silently lose kept
-     * bytes.</p>
-     *
-     * <p>Known limit: the ciphertext format has no atomic in-place block
-     * update. A write-ahead sidecar for the block being rewritten would close
-     * this window, but it would not be gocryptfs-compatible until cleaned up.</p>
+     * and written before the stale tail is truncated. A write-ahead journal
+     * records both the new block and the target size, so the next open can
+     * finish a truncation interrupted by a crash.</p>
      *
      * @param newPlainSize the new plaintext size in bytes
      * @throws IOException on filesystem or encryption errors
@@ -270,6 +337,28 @@ public final class CipherFile implements AutoCloseable {
             // early return below: a torn 1-17 byte header reports a plain size
             // of 0 even though the file still has a partial header, and this
             // must truncate the channel so the file is actually repaired.
+            CipherJournal j = journal;
+            byte[] id = null;
+            if (j != null) {
+                try {
+                    id = fileId();
+                } catch (IOException e) {
+                    // A torn header is repaired by the truncation itself.
+                }
+            }
+            if (j != null && id != null) {
+                j.write(new CipherJournal.Record(-1, 0, id, new byte[0]));
+                channel.truncate(0);
+                dirty = true;
+                fileId = null;
+                // Do not cache an empty file: another handle or process may
+                // write a new header later, and reads must observe it.
+                fileIdLoaded = false;
+                channel.force(true);
+                dirty = false;
+                j.clear();
+                return;
+            }
             channel.truncate(0);
             dirty = true;
             fileId = null;
@@ -292,25 +381,41 @@ public final class CipherFile implements AutoCloseable {
         if (keep == enc.plainBS()) {
             // The new size ends on a block boundary, so no block has to be
             // re-encrypted. Just drop the blocks that no longer belong to it.
-            channel.truncate(enc.blockNoToCipherOff(blockNo + 1));
+            long targetSize = enc.blockNoToCipherOff(blockNo + 1);
+            CipherJournal j = journal;
+            if (j != null) {
+                j.write(new CipherJournal.Record(-1, targetSize, id, new byte[0]));
+            }
+            channel.truncate(targetSize);
             dirty = true;
+            if (j != null) {
+                channel.force(true);
+                dirty = false;
+                j.clear();
+            }
             return;
         }
         int len = readBlock(blockNo, blockPlain, 0);
         byte[] truncated = Arrays.copyOf(blockPlain, Math.min(keep, len));
         byte[] cipherBlock = enc.encryptBlock(truncated, blockNo, id);
-        // Write the re-encrypted partial block first, then truncate the stale
-        // tail away. A crash between the two steps leaves, in the worst case,
-        // the new partial block followed by the stale tail of the old last
-        // block, which no longer authenticates. Truncating first would instead
-        // lose the kept bytes of the final block if a crash occurred before the
-        // re-encrypted block was written, silently shrinking the file by up to
-        // one block. As in gocryptfs, prefer never losing bytes that should
-        // have survived.
         long blockCipherOff = enc.blockNoToCipherOff(blockNo);
+        long targetSize = blockCipherOff + cipherBlock.length;
+        CipherJournal j = journal;
+        if (j != null) {
+            j.write(new CipherJournal.Record(blockNo, targetSize, id, cipherBlock));
+        }
+        // Write the re-encrypted partial block first, then truncate the stale
+        // tail away. Without a journal a crash between the two steps could
+        // leave a tail that no longer authenticates; with a journal the next
+        // open completes both steps.
         writeCipherRange(blockCipherOff, cipherBlock);
-        channel.truncate(blockCipherOff + cipherBlock.length);
+        channel.truncate(targetSize);
         dirty = true;
+        if (j != null) {
+            channel.force(true);
+            dirty = false;
+            j.clear();
+        }
     }
 
     /**

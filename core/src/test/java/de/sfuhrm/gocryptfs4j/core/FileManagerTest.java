@@ -496,6 +496,30 @@ class FileManagerTest {
     }
 
     @Test
+    void pendingJournalIsReplayedWhenFileIsOpenedAgain() throws Exception {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.fileManager.createFile("/f.txt");
+        h.fileManager.write("/f.txt", 0, new byte[]{1, 2, 3});
+        String cipherPath = h.pathResolver.resolve("/f.txt").cipherPath();
+
+        byte[] fileId;
+        try (SharedCipherFile cf = h.fileManager.openCipherFile("/f.txt", true)) {
+            Field entryField = SharedCipherFile.class.getDeclaredField("entry");
+            entryField.setAccessible(true);
+            SharedCipherFile.Entry entry = (SharedCipherFile.Entry) entryField.get(cf);
+            CipherFile backing = entry.file;
+            assertNotNull(backing);
+            fileId = backing.fileId();
+        }
+
+        CipherJournal journal = new CipherJournal(h.store, cipherPath);
+        journal.write(new CipherJournal.Record(-1, 0, fileId, new byte[0]));
+
+        assertEquals(0, h.fileManager.readAll("/f.txt").length,
+                "the pending truncate journal must be applied on open");
+    }
+
+    @Test
     void failedOpenDoesNotRetainSharedEntry() throws Exception {
         ManagerHarness h = ManagerHarness.encrypted();
         String cipherPath = h.pathResolver.resolve("/missing.txt").cipherPath();

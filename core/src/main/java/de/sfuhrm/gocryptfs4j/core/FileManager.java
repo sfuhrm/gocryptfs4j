@@ -372,19 +372,40 @@ final class FileManager {
      */
     static CipherFile openBackingFile(CipherStore store, String cipherFile, boolean writable,
                                       Supplier<ContentEnc> contentEncFactory) throws IOException {
+        CipherJournal journal = new CipherJournal(store, cipherFile);
+        if (!writable && journal.read() != null) {
+            // A previous write died before its journal was cleared. Recover it
+            // through a writable handle first, then open the requested
+            // read-only channel.
+            try (CipherFile ignored = openBackingFile(store, cipherFile, true,
+                    contentEncFactory)) {
+                // Recovery happens while opening the writable handle.
+            }
+        }
         CipherChannel channel = store.open(cipherFile, writable);
         ContentEnc enc = null;
+        CipherFile file = null;
         try {
             enc = contentEncFactory.get();
-            return CipherFile.open(channel, enc, writable);
-        } catch (RuntimeException | Error e) {
-            if (enc != null) {
-                enc.wipe();
-            }
-            try {
-                channel.close();
-            } catch (IOException closeFailure) {
-                e.addSuppressed(closeFailure);
+            file = CipherFile.open(channel, enc, writable, journal);
+            file.recoverJournal();
+            return file;
+        } catch (IOException | RuntimeException | Error e) {
+            if (file != null) {
+                try {
+                    file.close();
+                } catch (IOException closeFailure) {
+                    e.addSuppressed(closeFailure);
+                }
+            } else {
+                if (enc != null) {
+                    enc.wipe();
+                }
+                try {
+                    channel.close();
+                } catch (IOException closeFailure) {
+                    e.addSuppressed(closeFailure);
+                }
             }
             throw e;
         }
@@ -576,24 +597,33 @@ final class FileManager {
     }
 
     /**
-     * Acquires exclusive access to every channel operation and rejects any
-     * operation that starts afterwards. The caller must keep the returned lock
-     * until it has flushed the shared files and wiped the keys, then release
-     * it.
+     * Acquires exclusive access to every channel operation. The caller must
+     * keep the returned lock until it has flushed the shared files and either
+     * aborted the close or marked the channels closed and wiped the keys, then
+     * release it.
      *
      * @return the held close lock
      */
     Lock lockChannelsForClose() {
         Lock lock = channelGuard.writeLock();
         lock.lock();
-        channelGuard.markClosed();
         return lock;
     }
 
     /**
-     * Flushes any pending buffered block of every shared cipher file. Called
-     * before the content-encryption keys are wiped on close, so that buffered
-     * plaintext is still encrypted and written while the keys are valid.
+     * Marks the channel guard closed so no further channel operation can start.
+     * The caller must hold the lock returned by {@link #lockChannelsForClose()}.
+     */
+    void markChannelsClosed() {
+        channelGuard.markClosed();
+    }
+
+    /**
+     * Flushes any pending buffered block of every shared cipher file and forces
+     * writable files to stable storage. Called before the content-encryption
+     * keys are wiped on close, so that buffered plaintext is still encrypted and
+     * written while the keys are valid and a failed flush can abort the close
+     * for a retry.
      *
      * @throws IOException on filesystem or encryption errors
      */
@@ -602,6 +632,7 @@ final class FileManager {
         for (SharedCipherFile.Entry entry : openEntries) {
             try {
                 SharedCipherFile.flushEntry(entry);
+                SharedCipherFile.forceEntry(entry);
             } catch (IOException e) {
                 if (failure == null) {
                     failure = e;
@@ -766,8 +797,81 @@ final class FileManager {
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
         synchronized (fileLock(r.cipherPath())) {
             try (SharedCipherFile cf = openCipherFileByName(r.cipherPath(), true, syncPolicy)) {
-                cf.truncate(0);
-                return Channels.newOutputStream(cf.newChannel(0, true, syncPolicy));
+                // Do not truncate until the stream is closed successfully. If
+                // the process dies before any new data (or before close), the
+                // old content is still there. New bytes overwrite from offset
+                // zero and the final length is set on close.
+                SeekableByteChannel ch = cf.newChannel(0, true, syncPolicy);
+                return new DeferredTruncateOutputStream(Channels.newOutputStream(ch), ch);
+            }
+        }
+    }
+
+    /**
+     * An output stream that truncates the target to the number of bytes written
+     * only when it is closed successfully.
+     */
+    private static final class DeferredTruncateOutputStream extends OutputStream {
+
+        /** The channel-backed output stream. */
+        private final OutputStream out;
+
+        /** The channel whose length is adjusted on close. */
+        private final SeekableByteChannel channel;
+
+        /** Whether this stream has been closed. */
+        private boolean closed;
+
+        /**
+         * Creates a stream over the given channel.
+         *
+         * @param out     the channel-backed output stream
+         * @param channel the underlying channel
+         */
+        DeferredTruncateOutputStream(OutputStream out, SeekableByteChannel channel) {
+            this.out = out;
+            this.channel = channel;
+        }
+
+        @Override
+        public void write(int b) throws IOException {
+            out.write(b);
+        }
+
+        @Override
+        public void write(byte[] b, int off, int len) throws IOException {
+            out.write(b, off, len);
+        }
+
+        @Override
+        public void flush() throws IOException {
+            out.flush();
+        }
+
+        @Override
+        public void close() throws IOException {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            IOException failure = null;
+            try {
+                out.flush();
+                channel.truncate(channel.position());
+            } catch (IOException e) {
+                failure = e;
+            }
+            try {
+                out.close();
+            } catch (IOException e) {
+                if (failure == null) {
+                    failure = e;
+                } else {
+                    failure.addSuppressed(e);
+                }
+            }
+            if (failure != null) {
+                throw failure;
             }
         }
     }

@@ -15,6 +15,7 @@ import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -172,6 +173,40 @@ class FlushFailureTest {
             store.failWrites = false;
             ca.close();
             cb.close();
+        }
+    }
+
+    @Test
+    void filesystemCloseAbortsOnFlushFailureAndCanBeRetried() throws Exception {
+        FailingWriteStore store = new FailingWriteStore();
+        GocryptFs fs = GocryptFs.create(store, "pw".toCharArray());
+        byte[] payload = new byte[100];
+        java.util.Arrays.fill(payload, (byte) 0x5a);
+        try {
+            fs.createFile("/f.txt");
+            SharedCipherFile cf = fs.openCipherFile("/f.txt", true);
+            BlockBufferedChannel ch = cf.newChannel(0, true);
+            ch.write(ByteBuffer.wrap(payload));
+
+            store.failWrites = true;
+            assertThrows(IOException.class, fs::close,
+                    "a failed final flush must abort the close");
+
+            // The filesystem is still open and the keys are still usable, so a
+            // retry after the storage problem is resolved can persist the data.
+            store.failWrites = false;
+            fs.close();
+        } finally {
+            store.failWrites = false;
+            try {
+                fs.close();
+            } catch (IOException ignored) {
+                // The assertion above already reports the relevant failure.
+            }
+        }
+
+        try (GocryptFs reopened = GocryptFs.open(store, "pw".toCharArray())) {
+            assertArrayEquals(payload, reopened.readAll("/f.txt"));
         }
     }
 

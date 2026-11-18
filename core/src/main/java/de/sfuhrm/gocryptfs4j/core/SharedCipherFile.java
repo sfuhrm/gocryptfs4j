@@ -520,6 +520,28 @@ public final class SharedCipherFile implements AutoCloseable {
     }
 
     /**
+     * Forces the backing file of an entry to stable storage if it was opened
+     * for writing. Called after flushing pending cache data on filesystem close
+     * and before the content keys are wiped, so a force failure can be reported
+     * while the keys are still usable for a retry.
+     *
+     * @param entry the shared entry
+     * @throws IOException on filesystem errors or a previous sticky failure
+     */
+    static void forceEntry(Entry entry) throws IOException {
+        synchronized (entry.lock) {
+            IOException failure = entry.failure;
+            if (failure != null) {
+                throw failure;
+            }
+            CipherFile file = entry.file;
+            if (file != null && entry.writable) {
+                file.force(true);
+            }
+        }
+    }
+
+    /**
      * Wipes the shared block cache and closes the backing file and any retired
      * files of an entry, which wipes their content-encryption keys. Used when
      * the owning filesystem closes while handles on the entry are still open;

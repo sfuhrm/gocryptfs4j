@@ -645,6 +645,28 @@ class GocryptFsTest {
     }
 
     @Test
+    void openWriteKeepsOldContentUntilTheStreamIsClosed() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        byte[] old = "old content".getBytes(StandardCharsets.UTF_8);
+
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
+            fs.createFile("/f.txt");
+            fs.write("/f.txt", 0, old);
+
+            // Simulate a crash before the returned stream receives any data or
+            // is closed: the old content must still be there.
+            OutputStream abandoned = fs.openWrite("/f.txt");
+            fs.close();
+            assertNotNull(abandoned);
+        }
+
+        try (GocryptFs fs = GocryptFs.open(new PathCipherStore(cipherDir), "pw".toCharArray())) {
+            assertArrayEquals(old, fs.readAll("/f.txt"));
+        }
+    }
+
+    @Test
     void closingStreamKeepsFilesystemUsable() throws IOException {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);

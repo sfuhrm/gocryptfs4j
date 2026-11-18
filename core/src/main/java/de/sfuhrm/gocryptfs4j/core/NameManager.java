@@ -65,11 +65,11 @@ final class NameManager {
      * <p>At the root, any name starting with {@code gocryptfs.} is reserved
      * (for example {@code gocryptfs.conf}, {@code gocryptfs.conf.bak} and
      * {@code gocryptfs.diriv}). Hidden internal files starting with
-     * {@code .gocryptfs} (atomic-write temporaries and the root lock file) are
-     * reserved in every directory. The root-only reservation keeps an ordinary
-     * user entry named {@code gocryptfs.conf} or {@code gocryptfs.diriv} in a
-     * subdirectory possible; such an entry cannot collide with a control
-     * file.</p>
+     * {@code .gocryptfs} (atomic-write temporaries, write-ahead journals and the
+     * root lock file) are reserved in every directory and in both name modes.
+     * The root-only reservation keeps an ordinary user entry named
+     * {@code gocryptfs.conf} or {@code gocryptfs.diriv} in a subdirectory
+     * possible; such an entry cannot collide with a control file.</p>
      *
      * <p>The comparison is case-insensitive because the local store may be on a
      * case-insensitive filesystem (Windows, macOS), and it runs on the encoded
@@ -85,14 +85,14 @@ final class NameManager {
      */
     boolean isReservedName(String name, boolean root) {
         Objects.requireNonNull(name, "name");
+        byte[] encoded = NameTransform.encodeName(name);
+        if (startsWithIgnoreCase(encoded, Constants.INTERNAL_NAME_PREFIX)) {
+            return true;
+        }
         if (!plaintextNames) {
             return false;
         }
-        byte[] encoded = NameTransform.encodeName(name);
         if (containsEither(encoded, (byte) '\\', (byte) ':')) {
-            return true;
-        }
-        if (startsWithIgnoreCase(encoded, Constants.INTERNAL_NAME_PREFIX)) {
             return true;
         }
         return root && startsWithIgnoreCase(encoded, Constants.RESERVED_ROOT_PREFIX);
