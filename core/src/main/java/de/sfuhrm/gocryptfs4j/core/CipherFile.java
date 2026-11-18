@@ -150,7 +150,13 @@ public final class CipherFile implements AutoCloseable {
      * Replays a pending write-ahead journal, if one exists. Must be called
      * before the file is used after opening it.
      *
-     * @throws IOException if a pending journal cannot be applied
+     * <p>Only a writable file may replay or remove a journal, because recovery
+     * happens under the cipher root lock that a read-only instance does not
+     * hold. A read-only file with a journal present fails instead of replaying
+     * it, so it can never roll back a live writer's later update.</p>
+     *
+     * @throws IOException if a pending journal cannot be applied, or if one is
+     *                     present on a read-only file
      */
     void recoverJournal() throws IOException {
         if (journal == null) {
@@ -158,6 +164,14 @@ public final class CipherFile implements AutoCloseable {
         }
         CipherJournal.Record record = journal.read();
         if (record == null) {
+            if (journal.exists()) {
+                // The journal is unparseable. Only a writable open may discard
+                // it; a read-only open must not write to the cipher directory.
+                if (!writable) {
+                    throw new IOException("pending write-ahead journal for a read-only file");
+                }
+                journal.clear();
+            }
             return;
         }
         if (!writable) {

@@ -27,7 +27,10 @@ import java.util.Objects;
  *
  * <p>Journal files use the reserved {@code .gocryptfs} prefix and are hidden
  * from directory listings. They are only left behind after a crash and are
- * removed as soon as the file is opened again.</p>
+ * replayed and removed by the next writable open, which holds the cipher root
+ * lock. A read-only open never replays, modifies, or removes a journal; if one
+ * is present it fails instead, so a reader can never roll back a live writer's
+ * work.</p>
  */
 final class CipherJournal {
 
@@ -74,8 +77,10 @@ final class CipherJournal {
     }
 
     /**
-     * Reads the current journal record, or {@code null} if there is none. An
-     * unparseable record is removed and treated as absent.
+     * Reads the current journal record, or {@code null} if there is none or it
+     * does not parse. This never modifies the store, so it is safe to call on a
+     * read-only backend; use {@link #exists()} to distinguish an unparseable
+     * journal from an absent one.
      *
      * @return the record, or {@code null}
      * @throws IOException on filesystem errors
@@ -88,11 +93,22 @@ final class CipherJournal {
         } catch (NoSuchFileException e) {
             return null;
         }
-        Record record = parse(data);
-        if (record == null) {
-            clear();
+        return parse(data);
+    }
+
+    /**
+     * Returns whether a journal file is present, whether or not it parses.
+     *
+     * @return {@code true} if a journal file exists
+     * @throws IOException on filesystem errors
+     */
+    boolean exists() throws IOException {
+        try {
+            store.stat(journalName);
+            return true;
+        } catch (NoSuchFileException e) {
+            return false;
         }
-        return record;
     }
 
     /**

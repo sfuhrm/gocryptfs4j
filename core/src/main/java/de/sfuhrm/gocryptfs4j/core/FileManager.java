@@ -373,15 +373,9 @@ final class FileManager {
     static CipherFile openBackingFile(CipherStore store, String cipherFile, boolean writable,
                                       Supplier<ContentEnc> contentEncFactory) throws IOException {
         CipherJournal journal = new CipherJournal(store, cipherFile);
-        if (!writable && journal.read() != null) {
-            // A previous write died before its journal was cleared. Recover it
-            // through a writable handle first, then open the requested
-            // read-only channel.
-            try (CipherFile ignored = openBackingFile(store, cipherFile, true,
-                    contentEncFactory)) {
-                // Recovery happens while opening the writable handle.
-            }
-        }
+        // A journal is replayed only by a writable open, which runs under the
+        // cipher root lock. A read-only open must never replay, modify, or
+        // remove a journal: it fails in CipherFile.recoverJournal() instead.
         CipherChannel channel = store.open(cipherFile, writable);
         ContentEnc enc = null;
         CipherFile file = null;

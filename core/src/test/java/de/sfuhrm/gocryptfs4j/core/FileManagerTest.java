@@ -496,7 +496,7 @@ class FileManagerTest {
     }
 
     @Test
-    void pendingJournalIsReplayedWhenFileIsOpenedAgain() throws Exception {
+    void pendingJournalIsReplayedOnlyByWritableOpen() throws Exception {
         ManagerHarness h = ManagerHarness.encrypted();
         h.fileManager.createFile("/f.txt");
         h.fileManager.write("/f.txt", 0, new byte[]{1, 2, 3});
@@ -515,8 +515,41 @@ class FileManagerTest {
         CipherJournal journal = new CipherJournal(h.store, cipherPath);
         journal.write(new CipherJournal.Record(-1, 0, fileId, new byte[0]));
 
+        assertThrows(IOException.class,
+                () -> h.fileManager.readAll("/f.txt"),
+                "a read-only open must not replay a pending journal");
+        assertTrue(journal.exists(),
+                "a read-only open must not remove the pending journal");
+
+        try (SharedCipherFile ignored = h.fileManager.openCipherFile("/f.txt", true)) {
+            // A writable open replays the journal.
+        }
+        assertFalse(journal.exists(),
+                "the writable open must remove the replayed journal");
         assertEquals(0, h.fileManager.readAll("/f.txt").length,
-                "the pending truncate journal must be applied on open");
+                "the pending truncate journal must be applied by the writable open");
+    }
+
+    @Test
+    void readOnlyOpenDoesNotDiscardUnparseableJournal() throws Exception {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.fileManager.createFile("/f.txt");
+        h.fileManager.write("/f.txt", 0, new byte[]{1, 2, 3});
+        String cipherPath = h.pathResolver.resolve("/f.txt").cipherPath();
+        CipherJournal journal = new CipherJournal(h.store, cipherPath);
+        h.store.writeSmall(journal.name(), new byte[]{1, 2, 3}, true);
+
+        assertThrows(IOException.class,
+                () -> h.fileManager.openCipherFile("/f.txt", false),
+                "a read-only open must not ignore a corrupt journal");
+        assertTrue(journal.exists(),
+                "a read-only open must not delete an unparseable journal");
+
+        try (SharedCipherFile ignored = h.fileManager.openCipherFile("/f.txt", true)) {
+            // A writable open discards the corrupt journal.
+        }
+        assertFalse(journal.exists(),
+                "the writable open must discard the unparseable journal");
     }
 
     @Test
