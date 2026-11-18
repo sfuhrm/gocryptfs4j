@@ -54,7 +54,6 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.locks.Lock;
 
 /**
  * A {@link FileSystemProvider} for gocryptfs cipher directories.
@@ -624,18 +623,15 @@ public final class GocryptFsProvider extends FileSystemProvider {
 
         boolean create = options.contains(StandardOpenOption.CREATE);
         boolean createNew = options.contains(StandardOpenOption.CREATE_NEW);
-        boolean read = options.contains(StandardOpenOption.READ);
         boolean append = options.contains(StandardOpenOption.APPEND);
         boolean write = options.contains(StandardOpenOption.WRITE) || append;
+        boolean read = options.contains(StandardOpenOption.READ) || !write;
         boolean truncate = options.contains(StandardOpenOption.TRUNCATE_EXISTING);
         boolean deleteOnClose = options.contains(StandardOpenOption.DELETE_ON_CLOSE);
-        if (!read && !write) {
-            read = true;
-        }
 
-        Lock writeLock = fs.writeLock();
-        writeLock.lock();
-        try {
+        boolean mutating = create || createNew || write || truncate || deleteOnClose
+                || attrs.length > 0;
+        GocryptFs.IOAction<SeekableByteChannel> open = () -> {
             boolean exists;
             try {
                 fs.stat(plain);
@@ -679,9 +675,8 @@ public final class GocryptFsProvider extends FileSystemProvider {
                 return new GocryptFsFileChannel(cf.newChannel(position, write),
                         read, write, append, sync, onClose);
             }
-        } finally {
-            writeLock.unlock();
-        }
+        };
+        return mutating ? fs.withWriteLock(open) : fs.withReadLock(open);
     }
 
     /**
@@ -759,15 +754,11 @@ public final class GocryptFsProvider extends FileSystemProvider {
         Objects.requireNonNull(dir, "dir");
         GocryptFsPath abs = toAbsolute(dir);
         GocryptFs fs = core(abs);
-        Lock writeLock = fs.writeLock();
-        writeLock.lock();
-        try {
+        fs.withWriteLock(() -> {
             GocryptFsPath d = resolveParent(abs);
             fs.mkdir(d.toString());
             applyAttributes(d, attrs);
-        } finally {
-            writeLock.unlock();
-        }
+        });
     }
 
     /**
@@ -782,14 +773,10 @@ public final class GocryptFsProvider extends FileSystemProvider {
         Objects.requireNonNull(path, "path");
         GocryptFsPath abs = toAbsolute(path);
         GocryptFs fs = core(abs);
-        Lock writeLock = fs.writeLock();
-        writeLock.lock();
-        try {
+        fs.withWriteLock(() -> {
             GocryptFsPath p = resolveParent(abs);
             fs.delete(p.toString());
-        } finally {
-            writeLock.unlock();
-        }
+        });
     }
 
     // ------------------------------------------------------------------
@@ -815,14 +802,10 @@ public final class GocryptFsProvider extends FileSystemProvider {
         Objects.requireNonNull(target, "target");
         GocryptFsPath abs = toAbsolute(link);
         GocryptFs fs = core(abs);
-        Lock writeLock = fs.writeLock();
-        writeLock.lock();
-        try {
+        fs.withWriteLock(() -> {
             GocryptFsPath l = resolveParent(abs);
             fs.createSymlink(l.toString(), target.toString());
-        } finally {
-            writeLock.unlock();
-        }
+        });
     }
 
     /**
@@ -839,15 +822,11 @@ public final class GocryptFsProvider extends FileSystemProvider {
         Objects.requireNonNull(link, "link");
         GocryptFsPath abs = toAbsolute(link);
         GocryptFs fs = core(abs);
-        Lock writeLock = fs.writeLock();
-        writeLock.lock();
-        try {
+        return fs.withReadLock(() -> {
             GocryptFsPath l = resolveParent(abs);
             String target = fs.readSymlinkTarget(l.toString());
             return l.getFileSystem().getPath(target);
-        } finally {
-            writeLock.unlock();
-        }
+        });
     }
 
     // ------------------------------------------------------------------
@@ -883,9 +862,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
         GocryptFsPath absSource = toAbsolute(source);
         GocryptFsPath absTarget = toAbsolute(target);
         GocryptFs fs = core(absSource);
-        Lock writeLock = fs.writeLock();
-        writeLock.lock();
-        try {
+        fs.withWriteLock(() -> {
             GocryptFsPath s = absSource;
             if (!opts.contains(LinkOption.NOFOLLOW_LINKS)) {
                 s = s.toRealPathLenient();
@@ -897,9 +874,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
                 return;
             }
             copyEntry(s, t, opts);
-        } finally {
-            writeLock.unlock();
-        }
+        });
     }
 
     private static Set<CopyOption> toOptionSet(CopyOption... options) {
@@ -1116,9 +1091,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
         GocryptFsPath absSource = toAbsolute(source);
         GocryptFsPath absTarget = toAbsolute(target);
         GocryptFs fs = core(absSource);
-        Lock writeLock = fs.writeLock();
-        writeLock.lock();
-        try {
+        fs.withWriteLock(() -> {
             GocryptFsPath s = resolveParent(absSource);
             GocryptFsPath t = resolveParent(absTarget);
             if (fs != core(t)) {
@@ -1127,9 +1100,7 @@ public final class GocryptFsProvider extends FileSystemProvider {
             }
             fs.rename(s.toString(), t.toString(),
                     opts.contains(StandardCopyOption.REPLACE_EXISTING));
-        } finally {
-            writeLock.unlock();
-        }
+        });
     }
 
     /**

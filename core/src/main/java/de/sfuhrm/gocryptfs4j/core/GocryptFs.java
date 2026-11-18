@@ -157,13 +157,14 @@ public final class GocryptFs implements AutoCloseable {
      * against each other.
      *
      * <p>Read operations (listing, stat, reads and content writes to existing
-     * files) take the {@link #readLock()} and may proceed concurrently with one
-     * another. Namespace-mutating operations (create, delete, rename, mkdir and
-     * open) take the {@link #writeLock()}, which excludes every other
-     * operation. Callers that must perform several operations atomically
-     * &mdash; for example the NIO provider's check-then-create in
-     * {@code newByteChannel} &mdash; may take the exposed locks directly; both
-     * are reentrant.</p>
+     * files) take the read lock and may proceed concurrently with one another.
+     * Namespace-mutating operations (create, delete, rename, mkdir and writable
+     * open) take the write lock, which excludes every other operation. Callers
+     * that must perform several operations atomically &mdash; for example the
+     * NIO provider's check-then-create in {@code newByteChannel} &mdash; use
+     * {@link #withReadLock(IOAction)} or {@link #withWriteLock(IOAction)}; both
+     * are reentrant. A read-to-write upgrade is not supported and fails fast
+     * instead of deadlocking.</p>
      */
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
 
@@ -1633,25 +1634,152 @@ public final class GocryptFs implements AutoCloseable {
     }
 
     /**
-     * Returns the read lock guarding read operations (listing, stat, reads and
-     * content writes to existing files).
+     * An action that performs filesystem work while a lock is held.
      *
-     * @return the read lock
+     * @param <T> the result type
      */
-    public Lock readLock() {
-        ensureOpen();
-        return lock.readLock();
+    @FunctionalInterface
+    public interface IOAction<T> {
+
+        /**
+         * Runs the action.
+         *
+         * @return the action's result
+         * @throws IOException on filesystem errors
+         */
+        T run() throws IOException;
     }
 
     /**
-     * Returns the write lock guarding namespace-mutating operations (create,
-     * delete, rename, mkdir and open).
-     *
-     * @return the write lock
+     * An action that performs filesystem work while a lock is held and returns
+     * no result.
      */
-    public Lock writeLock() {
-        ensureOpen();
-        return lock.writeLock();
+    @FunctionalInterface
+    public interface IOVoidAction {
+
+        /**
+         * Runs the action.
+         *
+         * @throws IOException on filesystem errors
+         */
+        void run() throws IOException;
+    }
+
+    /**
+     * Runs {@code action} while holding the read lock. Read operations may
+     * proceed concurrently with one another, and the same thread may re-enter
+     * read operations.
+     *
+     * @param <T>    the result type
+     * @param action the action to run
+     * @return the action's result
+     * @throws IOException          on filesystem errors
+     * @throws IllegalStateException if this filesystem has been closed
+     * @throws NullPointerException  if {@code action} is {@code null}
+     */
+    public <T> T withReadLock(IOAction<T> action) throws IOException {
+        Objects.requireNonNull(action, "action");
+        Lock readLock = acquireReadLock();
+        try {
+            ensureOpen();
+            return action.run();
+        } finally {
+            readLock.unlock();
+        }
+    }
+
+    /**
+     * Runs {@code action} while holding the read lock.
+     *
+     * @param action the action to run
+     * @throws IOException          on filesystem errors
+     * @throws IllegalStateException if this filesystem has been closed
+     * @throws NullPointerException  if {@code action} is {@code null}
+     */
+    public void withReadLock(IOVoidAction action) throws IOException {
+        Objects.requireNonNull(action, "action");
+        Lock readLock = acquireReadLock();
+        try {
+            ensureOpen();
+            action.run();
+        } finally {
+            readLock.unlock();
+        }
+    }
+
+    /**
+     * Runs {@code action} while holding the write lock. The write lock excludes
+     * every other filesystem operation and is reentrant, but it cannot be
+     * upgraded from a read lock; attempting that fails with
+     * {@link IllegalStateException} instead of deadlocking.
+     *
+     * @param <T>    the result type
+     * @param action the action to run
+     * @return the action's result
+     * @throws IOException          on filesystem errors
+     * @throws IllegalStateException if this filesystem has been closed or the
+     *                               calling thread already holds the read lock
+     * @throws NullPointerException  if {@code action} is {@code null}
+     */
+    public <T> T withWriteLock(IOAction<T> action) throws IOException {
+        Objects.requireNonNull(action, "action");
+        Lock writeLock = acquireWriteLock();
+        try {
+            ensureOpen();
+            return action.run();
+        } finally {
+            writeLock.unlock();
+        }
+    }
+
+    /**
+     * Runs {@code action} while holding the write lock.
+     *
+     * @param action the action to run
+     * @throws IOException          on filesystem errors
+     * @throws IllegalStateException if this filesystem has been closed or the
+     *                               calling thread already holds the read lock
+     * @throws NullPointerException  if {@code action} is {@code null}
+     */
+    public void withWriteLock(IOVoidAction action) throws IOException {
+        Objects.requireNonNull(action, "action");
+        Lock writeLock = acquireWriteLock();
+        try {
+            ensureOpen();
+            action.run();
+        } finally {
+            writeLock.unlock();
+        }
+    }
+
+    /**
+     * Acquires the read lock.
+     *
+     * @return the held read lock
+     */
+    private Lock acquireReadLock() {
+        Lock readLock = lock.readLock();
+        readLock.lock();
+        return readLock;
+    }
+
+    /**
+     * Acquires the write lock, failing fast when the calling thread already
+     * holds only the read lock. {@link ReentrantReadWriteLock} cannot upgrade a
+     * read lock, so waiting here would deadlock forever.
+     *
+     * @return the held write lock
+     * @throws IllegalStateException if the calling thread holds the read lock
+     *                               without also holding the write lock
+     */
+    private Lock acquireWriteLock() {
+        if (lock.getReadHoldCount() > 0 && lock.getWriteHoldCount() == 0) {
+            throw new IllegalStateException(
+                    "read-to-write lock upgrade is not supported; take the write lock up front");
+        }
+        Lock writeLock = lock.writeLock();
+        writeLock.lock();
+        return writeLock;
     }
 
     /**
@@ -1674,8 +1802,7 @@ public final class GocryptFs implements AutoCloseable {
      * @throws IllegalStateException if this filesystem has been closed
      */
     public byte[] exportMasterKey() {
-        Lock readLock = lock.readLock();
-        readLock.lock();
+        Lock readLock = acquireReadLock();
         try {
             ensureOpen();
             return masterKey.clone();
@@ -1842,8 +1969,7 @@ public final class GocryptFs implements AutoCloseable {
     public void changePassword(char[] password, boolean keepBackup, int scryptCost)
             throws IOException {
         Objects.requireNonNull(password, "password");
-        Lock writeLock = lock.writeLock();
-        writeLock.lock();
+        Lock writeLock = acquireWriteLock();
         try {
             ensureOpen();
             ensureWritable();
@@ -2006,8 +2132,7 @@ public final class GocryptFs implements AutoCloseable {
     public List<DirEntry> list(String plainDir,
                                @Nullable SkippedEntryListener listener) throws IOException {
         Objects.requireNonNull(plainDir, "plainDir");
-        Lock readLock = lock.readLock();
-        readLock.lock();
+        Lock readLock = acquireReadLock();
         try {
             ensureOpen();
             PathResolver.Resolved r = pathResolver.resolve(plainDir);
@@ -2038,8 +2163,7 @@ public final class GocryptFs implements AutoCloseable {
      */
     public DirectorySnapshot snapshotDirectory(String plainDir) throws IOException {
         Objects.requireNonNull(plainDir, "plainDir");
-        Lock readLock = lock.readLock();
-        readLock.lock();
+        Lock readLock = acquireReadLock();
         try {
             ensureOpen();
             PathResolver.Resolved r = pathResolver.resolve(plainDir);
@@ -2062,8 +2186,7 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainPath} is {@code null}
      */
     public DirEntry stat(String plainPath) throws IOException {
-        Lock readLock = lock.readLock();
-        readLock.lock();
+        Lock readLock = acquireReadLock();
         try {
             ensureOpen();
             return fileManager.stat(plainPath);
@@ -2084,8 +2207,7 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainFile} is {@code null}
      */
     public SharedCipherFile openCipherFile(String plainFile, boolean writable) throws IOException {
-        Lock writeLock = lock.writeLock();
-        writeLock.lock();
+        Lock operationLock = writable ? acquireWriteLock() : acquireReadLock();
         try {
             ensureOpen();
             if (writable) {
@@ -2093,7 +2215,7 @@ public final class GocryptFs implements AutoCloseable {
             }
             return fileManager.openCipherFile(plainFile, writable);
         } finally {
-            writeLock.unlock();
+            operationLock.unlock();
         }
     }
 
@@ -2110,8 +2232,7 @@ public final class GocryptFs implements AutoCloseable {
     public SharedCipherFile openCipherFile(String plainFile, boolean writable,
                                            SyncPolicy syncPolicy) throws IOException {
         Objects.requireNonNull(syncPolicy, "syncPolicy");
-        Lock writeLock = lock.writeLock();
-        writeLock.lock();
+        Lock operationLock = writable ? acquireWriteLock() : acquireReadLock();
         try {
             ensureOpen();
             if (writable) {
@@ -2119,7 +2240,7 @@ public final class GocryptFs implements AutoCloseable {
             }
             return fileManager.openCipherFile(plainFile, writable, syncPolicy);
         } finally {
-            writeLock.unlock();
+            operationLock.unlock();
         }
     }
 
@@ -2132,8 +2253,7 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainFile} is {@code null}
      */
     public long size(String plainFile) throws IOException {
-        Lock readLock = lock.readLock();
-        readLock.lock();
+        Lock readLock = acquireReadLock();
         try {
             ensureOpen();
             return fileManager.size(plainFile);
@@ -2151,8 +2271,7 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainFile} is {@code null}
      */
     public byte[] readAll(String plainFile) throws IOException {
-        Lock readLock = lock.readLock();
-        readLock.lock();
+        Lock readLock = acquireReadLock();
         try {
             ensureOpen();
             return fileManager.readAll(plainFile);
@@ -2170,8 +2289,7 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainFile} is {@code null}
      */
     public InputStream openRead(String plainFile) throws IOException {
-        Lock readLock = lock.readLock();
-        readLock.lock();
+        Lock readLock = acquireReadLock();
         try {
             ensureOpen();
             return fileManager.openRead(plainFile);
@@ -2193,8 +2311,7 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainFile} is {@code null}
      */
     public OutputStream openWrite(String plainFile) throws IOException {
-        Lock writeLock = lock.writeLock();
-        writeLock.lock();
+        Lock writeLock = acquireWriteLock();
         try {
             ensureOpen();
             ensureWritable();
@@ -2215,8 +2332,7 @@ public final class GocryptFs implements AutoCloseable {
      */
     public OutputStream openWrite(String plainFile, SyncPolicy syncPolicy) throws IOException {
         Objects.requireNonNull(syncPolicy, "syncPolicy");
-        Lock writeLock = lock.writeLock();
-        writeLock.lock();
+        Lock writeLock = acquireWriteLock();
         try {
             ensureOpen();
             ensureWritable();
@@ -2237,8 +2353,7 @@ public final class GocryptFs implements AutoCloseable {
      * @throws IllegalArgumentException if {@code offset} is negative
      */
     public void write(String plainFile, long offset, byte[] data) throws IOException {
-        Lock readLock = lock.readLock();
-        readLock.lock();
+        Lock readLock = acquireReadLock();
         try {
             ensureOpen();
             ensureWritable();
@@ -2263,8 +2378,7 @@ public final class GocryptFs implements AutoCloseable {
     public void write(String plainFile, long offset, byte[] data, SyncPolicy syncPolicy)
             throws IOException {
         Objects.requireNonNull(syncPolicy, "syncPolicy");
-        Lock readLock = lock.readLock();
-        readLock.lock();
+        Lock readLock = acquireReadLock();
         try {
             ensureOpen();
             ensureWritable();
@@ -2284,8 +2398,7 @@ public final class GocryptFs implements AutoCloseable {
      * @throws IllegalArgumentException if {@code newSize} is negative
      */
     public void truncate(String plainFile, long newSize) throws IOException {
-        Lock readLock = lock.readLock();
-        readLock.lock();
+        Lock readLock = acquireReadLock();
         try {
             ensureOpen();
             ensureWritable();
@@ -2308,8 +2421,7 @@ public final class GocryptFs implements AutoCloseable {
     public void truncate(String plainFile, long newSize, SyncPolicy syncPolicy)
             throws IOException {
         Objects.requireNonNull(syncPolicy, "syncPolicy");
-        Lock readLock = lock.readLock();
-        readLock.lock();
+        Lock readLock = acquireReadLock();
         try {
             ensureOpen();
             ensureWritable();
@@ -2332,8 +2444,7 @@ public final class GocryptFs implements AutoCloseable {
     public void setTimes(String plainPath, @Nullable FileTime lastModifiedTime,
                          @Nullable FileTime lastAccessTime, @Nullable FileTime createTime)
             throws IOException {
-        Lock writeLock = lock.writeLock();
-        writeLock.lock();
+        Lock writeLock = acquireWriteLock();
         try {
             ensureOpen();
             ensureWritable();
@@ -2354,8 +2465,7 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainPath} is {@code null}
      */
     public void checkAccess(String plainPath, AccessMode... modes) throws IOException {
-        Lock readLock = lock.readLock();
-        readLock.lock();
+        Lock readLock = acquireReadLock();
         try {
             ensureOpen();
             if (readOnly) {
@@ -2382,8 +2492,7 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainPath} is {@code null}
      */
     public @Nullable PosixFileAttributes posixAttributes(String plainPath) throws IOException {
-        Lock readLock = lock.readLock();
-        readLock.lock();
+        Lock readLock = acquireReadLock();
         try {
             ensureOpen();
             return fileManager.posixAttributes(plainPath);
@@ -2402,8 +2511,7 @@ public final class GocryptFs implements AutoCloseable {
      */
     public void setPosixPermissions(String plainPath, Set<PosixFilePermission> permissions)
             throws IOException {
-        Lock writeLock = lock.writeLock();
-        writeLock.lock();
+        Lock writeLock = acquireWriteLock();
         try {
             ensureOpen();
             ensureWritable();
@@ -2422,8 +2530,7 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainPath} or {@code owner} is {@code null}
      */
     public void setPosixOwner(String plainPath, UserPrincipal owner) throws IOException {
-        Lock writeLock = lock.writeLock();
-        writeLock.lock();
+        Lock writeLock = acquireWriteLock();
         try {
             ensureOpen();
             ensureWritable();
@@ -2442,8 +2549,7 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainPath} or {@code group} is {@code null}
      */
     public void setPosixGroup(String plainPath, GroupPrincipal group) throws IOException {
-        Lock writeLock = lock.writeLock();
-        writeLock.lock();
+        Lock writeLock = acquireWriteLock();
         try {
             ensureOpen();
             ensureWritable();
@@ -2465,8 +2571,7 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainFile} is {@code null}
      */
     public void createFile(String plainFile) throws IOException {
-        Lock writeLock = lock.writeLock();
-        writeLock.lock();
+        Lock writeLock = acquireWriteLock();
         try {
             ensureOpen();
             ensureWritable();
@@ -2484,8 +2589,7 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainDir} is {@code null}
      */
     public void mkdir(String plainDir) throws IOException {
-        Lock writeLock = lock.writeLock();
-        writeLock.lock();
+        Lock writeLock = acquireWriteLock();
         try {
             ensureOpen();
             ensureWritable();
@@ -2503,8 +2607,7 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainPath} is {@code null}
      */
     public void delete(String plainPath) throws IOException {
-        Lock writeLock = lock.writeLock();
-        writeLock.lock();
+        Lock writeLock = acquireWriteLock();
         try {
             ensureOpen();
             ensureWritable();
@@ -2539,8 +2642,7 @@ public final class GocryptFs implements AutoCloseable {
      */
     public void rename(String plainFrom, String plainTo, boolean replaceExisting)
             throws IOException {
-        Lock writeLock = lock.writeLock();
-        writeLock.lock();
+        Lock writeLock = acquireWriteLock();
         try {
             ensureOpen();
             ensureWritable();
@@ -2559,8 +2661,7 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainPath} or {@code target} is {@code null}
      */
     public void createSymlink(String plainPath, String target) throws IOException {
-        Lock writeLock = lock.writeLock();
-        writeLock.lock();
+        Lock writeLock = acquireWriteLock();
         try {
             ensureOpen();
             ensureWritable();
@@ -2579,8 +2680,7 @@ public final class GocryptFs implements AutoCloseable {
      * @throws NullPointerException if {@code plainPath} is {@code null}
      */
     public String readSymlinkTarget(String plainPath) throws IOException {
-        Lock readLock = lock.readLock();
-        readLock.lock();
+        Lock readLock = acquireReadLock();
         try {
             ensureOpen();
             return fileManager.readSymlinkTarget(plainPath);
@@ -2647,8 +2747,7 @@ public final class GocryptFs implements AutoCloseable {
      */
     @Override
     public void close() throws IOException {
-        Lock writeLock = lock.writeLock();
-        writeLock.lock();
+        Lock writeLock = acquireWriteLock();
         try {
             if (closed) {
                 return;

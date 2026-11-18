@@ -35,7 +35,6 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.locks.Lock;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -149,17 +148,29 @@ class GocryptFsTest {
         try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
             // Holding the write lock while invoking the locked public methods
             // (as the provider's check-then-create does) must not deadlock.
-            Lock writeLock = fs.writeLock();
-            writeLock.lock();
-            try {
+            fs.withWriteLock(() -> {
                 fs.createFile("/a.txt");
                 fs.stat("/a.txt");
                 SharedCipherFile cf = fs.openCipherFile("/a.txt", true);
                 cf.close();
-            } finally {
-                writeLock.unlock();
-            }
+                return null;
+            });
             assertEquals(DirEntry.Kind.FILE, fs.stat("/a.txt").kind());
+        }
+    }
+
+    @Test
+    void readLockCannotBeUpgradedToWriteLock() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
+            assertThrows(IllegalStateException.class, () -> fs.withReadLock(() -> {
+                fs.createFile("/a.txt");
+                return null;
+            }));
+            // The failed upgrade must not leave the lock held.
+            assertEquals(0, fs.list("/").size());
         }
     }
 
