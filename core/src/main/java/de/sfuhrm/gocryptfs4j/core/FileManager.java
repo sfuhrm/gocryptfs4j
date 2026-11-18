@@ -259,6 +259,10 @@ final class FileManager {
      * sharing one backing {@link CipherFile} (with reference counting) across
      * all concurrently open handles on the same ciphertext path.
      *
+     * <p>The shared entry is reserved under the registry's map lock, but the
+     * store channel is opened and its content key derived only afterwards, so
+     * slow I/O never runs while holding that lock.</p>
+     *
      * @param cipherFile the ciphertext file name
      * @param writable   whether to open for writing
      * @param syncPolicy when buffered writes are flushed to storage on this handle
@@ -270,68 +274,87 @@ final class FileManager {
                                           SyncPolicy syncPolicy) throws IOException {
         Objects.requireNonNull(cipherFile, "cipherFile");
         Objects.requireNonNull(syncPolicy, "syncPolicy");
-        IOException[] ioFailure = new IOException[1];
-        RuntimeException[] runtimeFailure = new RuntimeException[1];
-        SharedCipherFile.Entry[] opened = new SharedCipherFile.Entry[1];
-        sharedFiles.compute(cipherFile, (key, existing) -> {
+        SharedCipherFile.Entry entry = reserveSharedEntry(cipherFile);
+        boolean opened = false;
+        try {
+            synchronized (entry.lock) {
+                IOException failure = entry.failure;
+                if (failure != null) {
+                    // A previous flush failed and its dirty block may have been
+                    // discarded. Never let a reopen hide that loss.
+                    throw failure;
+                }
+                if (entry.file == null) {
+                    // Opening the channel, deriving the content key and
+                    // initializing the cipher all happen outside the map's bin
+                    // lock, so an unrelated open is never stalled behind this
+                    // store or crypto work.
+                    entry.file = openBackingFile(store, cipherFile, writable,
+                            contentEncFactory);
+                    entry.writable = writable;
+                } else if (writable && !entry.writable) {
+                    // A read-only shared file is already open (other read-only
+                    // handles hold it). Upgrade to a writable channel; the old
+                    // one never buffered a write, so it can be retired safely.
+                    // Keep it open until the entry is fully released: a reader
+                    // may already have captured it and would otherwise see a
+                    // closed channel.
+                    CipherFile upgraded = openBackingFile(store, cipherFile, true,
+                            contentEncFactory);
+                    CipherFile old = entry.file;
+                    entry.file = upgraded;
+                    entry.writable = true;
+                    if (old != null) {
+                        entry.retired.add(old);
+                    }
+                }
+                openEntries.add(entry);
+            }
+            SharedCipherFile handle = new SharedCipherFile(entry, syncPolicy);
+            opened = true;
+            return handle;
+        } finally {
+            if (!opened) {
+                releaseReservedEntry(entry);
+            }
+        }
+    }
+
+    /**
+     * Reserves a reference to the shared entry for a ciphertext file. The entry
+     * is created or found under the map's bin lock, but no I/O or key derivation
+     * happens there. Incrementing the reference inside the mapping function
+     * keeps the entry from being pruned while its backing file is opened
+     * outside the lock.
+     *
+     * @param cipherFile the ciphertext file name
+     * @return the reserved entry
+     */
+    private SharedCipherFile.Entry reserveSharedEntry(String cipherFile) {
+        return sharedFiles.compute(cipherFile, (key, existing) -> {
             SharedCipherFile.Entry entry = existing;
             if (entry == null) {
                 entry = new SharedCipherFile.Entry();
                 entry.guard = channelGuard;
                 entry.releaseAction = this::releaseEntry;
             }
-            synchronized (entry.lock) {
-                entry.key = cipherFile;
-                try {
-                    IOException stickyFailure = entry.failure;
-                    if (stickyFailure != null) {
-                        // A previous flush failed and its dirty block may have
-                        // been discarded. Never let a reopen hide that loss.
-                        ioFailure[0] = stickyFailure;
-                        return entry;
-                    }
-                    if (entry.file == null) {
-                        entry.file = openBackingFile(store, cipherFile, writable,
-                                contentEncFactory);
-                        entry.writable = writable;
-                    } else if (writable && !entry.writable) {
-                        // A read-only shared file is already open (other
-                        // read-only handles hold it). Upgrade to a writable
-                        // channel; the old one never buffered a write, so it
-                        // can be retired safely. Keep it open until the entry
-                        // is fully released: a reader may already have
-                        // captured it and would otherwise see a closed channel.
-                        CipherFile upgraded = openBackingFile(store, cipherFile, true,
-                                contentEncFactory);
-                        CipherFile old = entry.file;
-                        entry.file = upgraded;
-                        entry.writable = true;
-                        if (old != null) {
-                            entry.retired.add(old);
-                        }
-                    }
-                    entry.refs++;
-                    openEntries.add(entry);
-                    opened[0] = entry;
-                    return entry;
-                } catch (IOException e) {
-                    ioFailure[0] = e;
-                    // Do not retain an entry that a failed open created, but
-                    // never drop a sticky failure from an earlier close.
-                    return entry.refs == 0 && entry.failure == null ? null : entry;
-                } catch (RuntimeException e) {
-                    runtimeFailure[0] = e;
-                    return entry.refs == 0 && entry.failure == null ? null : entry;
-                }
-            }
+            entry.key = cipherFile;
+            entry.refs++;
+            return entry;
         });
-        if (runtimeFailure[0] != null) {
-            throw runtimeFailure[0];
+    }
+
+    /**
+     * Releases the reference reserved by {@link #reserveSharedEntry} when the
+     * backing file could not be opened.
+     *
+     * @param entry the reserved entry
+     */
+    private void releaseReservedEntry(SharedCipherFile.Entry entry) {
+        synchronized (entry.lock) {
+            entry.refs--;
         }
-        if (ioFailure[0] != null) {
-            throw ioFailure[0];
-        }
-        return new SharedCipherFile(opened[0], syncPolicy);
+        releaseEntry(entry);
     }
 
     /**
