@@ -18,14 +18,18 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * all-zero key and overwrites the key parameter, and afterwards the instance is
  * unusable: every attempt to encrypt or decrypt throws
  * {@link IllegalStateException}.</p>
+ *
+ * <p>BouncyCastle engines are not documented as thread-safe, so each thread
+ * gets its own encryption and decryption engine. The engines are cheap to keep
+ * around and are reused because EME encrypts names block by block.</p>
  */
 public final class AesBlockCipher implements BlockCipher {
 
-    /** The AES engine used for encryption. */
-    private final MultiBlockCipher encrypt = AESEngine.newInstance();
+    /** Per-thread AES engine used for encryption, reused because it is not thread-safe. */
+    private final TrackedThreadLocal<MultiBlockCipher> encryptScratch;
 
-    /** The AES engine used for decryption. */
-    private final MultiBlockCipher decrypt = AESEngine.newInstance();
+    /** Per-thread AES engine used for decryption, reused because it is not thread-safe. */
+    private final TrackedThreadLocal<MultiBlockCipher> decryptScratch;
 
     /** The wipeable key parameter shared by both engines. */
     private final KeyParameter keyParam;
@@ -49,8 +53,16 @@ public final class AesBlockCipher implements BlockCipher {
             throw new IllegalArgumentException("AES key must be " + Constants.KEY_LEN + " bytes");
         }
         this.keyParam = new KeyParameter(key);
-        encrypt.init(true, keyParam);
-        decrypt.init(false, keyParam);
+        this.encryptScratch = new TrackedThreadLocal<>(() -> {
+            MultiBlockCipher cipher = AESEngine.newInstance();
+            cipher.init(true, keyParam);
+            return cipher;
+        });
+        this.decryptScratch = new TrackedThreadLocal<>(() -> {
+            MultiBlockCipher cipher = AESEngine.newInstance();
+            cipher.init(false, keyParam);
+            return cipher;
+        });
     }
 
     /**
@@ -64,12 +76,14 @@ public final class AesBlockCipher implements BlockCipher {
         try {
             if (!wiped) {
                 wiped = true;
-                // Overwrite the engines' key schedules with an all-zero key and
-                // wipe this instance's own key-parameter copy.
+                // Overwrite every thread's engine key schedule with an all-zero
+                // key and wipe this instance's own key-parameter copy. No
+                // operation can be using an engine here because wipe holds the
+                // write lock.
                 Arrays.fill(keyParam.getKey(), (byte) 0);
                 KeyParameter zero = new KeyParameter(new byte[Constants.KEY_LEN]);
-                encrypt.init(true, zero);
-                decrypt.init(false, zero);
+                encryptScratch.wipeAll(c -> c.init(true, zero));
+                decryptScratch.wipeAll(c -> c.init(false, zero));
                 Arrays.fill(zero.getKey(), (byte) 0);
             }
         } finally {
@@ -105,7 +119,7 @@ public final class AesBlockCipher implements BlockCipher {
         readLock.lock();
         try {
             checkUsable();
-            encrypt.processBlock(in, inOff, out, outOff);
+            encryptScratch.get().processBlock(in, inOff, out, outOff);
         } finally {
             readLock.unlock();
         }
@@ -129,7 +143,7 @@ public final class AesBlockCipher implements BlockCipher {
         readLock.lock();
         try {
             checkUsable();
-            decrypt.processBlock(in, inOff, out, outOff);
+            decryptScratch.get().processBlock(in, inOff, out, outOff);
         } finally {
             readLock.unlock();
         }

@@ -645,6 +645,65 @@ class GocryptFsTest {
     }
 
     @Test
+    void openWriteAbortDiscardsStagedContent() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        byte[] old = "old content".getBytes(StandardCharsets.UTF_8);
+
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
+            fs.createFile("/f.txt");
+            fs.write("/f.txt", 0, old);
+
+            AbortableOutputStream out = fs.openWrite("/f.txt");
+            out.write("partial replacement".getBytes(StandardCharsets.UTF_8));
+            out.abort();
+
+            assertArrayEquals(old, fs.readAll("/f.txt"),
+                    "aborting an openWrite must leave the previous content intact");
+            assertFalse(hasWriteStagingFile(cipherDir),
+                    "aborting an openWrite must remove its staging file");
+        }
+    }
+
+    @Test
+    void openWriteCrashMidStreamLeavesOldContent() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        byte[] old = "old content".getBytes(StandardCharsets.UTF_8);
+        byte[] replacement = new byte[200_000];
+        Arrays.fill(replacement, (byte) 0x5a);
+
+        OutputStream abandoned;
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
+            fs.createFile("/f.txt");
+            fs.write("/f.txt", 0, old);
+            abandoned = fs.openWrite("/f.txt");
+            abandoned.write(replacement);
+            // Do not close the stream: simulate a crash mid-write.
+        }
+        assertNotNull(abandoned);
+
+        try (GocryptFs fs = GocryptFs.open(new PathCipherStore(cipherDir), "pw".toCharArray())) {
+            assertArrayEquals(old, fs.readAll("/f.txt"),
+                    "a crash mid-stream must not replace the previous content");
+        }
+    }
+
+    /**
+     * Returns whether a directory still contains a staged openWrite file.
+     *
+     * @param cipherDir the cipher directory
+     * @return {@code true} if a staging file is present
+     * @throws IOException on filesystem errors
+     */
+    private static boolean hasWriteStagingFile(Path cipherDir) throws IOException {
+        try (java.util.stream.Stream<Path> entries = Files.list(cipherDir)) {
+            return entries.anyMatch(p -> p.getFileName().toString()
+                    .startsWith(Constants.INTERNAL_NAME_PREFIX + "-write-"));
+        }
+    }
+
+    @Test
     void openWriteKeepsOldContentUntilTheStreamIsClosed() throws IOException {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);

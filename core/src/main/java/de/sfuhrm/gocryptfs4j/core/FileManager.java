@@ -33,6 +33,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.Lock;
 import java.util.function.Supplier;
@@ -769,16 +770,18 @@ final class FileManager {
     /**
      * Opens a streaming, encrypting output stream over a plaintext file path.
      *
-     * <p>Writing starts at the beginning of the file, overwriting any existing
-     * content. Closing the stream closes the underlying file and flushes the
-     * encrypted data.</p>
+     * <p>Writing starts at the beginning of the file. The content is staged in
+     * a hidden sibling file and replaces the target only when the stream is
+     * closed successfully, so a crash mid-stream leaves the previous file
+     * intact. Call {@link AbortableOutputStream#abort()} to discard a partial
+     * write instead of committing it.</p>
      *
      * @param plainFile the plaintext file path
      * @return the encrypting output stream
      * @throws IOException on filesystem errors
      * @throws NullPointerException if {@code plainFile} is {@code null}
      */
-    OutputStream openWrite(String plainFile) throws IOException {
+    AbortableOutputStream openWrite(String plainFile) throws IOException {
         return openWrite(plainFile, syncPolicy);
     }
 
@@ -791,27 +794,69 @@ final class FileManager {
      * @throws IOException on filesystem errors
      * @throws NullPointerException if {@code plainFile} or {@code syncPolicy} is {@code null}
      */
-    OutputStream openWrite(String plainFile, SyncPolicy syncPolicy) throws IOException {
+    AbortableOutputStream openWrite(String plainFile, SyncPolicy syncPolicy) throws IOException {
         Objects.requireNonNull(plainFile, "plainFile");
         Objects.requireNonNull(syncPolicy, "syncPolicy");
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
-        synchronized (fileLock(r.cipherPath())) {
-            try (SharedCipherFile cf = openCipherFileByName(r.cipherPath(), true, syncPolicy)) {
-                // Do not truncate until the stream is closed successfully. If
-                // the process dies before any new data (or before close), the
-                // old content is still there. New bytes overwrite from offset
-                // zero and the final length is set on close.
-                SeekableByteChannel ch = cf.newChannel(0, true, syncPolicy);
-                return new DeferredTruncateOutputStream(Channels.newOutputStream(ch), ch);
+        // Keep the previous contract: openWrite replaces an existing file
+        // rather than creating a missing one.
+        store.stat(r.cipherPath());
+        String cipherParent = r.cipherParent();
+        if (cipherParent == null) {
+            throw new IOException("cannot open the cipher root as a file");
+        }
+        String tempCipherPath = PathResolver.join(cipherParent,
+                Constants.INTERNAL_NAME_PREFIX + "-write-" + UUID.randomUUID());
+        SharedCipherFile cf = null;
+        SeekableByteChannel ch = null;
+        AtomicWriteOutputStream result = null;
+        try {
+            store.createFile(tempCipherPath);
+            copyWriteAttributes(r.cipherPath(), tempCipherPath);
+            cf = openCipherFileByName(tempCipherPath, true, syncPolicy);
+            ch = cf.newChannel(0, true, syncPolicy);
+            result = new AtomicWriteOutputStream(Channels.newOutputStream(ch), ch,
+                    tempCipherPath, r.cipherPath());
+            cf.close();
+            return result;
+        } catch (IOException | RuntimeException | Error e) {
+            if (result != null) {
+                try {
+                    result.abort();
+                } catch (IOException cleanup) {
+                    e.addSuppressed(cleanup);
+                }
+            } else if (ch != null) {
+                try {
+                    ch.close();
+                } catch (IOException cleanup) {
+                    e.addSuppressed(cleanup);
+                }
             }
+            if (cf != null) {
+                try {
+                    cf.close();
+                } catch (IOException cleanup) {
+                    e.addSuppressed(cleanup);
+                }
+            }
+            try {
+                IOException cleanup = cleanupWrite(tempCipherPath);
+                if (cleanup != null) {
+                    e.addSuppressed(cleanup);
+                }
+            } catch (RuntimeException cleanup) {
+                e.addSuppressed(cleanup);
+            }
+            throw e;
         }
     }
 
     /**
-     * An output stream that truncates the target to the number of bytes written
-     * only when it is closed successfully.
+     * A stream that stages its content in a hidden temporary file and replaces
+     * the target only on a successful close.
      */
-    private static final class DeferredTruncateOutputStream extends OutputStream {
+    private final class AtomicWriteOutputStream extends AbortableOutputStream {
 
         /** The channel-backed output stream. */
         private final OutputStream out;
@@ -819,33 +864,62 @@ final class FileManager {
         /** The channel whose length is adjusted on close. */
         private final SeekableByteChannel channel;
 
-        /** Whether this stream has been closed. */
+        /** The hidden ciphertext path holding the staged content. */
+        private final String tempCipherPath;
+
+        /** The ciphertext path replaced on a successful close. */
+        private final String targetCipherPath;
+
+        /** Whether this stream has been closed or aborted. */
         private boolean closed;
 
+        /** Whether a write, flush or close operation has failed. */
+        private boolean failed;
+
         /**
-         * Creates a stream over the given channel.
+         * Creates a stream over the given staging channel.
          *
-         * @param out     the channel-backed output stream
-         * @param channel the underlying channel
+         * @param out              the channel-backed output stream
+         * @param channel          the underlying channel
+         * @param tempCipherPath   the hidden ciphertext path of the staged content
+         * @param targetCipherPath the ciphertext path to replace on success
          */
-        DeferredTruncateOutputStream(OutputStream out, SeekableByteChannel channel) {
+        AtomicWriteOutputStream(OutputStream out, SeekableByteChannel channel,
+                                String tempCipherPath, String targetCipherPath) {
             this.out = out;
             this.channel = channel;
+            this.tempCipherPath = tempCipherPath;
+            this.targetCipherPath = targetCipherPath;
         }
 
         @Override
         public void write(int b) throws IOException {
-            out.write(b);
+            try {
+                out.write(b);
+            } catch (IOException | RuntimeException e) {
+                failed = true;
+                throw e;
+            }
         }
 
         @Override
         public void write(byte[] b, int off, int len) throws IOException {
-            out.write(b, off, len);
+            try {
+                out.write(b, off, len);
+            } catch (IOException | RuntimeException e) {
+                failed = true;
+                throw e;
+            }
         }
 
         @Override
         public void flush() throws IOException {
-            out.flush();
+            try {
+                out.flush();
+            } catch (IOException | RuntimeException e) {
+                failed = true;
+                throw e;
+            }
         }
 
         @Override
@@ -854,6 +928,13 @@ final class FileManager {
                 return;
             }
             closed = true;
+            if (failed) {
+                IOException cleanup = abortContents();
+                if (cleanup != null) {
+                    throw cleanup;
+                }
+                return;
+            }
             IOException failure = null;
             try {
                 out.flush();
@@ -871,8 +952,125 @@ final class FileManager {
                 }
             }
             if (failure != null) {
+                IOException cleanup = abortContents();
+                if (cleanup != null) {
+                    failure.addSuppressed(cleanup);
+                }
                 throw failure;
             }
+            try {
+                commitWrite(tempCipherPath, targetCipherPath);
+            } catch (IOException | RuntimeException e) {
+                IOException cleanup = cleanupWrite(tempCipherPath);
+                if (cleanup != null) {
+                    e.addSuppressed(cleanup);
+                }
+                throw e;
+            }
+        }
+
+        @Override
+        public void abort() throws IOException {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            IOException failure = abortContents();
+            if (failure != null) {
+                throw failure;
+            }
+        }
+
+        /**
+         * Closes the staging channel and removes the staged file.
+         *
+         * @return the first failure, or {@code null}
+         */
+        private @Nullable IOException abortContents() {
+            IOException failure = null;
+            try {
+                out.close();
+            } catch (IOException e) {
+                failure = e;
+            }
+            IOException cleanup = cleanupWrite(tempCipherPath);
+            if (cleanup != null) {
+                if (failure == null) {
+                    failure = cleanup;
+                } else {
+                    failure.addSuppressed(cleanup);
+                }
+            }
+            return failure;
+        }
+    }
+
+    /**
+     * Copies the target's POSIX ownership and permissions onto a staged write
+     * file, so replacing the target does not widen its access mode.
+     *
+     * @param targetCipherPath the file being replaced
+     * @param tempCipherPath   the hidden staging file
+     * @throws IOException on filesystem errors
+     */
+    private void copyWriteAttributes(String targetCipherPath, String tempCipherPath)
+            throws IOException {
+        PosixFileAttributes attributes = store.posixAttributes(targetCipherPath);
+        if (attributes == null) {
+            return;
+        }
+        try {
+            store.setPosixPermissions(tempCipherPath, attributes.permissions());
+            store.setPosixOwner(tempCipherPath, attributes.owner());
+            store.setPosixGroup(tempCipherPath, attributes.group());
+        } catch (UnsupportedOperationException ignored) {
+            // A store may expose attributes without allowing them to be set.
+        }
+    }
+
+    /**
+     * Removes a staged write file and its journal, releasing any shared entry.
+     *
+     * @param tempCipherPath the hidden staging path
+     * @return the first cleanup failure, or {@code null}
+     */
+    private @Nullable IOException cleanupWrite(String tempCipherPath) {
+        releaseSharedFile(tempCipherPath);
+        IOException failure = null;
+        try {
+            new CipherJournal(store, tempCipherPath).clear();
+        } catch (IOException e) {
+            failure = e;
+        }
+        try {
+            deleteIfExists(store, tempCipherPath);
+        } catch (IOException e) {
+            if (failure == null) {
+                failure = e;
+            } else {
+                failure.addSuppressed(e);
+            }
+        }
+        return failure;
+    }
+
+    /**
+     * Replaces the target with the staged write file. A journal left by an
+     * earlier in-place update of the old target is removed because the staged
+     * file replaces it completely.
+     *
+     * @param tempCipherPath   the hidden staging path
+     * @param targetCipherPath the target to replace
+     * @throws IOException on filesystem errors
+     */
+    private void commitWrite(String tempCipherPath, String targetCipherPath) throws IOException {
+        synchronized (fileLock(targetCipherPath)) {
+            // Drop the old registry entry so later opens see the replacement;
+            // handles already open keep their reference to the old file.
+            releaseSharedFile(targetCipherPath);
+            releaseSharedFile(tempCipherPath);
+            store.rename(tempCipherPath, targetCipherPath, true);
+            new CipherJournal(store, targetCipherPath).clear();
         }
     }
 

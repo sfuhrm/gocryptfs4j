@@ -18,7 +18,6 @@ import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.net.URI;
 import java.nio.file.AccessDeniedException;
 import java.nio.file.AccessMode;
@@ -2302,16 +2301,18 @@ public final class GocryptFs implements AutoCloseable {
     /**
      * Opens a streaming, encrypting output stream over a plaintext file path.
      *
-     * <p>Writing starts at the beginning of the file, overwriting any existing
-     * content. Closing the stream closes the underlying file and flushes the
-     * encrypted data.</p>
+     * <p>Writing starts at the beginning of the file. The content is staged in
+     * a hidden sibling file and replaces the target only when the stream is
+     * closed successfully, so a crash mid-stream leaves the previous file
+     * intact. Call {@link AbortableOutputStream#abort()} to discard a partial
+     * write instead of committing it.</p>
      *
      * @param plainFile the plaintext file path
      * @return the encrypting output stream
      * @throws IOException on filesystem errors
      * @throws NullPointerException if {@code plainFile} is {@code null}
      */
-    public OutputStream openWrite(String plainFile) throws IOException {
+    public AbortableOutputStream openWrite(String plainFile) throws IOException {
         Lock writeLock = acquireWriteLock();
         try {
             ensureOpen();
@@ -2331,7 +2332,8 @@ public final class GocryptFs implements AutoCloseable {
      * @throws IOException on filesystem errors
      * @throws NullPointerException if {@code plainFile} or {@code syncPolicy} is {@code null}
      */
-    public OutputStream openWrite(String plainFile, SyncPolicy syncPolicy) throws IOException {
+    public AbortableOutputStream openWrite(String plainFile, SyncPolicy syncPolicy)
+            throws IOException {
         Objects.requireNonNull(syncPolicy, "syncPolicy");
         Lock writeLock = acquireWriteLock();
         try {
