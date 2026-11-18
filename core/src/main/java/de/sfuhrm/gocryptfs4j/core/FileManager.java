@@ -338,8 +338,14 @@ final class FileManager {
                 entry.guard = channelGuard;
                 entry.releaseAction = this::releaseEntry;
             }
-            entry.key = cipherFile;
-            entry.refs++;
+            // refs is protected by entry.lock everywhere else. Taking it here
+            // as well (inside the map's bin lock, matching the map-then-entry
+            // order used by pruning and moving) prevents a lost update that
+            // could close the backing file while a handle still uses it.
+            synchronized (entry.lock) {
+                entry.key = cipherFile;
+                entry.refs++;
+            }
             return entry;
         });
     }

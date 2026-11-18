@@ -43,7 +43,7 @@ public final class SharedCipherFile implements AutoCloseable {
         /** The shared file, or {@code null} when no handle is open. */
         @Nullable volatile CipherFile file;
 
-        /** The number of live handles referencing this entry. */
+        /** The number of live handles referencing this entry, guarded by {@link #lock}. */
         int refs;
 
         /** Whether {@link #file} is currently opened for writing. */
