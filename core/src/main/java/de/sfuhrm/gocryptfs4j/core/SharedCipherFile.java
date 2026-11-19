@@ -317,6 +317,7 @@ public final class SharedCipherFile implements AutoCloseable {
         long lastBlock = (newPlainSize - 1) / blockSize;
         int lastLength = (int) (newPlainSize - lastBlock * blockSize);
 
+        List<CipherFile.BlockUpdate> updates = new ArrayList<>(2);
         if (oldSize > 0 && oldOffset > 0) {
             if (lastBlock == oldBlock) {
                 // The new end is in the same block as the old end: keep the
@@ -324,18 +325,25 @@ public final class SharedCipherFile implements AutoCloseable {
                 byte[] block = new byte[(int) blockSize];
                 int len = file.readBlock(oldBlock, block, 0);
                 Arrays.fill(block, len, lastLength, (byte) 0);
-                file.writeBlock(oldBlock, block, 0, lastLength);
+                updates.add(new CipherFile.BlockUpdate(oldBlock, block, 0, lastLength));
+                file.writeBlocks(updates);
                 return;
             }
             // The hole would start after a partial ciphertext block, which
             // cannot be authenticated when read back. Pad it to a full block.
-            file.zeroPad();
+            byte[] oldBlockData = new byte[(int) blockSize];
+            int len = file.readBlock(oldBlock, oldBlockData, 0);
+            Arrays.fill(oldBlockData, len, (int) blockSize, (byte) 0);
+            updates.add(new CipherFile.BlockUpdate(oldBlock, oldBlockData, 0, (int) blockSize));
         }
 
         // Write only the final block; the blocks before it stay sparse. This
-        // also mints the file header when the file was empty.
+        // also mints the file header when the file was empty. The padded old
+        // block and the final block share one journal record, so a crash leaves
+        // either the old file or the complete new size, never a half-grown one.
         byte[] zeros = new byte[(int) blockSize];
-        file.writeBlock(lastBlock, zeros, 0, lastLength);
+        updates.add(new CipherFile.BlockUpdate(lastBlock, zeros, 0, lastLength));
+        file.writeBlocks(updates);
     }
 
     /**
@@ -496,7 +504,13 @@ public final class SharedCipherFile implements AutoCloseable {
     void flushChannels() throws IOException {
         Lock ioLock = acquireChannelIo();
         try {
-            flushEntry(entry);
+            synchronized (entry.lock) {
+                flushEntry(entry);
+                CipherFile file = entry.file;
+                if (file != null) {
+                    file.flushPending();
+                }
+            }
         } finally {
             releaseChannelIo(ioLock);
         }

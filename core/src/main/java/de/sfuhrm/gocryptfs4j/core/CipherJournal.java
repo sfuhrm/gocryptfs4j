@@ -14,7 +14,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.NoSuchFileException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -39,14 +42,27 @@ final class CipherJournal {
     /** Journal file format magic. */
     private static final int MAGIC = 0x47434657;
 
-    /** Current journal file format version (adds an optional file header). */
-    private static final byte VERSION = 2;
+    /** Current journal file format version (supports multiple block updates). */
+    private static final byte VERSION = 3;
+
+    /** Journal format version 2, which carries a single block and an optional header. */
+    private static final byte VERSION_SINGLE = 2;
 
     /** Legacy journal file format version without a header field. */
     private static final byte VERSION_LEGACY = 1;
 
     /** Maximum accepted ciphertext block length in a journal record. */
     private static final int MAX_BLOCK_LEN = 1 << 20;
+
+    /** Maximum number of block updates accepted in one journal record. */
+    private static final int MAX_BLOCK_COUNT = 1024;
+
+    /**
+     * Maximum accepted journal size. A batched record carries at most
+     * {@link #MAX_BLOCK_COUNT} ordinary ciphertext blocks, so this leaves plenty
+     * of room while still bounding a hostile journal file.
+     */
+    private static final int MAX_JOURNAL_LEN = 8 << 20;
 
     /** Prefix of the hidden journal file name. */
     private static final String NAME_PREFIX = Constants.INTERNAL_NAME_PREFIX + "-wal-";
@@ -118,13 +134,13 @@ final class CipherJournal {
         byte[] data;
         try {
             CipherNode node = store.stat(journalName);
-            if (!node.isRegularFile() || node.size() > MAX_BLOCK_LEN + 64) {
+            if (!node.isRegularFile() || node.size() > MAX_JOURNAL_LEN) {
                 // Treat an oversized or non-regular journal as unparseable
                 // instead of letting it make the file open fail; a writable
                 // open discards it.
                 return null;
             }
-            data = store.readSmall(journalName, MAX_BLOCK_LEN + 64);
+            data = store.readSmall(journalName, MAX_JOURNAL_LEN);
         } catch (NoSuchFileException e) {
             return null;
         }
@@ -246,7 +262,7 @@ final class CipherJournal {
      */
     private byte @Nullable [] readIfExists(String name) throws IOException {
         try {
-            return store.readSmall(name, MAX_BLOCK_LEN + 64);
+            return store.readSmall(name, MAX_JOURNAL_LEN);
         } catch (NoSuchFileException e) {
             return null;
         }
@@ -317,15 +333,19 @@ final class CipherJournal {
                 return null;
             }
             int version = in.readUnsignedByte();
-            if (version != VERSION && version != VERSION_LEGACY) {
+            if (version == VERSION) {
+                return parseMultiBlock(in);
+            }
+            if (version != VERSION_SINGLE && version != VERSION_LEGACY) {
                 return null;
             }
+            // Versions 1 and 2 carry at most one block update.
             long blockNo = in.readLong();
             long targetCipherSize = in.readLong();
             byte[] fileId = new byte[Constants.HEADER_ID_LEN];
             in.readFully(fileId);
             byte[] header = new byte[0];
-            if (version >= VERSION) {
+            if (version >= VERSION_SINGLE) {
                 int headerLength = in.readInt();
                 if (headerLength != 0 && headerLength != Constants.HEADER_LEN) {
                     return null;
@@ -345,10 +365,55 @@ final class CipherJournal {
             if (blockNo < -1 || targetCipherSize < -1) {
                 return null;
             }
-            return new Record(blockNo, targetCipherSize, fileId, block, header);
+            List<Block> blocks = blockNo >= 0 && length > 0
+                    ? Collections.singletonList(new Block(blockNo, block))
+                    : Collections.<Block>emptyList();
+            return new Record(targetCipherSize, fileId, header, blocks);
         } catch (IOException | RuntimeException e) {
             return null;
         }
+    }
+
+    /**
+     * Parses the multi-block journal format used for batched writes and atomic
+     * file growth.
+     *
+     * @param in the journal stream positioned after the version byte
+     * @return the parsed record, or {@code null} if the bytes are invalid
+     * @throws IOException if the record cannot be read
+     */
+    private static @Nullable Record parseMultiBlock(DataInputStream in) throws IOException {
+        long targetCipherSize = in.readLong();
+        byte[] fileId = new byte[Constants.HEADER_ID_LEN];
+        in.readFully(fileId);
+        int headerLength = in.readInt();
+        if (headerLength != 0 && headerLength != Constants.HEADER_LEN) {
+            return null;
+        }
+        byte[] header = new byte[headerLength];
+        in.readFully(header);
+        int blockCount = in.readInt();
+        if (blockCount < 0 || blockCount > MAX_BLOCK_COUNT) {
+            return null;
+        }
+        List<Block> blocks = new ArrayList<>(blockCount);
+        for (int i = 0; i < blockCount; i++) {
+            long blockNo = in.readLong();
+            int length = in.readInt();
+            if (blockNo < 0 || length <= 0 || length > MAX_BLOCK_LEN) {
+                return null;
+            }
+            byte[] block = new byte[length];
+            in.readFully(block);
+            blocks.add(new Block(blockNo, block));
+        }
+        if (in.available() != 0) {
+            return null;
+        }
+        if (targetCipherSize < -1) {
+            return null;
+        }
+        return new Record(targetCipherSize, fileId, header, blocks);
     }
 
     /**
@@ -373,12 +438,10 @@ final class CipherJournal {
     }
 
     /**
-     * One journalled update.
+     * One journalled update, possibly covering several blocks so that a batch
+     * or an atomic grow can be replayed as a single unit.
      */
     static final class Record {
-
-        /** The block to rewrite, or {@code -1} for a truncate-only record. */
-        final long blockNo;
 
         /** The target ciphertext size, or {@code -1} to leave the size unchanged. */
         final long targetCipherSize;
@@ -386,11 +449,11 @@ final class CipherJournal {
         /** The file id the record belongs to. */
         final byte[] fileId;
 
-        /** The new ciphertext block, possibly empty. */
-        final byte[] block;
-
-        /** A new file header to install before the block, or an empty array. */
+        /** A new file header to install before the blocks, or an empty array. */
         final byte[] header;
+
+        /** The block updates to apply, in order. */
+        final List<Block> blocks;
 
         /**
          * Creates a record without a header.
@@ -405,7 +468,7 @@ final class CipherJournal {
         }
 
         /**
-         * Creates a record.
+         * Creates a single-block record.
          *
          * @param blockNo          the block number, or {@code -1}
          * @param targetCipherSize the target ciphertext size, or {@code -1}
@@ -415,11 +478,28 @@ final class CipherJournal {
          */
         Record(long blockNo, long targetCipherSize, byte[] fileId, byte[] block,
                byte[] header) {
-            this.blockNo = blockNo;
+            this(targetCipherSize, fileId, header,
+                    blockNo >= 0 && block.length > 0
+                            ? Collections.singletonList(new Block(blockNo, block))
+                            : Collections.<Block>emptyList());
+        }
+
+        /**
+         * Creates a multi-block record.
+         *
+         * @param targetCipherSize the target ciphertext size, or {@code -1}
+         * @param fileId           the file id
+         * @param header           a new file header, or an empty array
+         * @param blocks           the block updates
+         */
+        Record(long targetCipherSize, byte[] fileId, byte[] header, List<Block> blocks) {
             this.targetCipherSize = targetCipherSize;
             this.fileId = fileId.clone();
-            this.block = block.clone();
             this.header = header.clone();
+            this.blocks = new ArrayList<>(blocks.size());
+            for (Block block : blocks) {
+                this.blocks.add(new Block(block.blockNo, block.data));
+            }
         }
 
         /**
@@ -452,15 +532,41 @@ final class CipherJournal {
             try (DataOutputStream out = new DataOutputStream(bytes)) {
                 out.writeInt(MAGIC);
                 out.writeByte(VERSION);
-                out.writeLong(blockNo);
                 out.writeLong(targetCipherSize);
                 out.write(fileId);
                 out.writeInt(header.length);
                 out.write(header);
-                out.writeInt(block.length);
-                out.write(block);
+                out.writeInt(blocks.size());
+                for (Block block : blocks) {
+                    out.writeLong(block.blockNo);
+                    out.writeInt(block.data.length);
+                    out.write(block.data);
+                }
             }
             return bytes.toByteArray();
+        }
+    }
+
+    /**
+     * One ciphertext block update inside a {@link Record}.
+     */
+    static final class Block {
+
+        /** The block number. */
+        final long blockNo;
+
+        /** The new ciphertext block. */
+        final byte[] data;
+
+        /**
+         * Creates a block update.
+         *
+         * @param blockNo the block number
+         * @param data    the ciphertext block
+         */
+        Block(long blockNo, byte[] data) {
+            this.blockNo = blockNo;
+            this.data = data.clone();
         }
     }
 }

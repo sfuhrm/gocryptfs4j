@@ -66,6 +66,13 @@ final class FileManager {
     /** Whether file names are stored unencrypted. */
     private final boolean plaintextNames;
 
+    /**
+     * Whether the owning filesystem is read-only. A read-only manager never
+     * opens a backing file writable, not even to recover a journal left by a
+     * failed close.
+     */
+    private final boolean readOnly;
+
     /** The name manager. */
     private final NameManager nameManager;
 
@@ -147,6 +154,30 @@ final class FileManager {
                 Supplier<ContentEnc> contentEncFactory, NameTransform nameTransform,
                 boolean plaintextNames, NameManager nameManager,
                 DirectoryManager directoryManager, PathResolver pathResolver) {
+        this(store, contentGeometry, contentEncFactory, nameTransform, plaintextNames,
+                nameManager, directoryManager, pathResolver, false);
+    }
+
+    /**
+     * Creates a file manager.
+     *
+     * @param store            the ciphertext-side store
+     * @param contentGeometry  the content block geometry
+     * @param contentEncFactory mints a fresh content-encryption helper per file
+     *                          and per transient use
+     * @param nameTransform    the name-transform helper
+     * @param plaintextNames   whether file names are stored unencrypted
+     * @param nameManager      the name manager
+     * @param directoryManager the directory manager
+     * @param pathResolver     the path resolver
+     * @param readOnly         whether the owning filesystem is read-only
+     * @throws NullPointerException if a required argument is {@code null}
+     */
+    FileManager(CipherStore store, ContentGeometry contentGeometry,
+                Supplier<ContentEnc> contentEncFactory, NameTransform nameTransform,
+                boolean plaintextNames, NameManager nameManager,
+                DirectoryManager directoryManager, PathResolver pathResolver,
+                boolean readOnly) {
         this.store = Objects.requireNonNull(store, "store");
         this.contentGeometry = Objects.requireNonNull(contentGeometry, "contentGeometry");
         this.contentEncFactory = Objects.requireNonNull(contentEncFactory, "contentEncFactory");
@@ -155,6 +186,7 @@ final class FileManager {
         this.nameManager = Objects.requireNonNull(nameManager, "nameManager");
         this.directoryManager = Objects.requireNonNull(directoryManager, "directoryManager");
         this.pathResolver = Objects.requireNonNull(pathResolver, "pathResolver");
+        this.readOnly = readOnly;
     }
 
     /**
@@ -300,9 +332,14 @@ final class FileManager {
                 // A failed close may leave a pending journal that only a
                 // writable open may replay. Even a read-only request opens
                 // writable once to recover it, so the failed write cannot block
-                // every later read.
-                boolean recover = entry.closeFailed || retryOpenPaths.contains(cipherFile);
+                // every later read. A filesystem opened read-only must never
+                // do this: it promises not to write to the cipher directory.
+                boolean recover = !readOnly
+                        && (entry.closeFailed || retryOpenPaths.contains(cipherFile));
                 boolean openWritable = writable || recover;
+                if (openWritable && readOnly) {
+                    throw new IOException("filesystem is read-only");
+                }
                 if (entry.file == null) {
                     // Opening the channel, deriving the content key and
                     // initializing the cipher all happen outside the map's bin

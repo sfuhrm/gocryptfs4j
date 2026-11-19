@@ -10,7 +10,11 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.NonWritableChannelException;
 import java.security.GeneralSecurityException;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -47,6 +51,20 @@ public final class CipherFile implements AutoCloseable {
     /** Scratch buffer for a single plaintext block. */
     private final byte[] blockPlain;
 
+    /**
+     * Bounds the number of encrypted blocks buffered before they are committed
+     * together. A larger batch amortizes the journal and data fsyncs over many
+     * blocks without letting a huge write exhaust memory.
+     */
+    private static final int MAX_PENDING_BLOCKS = 1024;
+
+    /**
+     * Block updates written since the last commit, keyed by block number so a
+     * later write to the same block replaces the earlier one. Only used when a
+     * journal is present; standalone instances write through immediately.
+     */
+    private final Map<Long, PendingBlock> pendingBlocks = new LinkedHashMap<>();
+
     /** The file id from the header, or {@code null} for an empty file. */
     private byte @Nullable [] fileId;
 
@@ -70,6 +88,67 @@ public final class CipherFile implements AutoCloseable {
      * the next writable open can finish or replace it.
      */
     private boolean journalFileTouched;
+
+    /**
+     * One encrypted block waiting to be published in the next journal record.
+     */
+    private static final class PendingBlock {
+
+        /** The block number. */
+        private final long blockNo;
+
+        /** The encrypted block. */
+        private final byte[] cipher;
+
+        /** The plaintext length represented by {@link #cipher}. */
+        private final int plainLen;
+
+        /**
+         * Creates a pending block.
+         *
+         * @param blockNo  the block number
+         * @param cipher   the encrypted block
+         * @param plainLen the plaintext length
+         */
+        private PendingBlock(long blockNo, byte[] cipher, int plainLen) {
+            this.blockNo = blockNo;
+            this.cipher = cipher;
+            this.plainLen = plainLen;
+        }
+    }
+
+    /**
+     * A plaintext block update handed to {@link #writeBlocks(List)}.
+     */
+    static final class BlockUpdate {
+
+        /** The block number. */
+        final long blockNo;
+
+        /** The plaintext buffer. */
+        final byte[] plain;
+
+        /** The offset within {@link #plain}. */
+        final int offset;
+
+        /** The number of plaintext bytes. */
+        final int length;
+
+        /**
+         * Creates a block update.
+         *
+         * @param blockNo the block number
+         * @param plain   the plaintext buffer
+         * @param offset  the offset within the buffer
+         * @param length  the number of bytes
+         */
+        BlockUpdate(long blockNo, byte[] plain, int offset, int length) {
+            this.blockNo = blockNo;
+            this.plain = Objects.requireNonNull(plain, "plain");
+            this.offset = offset;
+            this.length = length;
+        }
+    }
 
     /**
      * Creates an instance over an open channel.
@@ -158,7 +237,31 @@ public final class CipherFile implements AutoCloseable {
      * @throws IOException on filesystem errors
      */
     public synchronized long plainSize() throws IOException {
-        return enc.cipherSizeToPlainSize(channel.size());
+        long size = enc.cipherSizeToPlainSize(channel.size());
+        for (PendingBlock block : pendingBlocks.values()) {
+            long end = enc.blockNoToPlainOff(block.blockNo) + block.plainLen;
+            if (end > size) {
+                size = end;
+            }
+        }
+        return size;
+    }
+
+    /**
+     * Returns the ciphertext end offset of the furthest pending block, or
+     * {@code -1} when nothing is pending.
+     *
+     * @return the pending ciphertext end, or {@code -1}
+     */
+    private long pendingCipherEnd() {
+        long end = -1;
+        for (PendingBlock block : pendingBlocks.values()) {
+            long blockEnd = enc.blockNoToCipherOff(block.blockNo) + block.cipher.length;
+            if (blockEnd > end) {
+                end = blockEnd;
+            }
+        }
+        return end;
     }
 
     /**
@@ -228,8 +331,8 @@ public final class CipherFile implements AutoCloseable {
             journal.clear();
             return;
         }
-        if (record.blockNo >= 0 && record.block.length > 0) {
-            writeCipherRange(cipherOffset(record.blockNo, record.block.length), record.block);
+        for (CipherJournal.Block block : record.blocks) {
+            writeCipherRange(cipherOffset(block.blockNo, block.data.length), block.data);
         }
         if (record.targetCipherSize >= 0) {
             channel.truncate(record.targetCipherSize);
@@ -307,10 +410,7 @@ public final class CipherFile implements AutoCloseable {
      */
     private boolean recordAppliesToFile(CipherJournal.Record record, byte[] id,
                                          boolean headerSeen) {
-        if (record.block.length == 0) {
-            if (record.blockNo != -1) {
-                return false;
-            }
+        if (record.blocks.isEmpty()) {
             if (record.targetCipherSize < 0) {
                 return true;
             }
@@ -324,37 +424,43 @@ public final class CipherFile implements AutoCloseable {
                 return false;
             }
         }
-        if (record.blockNo < 0 || record.block.length > enc.cipherBS()) {
-            return false;
-        }
-        // A journalled write always contains real ciphertext. An all-zero block
-        // is a sparse hole, not something writeBlock ever journals, so refuse it
-        // rather than letting a forged record create a huge sparse extension.
-        boolean allZero = true;
-        for (byte b : record.block) {
-            if (b != 0) {
-                allZero = false;
-                break;
-            }
-        }
-        if (allZero) {
-            return false;
-        }
-        long offset = cipherOffset(record.blockNo, record.block.length);
-        if (offset < 0) {
-            return false;
-        }
-        long end = offset + record.block.length;
-        if (record.targetCipherSize >= 0 && record.targetCipherSize != end) {
-            return false;
-        }
+        long expectedTarget = -1;
         try {
-            enc.decryptBlocks(record.block, 0, record.block.length, record.blockNo, id,
-                    blockPlain, 0);
-            return true;
+            for (CipherJournal.Block block : record.blocks) {
+                if (block.blockNo < 0 || block.data.length > enc.cipherBS()) {
+                    return false;
+                }
+                // A journalled write always contains real ciphertext. An all-zero
+                // block is a sparse hole, not something writeBlock ever journals,
+                // so refuse it rather than letting a forged record create a huge
+                // sparse extension.
+                boolean allZero = true;
+                for (byte b : block.data) {
+                    if (b != 0) {
+                        allZero = false;
+                        break;
+                    }
+                }
+                if (allZero) {
+                    return false;
+                }
+                long offset = cipherOffset(block.blockNo, block.data.length);
+                if (offset < 0) {
+                    return false;
+                }
+                long end = offset + block.data.length;
+                if (end > expectedTarget) {
+                    expectedTarget = end;
+                }
+                enc.decryptBlocks(block.data, 0, block.data.length, block.blockNo, id,
+                        blockPlain, 0);
+            }
         } catch (GeneralSecurityException | IllegalArgumentException e) {
             return false;
         }
+        // A batched record always targets the end of its furthest block. A
+        // record that only overwrites existing blocks leaves the size alone.
+        return record.targetCipherSize < 0 || record.targetCipherSize == expectedTarget;
     }
 
     /**
@@ -449,6 +555,25 @@ public final class CipherFile implements AutoCloseable {
         if (id == null) {
             return 0;
         }
+        PendingBlock pending = pendingBlocks.get(blockNo);
+        if (pending != null) {
+            try {
+                return enc.decryptBlocks(pending.cipher, 0, pending.cipher.length, blockNo, id,
+                        out, off);
+            } catch (GeneralSecurityException | IllegalArgumentException e) {
+                throw new IOException("corrupt pending block in file", e);
+            }
+        }
+        long pendingEnd = pendingCipherEnd();
+        long cipherOffset = enc.blockNoToCipherOff(blockNo);
+        if (pendingEnd > channel.size() && cipherOffset >= channel.size()
+                && cipherOffset < pendingEnd) {
+            // A pending write extends the file past this block, leaving a
+            // sparse hole. The block reads back as zeros even though the
+            // channel has not grown yet.
+            Arrays.fill(out, off, off + (int) enc.plainBS(), (byte) 0);
+            return (int) enc.plainBS();
+        }
         try {
             return readBlockWithId(blockNo, out, off, id);
         } catch (GeneralSecurityException e) {
@@ -506,6 +631,11 @@ public final class CipherFile implements AutoCloseable {
      * it. Writing a block beyond the current end of the file leaves the blocks
      * in between as sparse holes.
      *
+     * <p>When a journal is present the encrypted block is buffered and committed
+     * together with the other pending blocks by {@link #force(boolean)},
+     * {@link #flushPending()} or {@link #close()}. That batches the journal and
+     * data fsyncs of a large write instead of paying two fsyncs per block.</p>
+     *
      * @param blockNo the block number
      * @param plain   the plaintext buffer
      * @param off     the plaintext offset
@@ -518,26 +648,134 @@ public final class CipherFile implements AutoCloseable {
         if (!writable) {
             throw new NonWritableChannelException();
         }
+        if (journal == null) {
+            writeThrough(blockNo, plain, off, len);
+            return;
+        }
+        enqueue(blockNo, plain, off, len);
+        if (pendingBlocks.size() > MAX_PENDING_BLOCKS) {
+            commitPending(true);
+        }
+    }
+
+    /**
+     * Encrypts and writes several plaintext blocks as one atomic journal entry.
+     * Used for growing a file, where the padded old final block and the new
+     * final block must become visible together.
+     *
+     * @param updates the block updates
+     * @throws IOException on filesystem or encryption errors
+     */
+    void writeBlocks(List<BlockUpdate> updates) throws IOException {
+        synchronized (this) {
+            if (!writable) {
+                throw new NonWritableChannelException();
+            }
+            if (journal == null) {
+                for (BlockUpdate update : updates) {
+                    writeThrough(update.blockNo, update.plain, update.offset, update.length);
+                }
+                return;
+            }
+            for (BlockUpdate update : updates) {
+                enqueue(update.blockNo, update.plain, update.offset, update.length);
+            }
+            commitPending(true);
+        }
+    }
+
+    /**
+     * Commits any buffered encrypted blocks, forcing them to storage. Called by
+     * an explicit flush so a channel flush still makes its data durable.
+     *
+     * @throws IOException on filesystem errors
+     */
+    void flushPending() throws IOException {
+        synchronized (this) {
+            commitPending(true);
+        }
+    }
+
+    /**
+     * Encrypts one block and writes it directly, without journaling or batching.
+     *
+     * @param blockNo the block number
+     * @param plain   the plaintext buffer
+     * @param off     the plaintext offset
+     * @param len     the number of plaintext bytes
+     * @throws IOException on filesystem or encryption errors
+     */
+    private void writeThrough(long blockNo, byte[] plain, int off, int len) throws IOException {
         byte[] id = ensureFileId();
         int cipherLen = enc.encryptBlocks(plain, off, len, blockNo, id, blockCipher, 0);
-        long cipherOffset = enc.blockNoToCipherOff(blockNo);
+        writeCipherRange(enc.blockNoToCipherOff(blockNo), blockCipher, 0, cipherLen);
+    }
+
+    /**
+     * Encrypts one block and adds it to the pending batch.
+     *
+     * @param blockNo the block number
+     * @param plain   the plaintext buffer
+     * @param off     the plaintext offset
+     * @param len     the number of plaintext bytes
+     * @throws IOException on filesystem or encryption errors
+     */
+    private void enqueue(long blockNo, byte[] plain, int off, int len) throws IOException {
+        byte[] id = ensureFileId();
+        int cipherLen = enc.encryptBlocks(plain, off, len, blockNo, id, blockCipher, 0);
+        if (cipherLen > 0) {
+            pendingBlocks.put(blockNo,
+                    new PendingBlock(blockNo, Arrays.copyOf(blockCipher, cipherLen), len));
+        }
+    }
+
+    /**
+     * Publishes all pending blocks in one journal record, writes them, and
+     * optionally forces the data. The journal is only removed by a later force
+     * or close, after the data is durable, so a crash can always replay the
+     * batch.
+     *
+     * @param forceData whether to force the written data before returning
+     * @throws IOException on filesystem errors
+     */
+    private void commitPending(boolean forceData) throws IOException {
+        if (pendingBlocks.isEmpty()) {
+            return;
+        }
+        byte[] id = fileId();
+        if (id == null) {
+            pendingBlocks.clear();
+            throw new IOException("file header disappeared while writing");
+        }
         CipherJournal j = journal;
-        if (j != null && cipherLen > 0) {
-            // Journal every block update, including appends and blocks written
-            // past the current end. For an extending write the target size lets
-            // recovery finish a torn append; for an overwrite it stays unchanged.
-            long end = cipherOffset + cipherLen;
-            long currentSize = channel.size();
-            long targetSize = end > currentSize ? end : -1;
-            publishJournal(new CipherJournal.Record(blockNo, targetSize, id,
-                    Arrays.copyOf(blockCipher, cipherLen)));
-            writeCipherRange(cipherOffset, blockCipher, 0, cipherLen);
+        List<CipherJournal.Block> blocks = new ArrayList<>(pendingBlocks.size());
+        long maxEnd = -1;
+        long currentSize = channel.size();
+        for (PendingBlock block : pendingBlocks.values()) {
+            long offset = enc.blockNoToCipherOff(block.blockNo);
+            long end = offset + block.cipher.length;
+            if (end > maxEnd) {
+                maxEnd = end;
+            }
+            blocks.add(new CipherJournal.Block(block.blockNo, block.cipher));
+        }
+        if (j != null) {
+            // For an extending batch the target lets recovery finish a torn
+            // append; a batch that only overwrites existing blocks leaves the
+            // size unchanged.
+            long targetSize = maxEnd > currentSize ? maxEnd : -1;
+            publishJournal(new CipherJournal.Record(targetSize, id, new byte[0], blocks));
+        }
+        for (PendingBlock block : pendingBlocks.values()) {
+            writeCipherRange(enc.blockNoToCipherOff(block.blockNo), block.cipher, 0,
+                    block.cipher.length);
+        }
+        if (j != null && forceData) {
             channel.force(true);
             dirty = false;
             journalPending = false;
-        } else {
-            writeCipherRange(cipherOffset, blockCipher, 0, cipherLen);
         }
+        pendingBlocks.clear();
     }
 
     /**
@@ -593,6 +831,9 @@ public final class CipherFile implements AutoCloseable {
         if (newPlainSize < 0) {
             throw new IllegalArgumentException("negative size: " + newPlainSize);
         }
+        // Any buffered blocks must be durable before the size changes; otherwise
+        // a later commit could resurrect data that this truncation removed.
+        commitPending(true);
         if (newPlainSize == 0) {
             // Truncating to empty is handled up front, before the same-size
             // early return below: a torn 1-17 byte header reports a plain size
@@ -691,8 +932,10 @@ public final class CipherFile implements AutoCloseable {
      * @throws IOException on filesystem errors
      */
     public synchronized void force(boolean metaData) throws IOException {
+        commitPending(false);
         channel.force(metaData);
         dirty = false;
+        journalPending = false;
         clearJournalIfWritable();
     }
 
@@ -710,6 +953,11 @@ public final class CipherFile implements AutoCloseable {
     public synchronized void close() throws IOException {
         IOException failure = null;
         try {
+            // Commit any batched blocks before the channel is closed. A failure
+            // here is reported after the channel and keys have been released.
+            if (writable && channel.isOpen()) {
+                commitPending(false);
+            }
             // fsync writable files only when a write since the last force would
             // otherwise be lost by a power loss after close(). Read-only files,
             // and files whose updates were already forced, have nothing to
