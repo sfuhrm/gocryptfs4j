@@ -213,12 +213,16 @@ resource is still open when the exception is thrown. Other operations include
 `openRead` (a streaming decrypting `InputStream`) and `openWrite` (a streaming
 encrypting `OutputStream`).
 
-A writable `GocryptFs` holds an exclusive advisory lock on its cipher directory
-for its whole lifetime. A second writable instance, whether in the same JVM or
-in another process, fails to open until the first one is closed. Use
-`GocryptFs.openReadOnly(store, password)` (or the equivalent `boolean readOnly`
-overload) for a reader that takes no lock and never writes, including on
-read-only media; it may coexist with a writable instance.
+A writable `GocryptFs` holds an exclusive lock on its cipher directory for its
+whole lifetime. The local stores use an atomically created hidden lock file
+inside the cipher directory, so no write permission on its parent is needed and
+the lock is not silently lost on filesystems that do not implement advisory
+locks (for example some network and cloud-backed mounts). A second writable
+instance, whether in the same JVM or in another process, fails to open until the
+first one is closed. Use `GocryptFs.openReadOnly(store, password)` (or the
+equivalent `boolean readOnly` overload) for a reader that takes no lock and
+never writes, including on read-only media; it may coexist with a writable
+instance.
 
 Opening a config that selects a downgrade-prone name mode is opt-in. By default
 `GocryptFs.open(...)` rejects `PlaintextNames` and legacy deterministic names

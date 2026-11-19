@@ -27,6 +27,7 @@ import java.nio.file.attribute.BasicFileAttributeView;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Collections;
 import java.util.Set;
@@ -67,6 +68,50 @@ class PathCipherStoreTest {
         try (AutoCloseable ignored = second.lockRoot()) {
             // The lock is available again after the first handle was closed.
         }
+    }
+
+    @Test
+    void lockFileIsInsideTheRootAndRemovedOnClose() throws Exception {
+        Path dir = Files.createDirectory(tmp.resolve("cipher"));
+        Path lockFile = dir.resolve(RootFileLock.LOCK_FILE_NAME);
+
+        try (AutoCloseable ignored = new PathCipherStore(dir).lockRoot()) {
+            assertTrue(Files.isRegularFile(lockFile),
+                    "the lock file must live inside the cipher directory");
+            assertFalse(Files.exists(tmp.resolve(".cipher.gocryptfs.lock")),
+                    "no lock file may be created in the parent directory");
+        }
+
+        assertFalse(Files.exists(lockFile),
+                "the lock file must be removed when the lock is released");
+    }
+
+    @Test
+    void lockFileDoesNotRequireAWritableParent() throws Exception {
+        Path parent = Files.createDirectory(tmp.resolve("parent"));
+        Path dir = Files.createDirectory(parent.resolve("cipher"));
+        assumeTrue(Files.getFileStore(parent).supportsFileAttributeView("posix"),
+                "parent permissions require a POSIX filesystem");
+        Set<PosixFilePermission> original = Files.getPosixFilePermissions(parent);
+        try {
+            Files.setPosixFilePermissions(parent,
+                    PosixFilePermissions.fromString("r-xr-xr-x"));
+            try (AutoCloseable ignored = new PathCipherStore(dir).lockRoot()) {
+                assertTrue(Files.exists(dir.resolve(RootFileLock.LOCK_FILE_NAME)));
+            }
+        } finally {
+            Files.setPosixFilePermissions(parent, original);
+        }
+    }
+
+    @Test
+    void anExistingLockFileBlocksRegardlessOfAdvisoryLockSupport() throws Exception {
+        Path dir = Files.createDirectory(tmp.resolve("cipher"));
+        Files.write(dir.resolve(RootFileLock.LOCK_FILE_NAME),
+                "foreign lock".getBytes(StandardCharsets.UTF_8));
+
+        assertThrows(IOException.class, () -> new PathCipherStore(dir).lockRoot(),
+                "an existing lock file must block a second writer even if no OS lock is held");
     }
 
     @Test
