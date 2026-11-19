@@ -26,7 +26,18 @@ jobs:
         # the long-retired OpenSSL 1.0 (libcrypto.so.1.0.0), so they cannot run
         # on a modern runner; the pre-HKDF on-disk format is instead covered by
         # the static golden fixtures under core/src/test/resources.
-        gocryptfs: ["1.4", "1.8.0", "2.0", "2.6.1"]
+        #
+        # The checksums pin the exact release tarball that is downloaded and
+        # executed. Update them together with the version when bumping.
+        gocryptfs:
+          - version: "1.4"
+            sha256: "08637fe7fb01d2c6c0e3988c7d25a02d27044c31f709a0053c5cfb362e490139"
+          - version: "1.8.0"
+            sha256: "ebf563c5f89ff61a36f0170c06e726e36968e125e18f84626027e8c0569513dc"
+          - version: "2.0"
+            sha256: "57e8a7a701dfd5a2e34642cdbe61084fe4665919abc5061bbd8f19c588f00b63"
+          - version: "2.6.1"
+            sha256: "49b8c0eb0f6373b6ac99c394a52909d8478e74c08d0961527c1162967cc28c44"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -46,7 +57,7 @@ jobs:
             ${{ runner.os }}-maven-
 
       - name: Remove conflicting fuse3 for gocryptfs v1.x
-        if: startsWith(matrix.gocryptfs, '1.')
+        if: startsWith(matrix.gocryptfs.version, '1.')
         run: sudo apt-get remove -y fuse3
 
       - name: Install FUSE
@@ -55,22 +66,23 @@ jobs:
           # v1.x mounts via the fuse2 helper 'fusermount', v2.x via the fuse3
           # helper 'fusermount3'. On Ubuntu 24.04 the two packages conflict
           # (fuse3 Breaks fuse), so install per major version.
-          packages: ${{ startsWith(matrix.gocryptfs, '1.') && 'fuse' || 'fuse3' }}
+          packages: ${{ startsWith(matrix.gocryptfs.version, '1.') && 'fuse' || 'fuse3' }}
           version: 1.0
 
-      - name: Cache gocryptfs v${{ matrix.gocryptfs }}
+      - name: Cache gocryptfs v${{ matrix.gocryptfs.version }}
         id: cache-gocryptfs
         uses: actions/cache@v6
         with:
           path: ~/.local/gocryptfs
-          key: gocryptfs-${{ matrix.gocryptfs }}-linux-static-amd64
+          key: gocryptfs-${{ matrix.gocryptfs.version }}-${{ matrix.gocryptfs.sha256 }}-linux-static-amd64
 
-      - name: Download gocryptfs v${{ matrix.gocryptfs }}
+      - name: Download gocryptfs v${{ matrix.gocryptfs.version }}
         if: steps.cache-gocryptfs.outputs.cache-hit != 'true'
         run: |
           mkdir -p "$HOME/.local/gocryptfs"
           curl -fsSL -o /tmp/gocryptfs.tar.gz \
-            "https://github.com/rfjakob/gocryptfs/releases/download/v${{ matrix.gocryptfs }}/gocryptfs_v${{ matrix.gocryptfs }}_linux-static_amd64.tar.gz"
+            "https://github.com/rfjakob/gocryptfs/releases/download/v${{ matrix.gocryptfs.version }}/gocryptfs_v${{ matrix.gocryptfs.version }}_linux-static_amd64.tar.gz"
+          echo "${{ matrix.gocryptfs.sha256 }}  /tmp/gocryptfs.tar.gz" | sha256sum --check --strict -
           tar -xzf /tmp/gocryptfs.tar.gz -C "$HOME/.local/gocryptfs" gocryptfs
           chmod +x "$HOME/.local/gocryptfs/gocryptfs"
 
