@@ -13,7 +13,9 @@ This release is dominated by concurrency, crash-safety and key-handling fixes.
 ### Added
 
 - Write-ahead journal (`CipherJournal`) for crash-consistent writes, including
-  appends and header updates, not just overwrites of existing blocks.
+  appends and header updates, not just overwrites of existing blocks. Journal
+  records can carry multiple block updates so a batch or an atomic file growth
+  is recovered as one unit.
 - `SharedCipherFile` and shared-handle support so multiple channels on the same
   file see coherent data and flush correctly.
 - `OpenOptions` to require explicit opt-in for downgraded modes (plaintext names,
@@ -45,6 +47,8 @@ This release is dominated by concurrency, crash-safety and key-handling fixes.
 - Unbounded internal maps and caches (`dirIvCache`, `fileLocks`, channel maps)
   are now bounded or evicted to avoid memory leaks in long-running processes.
 - `Gcm`/`Hkdf` migrated from JCE to BouncyCastle.
+- Large writes batch their journal and data commits, amortizing the two fsyncs
+  over many blocks instead of paying them per 4 KiB block.
 - Module descriptor opens Gson-reflected config packages on the module path.
 - README and javadoc updated, including Java 8/module-path notes.
 
@@ -52,6 +56,9 @@ This release is dominated by concurrency, crash-safety and key-handling fixes.
 
 - Crash consistency of directory creation, `diriv` files, small writes, header
   repair and truncation; config and directory metadata are now fsynced.
+- Growing a file is atomic: the padded old final block and the new final block
+  are committed in one journal record, so a crash no longer leaves a half-grown
+  file.
 - Durability gaps after `createFile`, `mkdir`, `rename`, `delete` and channel
   close; failed flushes no longer discard data or leave keys wiped.
 - Multiple handles on one file overwriting each other, stale caches and data loss
@@ -63,7 +70,9 @@ This release is dominated by concurrency, crash-safety and key-handling fixes.
 - NIO correctness: `truncate(n)` no longer grows a file, `APPEND` is honoured per
   write, file size/listing reflects unflushed data, and compound provider
   operations are atomic.
-- Read-only opens and operations no longer write to the cipher directory.
+- Read-only opens and operations no longer write to the cipher directory,
+  including failed-close journal recovery, which a read-only instance never
+  performs.
 - Long-name `.name` contents are verified against the hashed file name.
 - Non-UTF-8 and reserved names are handled correctly; NUL bytes and surrogate
   escape validation bypasses are rejected.
