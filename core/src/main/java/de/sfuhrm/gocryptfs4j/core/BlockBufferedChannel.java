@@ -148,6 +148,9 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
             int off = (int) (position % blockSize);
             int len = Math.min(src.remaining(), blockSize - off);
             int w = cache.write(wanted, off, len, src);
+            if (w > 0) {
+                file.notifyWrite();
+            }
             position += w;
             if (syncPolicy == SyncPolicy.ALWAYS && cache.flush()) {
                 file.force(true);
@@ -265,8 +268,11 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
         if (size < 0) {
             throw new IllegalArgumentException("negative size");
         }
-        if (file.truncateIfSmaller(size) && syncPolicy == SyncPolicy.ALWAYS) {
-            file.force(true);
+        if (file.truncateIfSmaller(size)) {
+            file.notifyWrite();
+            if (syncPolicy == SyncPolicy.ALWAYS) {
+                file.force(true);
+            }
         }
         if (position > size) {
             position = size;

@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.locks.Lock;
 import java.util.function.Consumer;
+import java.util.function.Consumer;
 
 import org.jspecify.annotations.Nullable;
 
@@ -79,6 +80,13 @@ public final class SharedCipherFile implements AutoCloseable {
          * entry from its registry. {@code null} for entries not kept in a map.
          */
         @Nullable Consumer<Entry> releaseAction;
+
+        /**
+         * Called with the entry's current key after a content-changing write,
+         * or {@code null} for entries not managed by a filesystem. Used to
+         * detect a target that changed while a staged write was open.
+         */
+        @Nullable Consumer<String> writeListener;
     }
 
     /** The shared entry this handle references. */
@@ -180,6 +188,19 @@ public final class SharedCipherFile implements AutoCloseable {
     }
 
     /**
+     * Reports a content-changing write to the owning filesystem, if any. This
+     * lets a staged write on the same path detect the change before replacing
+     * the target.
+     */
+    void notifyWrite() {
+        Consumer<String> listener = entry.writeListener;
+        String key = entry.key;
+        if (listener != null && key != null) {
+            listener.accept(key);
+        }
+    }
+
+    /**
      * Returns the plaintext block size of the shared file.
      *
      * @return the plaintext block size in bytes
@@ -224,6 +245,7 @@ public final class SharedCipherFile implements AutoCloseable {
                 CipherFile file = file();
                 if (newPlainSize == 0) {
                     file.truncate(0);
+                    notifyWrite();
                     return;
                 }
                 long oldSize = file.plainSize();
@@ -232,9 +254,11 @@ public final class SharedCipherFile implements AutoCloseable {
                 }
                 if (newPlainSize < oldSize) {
                     file.truncate(newPlainSize);
+                    notifyWrite();
                     return;
                 }
                 grow(file, oldSize, newPlainSize);
+                notifyWrite();
             }
         } finally {
             releaseChannelIo(ioLock);
@@ -265,6 +289,7 @@ public final class SharedCipherFile implements AutoCloseable {
                 CipherFile file = file();
                 if (newPlainSize < file.plainSize()) {
                     file.truncate(newPlainSize);
+                    notifyWrite();
                     return true;
                 }
                 return false;

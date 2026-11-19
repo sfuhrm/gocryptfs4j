@@ -37,6 +37,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.Lock;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
@@ -108,6 +109,14 @@ final class FileManager {
      * blocked by a pending journal that only a writable open may replay.
      */
     private final Set<String> retryOpenPaths = ConcurrentHashMap.newKeySet();
+
+    /**
+     * Watched staged-write targets, keyed by ciphertext path. An entry exists
+     * only while at least one stream has a target whose changes it must detect
+     * before replacing it. Watchers are reference counted so the map does not
+     * grow with every file that is ever streamed.
+     */
+    private final Map<String, WriteWatch> writeWatches = new ConcurrentHashMap<>();
 
     /**
      * Guards channel I/O against the owning filesystem closing or moving and
@@ -354,6 +363,7 @@ final class FileManager {
                 SharedCipherFile.Entry fresh = new SharedCipherFile.Entry();
                 fresh.guard = channelGuard;
                 fresh.releaseAction = this::releaseEntry;
+                fresh.writeListener = this::bumpTargetVersion;
                 fresh.key = cipherFile;
                 entry = sharedFiles.putIfAbsent(cipherFile, fresh);
                 if (entry == null) {
@@ -493,6 +503,99 @@ final class FileManager {
      */
     private Object fileLock(String cipherFile) {
         return fileLocks[Math.floorMod(cipherFile.hashCode(), fileLocks.length)];
+    }
+
+    /**
+     * Starts watching a staged-write target for changes. The returned watch
+     * must be released with {@link #unwatchTarget(String, WriteWatch)} once the
+     * stream is closed or aborted.
+     *
+     * @param cipherFile the ciphertext path being replaced
+     * @return the watch, shared with any other stream on the same path
+     */
+    private WriteWatch watchTarget(String cipherFile) {
+        return writeWatches.compute(cipherFile, (key, existing) -> {
+            WriteWatch watch = existing == null ? new WriteWatch() : existing;
+            watch.references++;
+            return watch;
+        });
+    }
+
+    /**
+     * Returns the current change version of a watched target.
+     *
+     * @param watch the target watch
+     * @return the target's change version
+     */
+    private long targetVersion(WriteWatch watch) {
+        synchronized (watch) {
+            return watch.version;
+        }
+    }
+
+    /**
+     * Releases a target watch created by {@link #watchTarget(String)}.
+     *
+     * @param cipherFile the ciphertext path being replaced
+     * @param watch      the target watch
+     */
+    private void unwatchTarget(String cipherFile, WriteWatch watch) {
+        writeWatches.computeIfPresent(cipherFile, (key, existing) -> {
+            if (existing != watch) {
+                return existing;
+            }
+            synchronized (watch) {
+                watch.references--;
+                return watch.references > 0 ? watch : null;
+            }
+        });
+    }
+
+    /**
+     * Records a change to a watched target.
+     *
+     * @param cipherFile the changed ciphertext path
+     */
+    private void bumpTargetVersion(String cipherFile) {
+        WriteWatch watch = writeWatches.get(cipherFile);
+        if (watch != null) {
+            synchronized (watch) {
+                watch.version++;
+            }
+        }
+    }
+
+    /**
+     * Records a change to a watched target and to every watched target below
+     * {@code cipherPath}. Used by operations, such as a directory rename, that
+     * can move or replace paths in a subtree.
+     *
+     * @param cipherPath the changed or moved ciphertext path
+     */
+    private void bumpWatchedTargets(String cipherPath) {
+        String prefix = cipherPath + "/";
+        for (Map.Entry<String, WriteWatch> entry : writeWatches.entrySet()) {
+            String watched = entry.getKey();
+            if (watched.equals(cipherPath) || watched.startsWith(prefix)) {
+                synchronized (entry.getValue()) {
+                    entry.getValue().version++;
+                }
+            }
+        }
+    }
+
+    /**
+     * The change state of one staged-write target. A stream records the
+     * version when it opens and refuses to replace the target if the version
+     * moved before it closes.
+     */
+    private static final class WriteWatch {
+
+        /** The number of streams that captured this target. */
+        private int references;
+
+        /** The number of observed changes to the target. */
+        private long version;
     }
 
     /**
@@ -1086,10 +1189,20 @@ final class FileManager {
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
         // Keep the previous contract: openWrite replaces an existing file
         // rather than creating a missing one.
-        store.stat(r.cipherPath());
         String cipherParent = r.cipherParent();
         if (cipherParent == null) {
             throw new IOException("cannot open the cipher root as a file");
+        }
+        CipherNode expectedTarget;
+        WriteWatch targetWatch;
+        long expectedTargetVersion;
+        synchronized (fileLock(r.cipherPath())) {
+            expectedTarget = store.stat(r.cipherPath());
+            if (!expectedTarget.isRegularFile()) {
+                throw new IOException("not a regular file: " + plainFile);
+            }
+            targetWatch = watchTarget(r.cipherPath());
+            expectedTargetVersion = targetVersion(targetWatch);
         }
         String tempCipherPath = PathResolver.join(cipherParent,
                 Constants.INTERNAL_NAME_PREFIX + "-write-" + UUID.randomUUID());
@@ -1102,7 +1215,8 @@ final class FileManager {
             cf = openCipherFileByName(tempCipherPath, true, syncPolicy);
             ch = cf.newChannel(0, true, syncPolicy);
             result = new AtomicWriteOutputStream(Channels.newOutputStream(ch), ch,
-                    tempCipherPath, r.cipherPath());
+                    tempCipherPath, r.cipherPath(), expectedTarget,
+                    targetWatch, expectedTargetVersion);
             cf.close();
             return result;
         } catch (IOException | RuntimeException | Error e) {
@@ -1112,11 +1226,14 @@ final class FileManager {
                 } catch (IOException cleanup) {
                     e.addSuppressed(cleanup);
                 }
-            } else if (ch != null) {
-                try {
-                    ch.close();
-                } catch (IOException cleanup) {
-                    e.addSuppressed(cleanup);
+            } else {
+                unwatchTarget(r.cipherPath(), targetWatch);
+                if (ch != null) {
+                    try {
+                        ch.close();
+                    } catch (IOException cleanup) {
+                        e.addSuppressed(cleanup);
+                    }
                 }
             }
             if (cf != null) {
@@ -1156,6 +1273,18 @@ final class FileManager {
         /** The ciphertext path replaced on a successful close. */
         private final String targetCipherPath;
 
+        /** The target's attributes when this stream was opened. */
+        private final CipherNode expectedTarget;
+
+        /** The watch detecting changes to the target while this stream is open. */
+        private final WriteWatch targetWatch;
+
+        /** The target's change version when this stream was opened. */
+        private final long expectedTargetVersion;
+
+        /** Whether the target watch has been released. */
+        private boolean watchReleased;
+
         /** Whether this stream has been closed or aborted. */
         private boolean closed;
 
@@ -1165,17 +1294,25 @@ final class FileManager {
         /**
          * Creates a stream over the given staging channel.
          *
-         * @param out              the channel-backed output stream
-         * @param channel          the underlying channel
-         * @param tempCipherPath   the hidden ciphertext path of the staged content
-         * @param targetCipherPath the ciphertext path to replace on success
+         * @param out                   the channel-backed output stream
+         * @param channel               the underlying channel
+         * @param tempCipherPath        the hidden ciphertext path of the staged content
+         * @param targetCipherPath      the ciphertext path to replace on success
+         * @param expectedTarget        the target's attributes when it was opened
+         * @param targetWatch           the watch detecting target changes
+         * @param expectedTargetVersion the target's change version when it was opened
          */
         AtomicWriteOutputStream(OutputStream out, SeekableByteChannel channel,
-                                String tempCipherPath, String targetCipherPath) {
+                                String tempCipherPath, String targetCipherPath,
+                                CipherNode expectedTarget, WriteWatch targetWatch,
+                                long expectedTargetVersion) {
             this.out = out;
             this.channel = channel;
             this.tempCipherPath = tempCipherPath;
             this.targetCipherPath = targetCipherPath;
+            this.expectedTarget = expectedTarget;
+            this.targetWatch = targetWatch;
+            this.expectedTargetVersion = expectedTargetVersion;
         }
 
         @Override
@@ -1245,13 +1382,16 @@ final class FileManager {
                 throw failure;
             }
             try {
-                commitWrite(tempCipherPath, targetCipherPath);
+                commitWrite(tempCipherPath, targetCipherPath, expectedTarget,
+                        targetWatch, expectedTargetVersion);
             } catch (IOException | RuntimeException e) {
                 IOException cleanup = cleanupWrite(tempCipherPath);
                 if (cleanup != null) {
                     e.addSuppressed(cleanup);
                 }
                 throw e;
+            } finally {
+                releaseTargetWatch();
             }
         }
 
@@ -1268,11 +1408,22 @@ final class FileManager {
         }
 
         /**
+         * Releases the target watch once this stream can no longer commit.
+         */
+        private void releaseTargetWatch() {
+            if (!watchReleased) {
+                watchReleased = true;
+                unwatchTarget(targetCipherPath, targetWatch);
+            }
+        }
+
+        /**
          * Closes the staging channel and removes the staged file.
          *
          * @return the first failure, or {@code null}
          */
         private @Nullable IOException abortContents() {
+            releaseTargetWatch();
             IOException failure = null;
             try {
                 out.close();
@@ -1342,27 +1493,47 @@ final class FileManager {
     }
 
     /**
-     * Replaces the target with the staged write file. A journal left by an
+     * Replaces the target with the staged write file after verifying that the
+     * target has not changed since the stream was opened. A journal left by an
      * earlier in-place update of the old target is removed because the staged
      * file replaces it completely.
      *
-     * @param tempCipherPath   the hidden staging path
-     * @param targetCipherPath the target to replace
-     * @throws IOException on filesystem errors
+     * @param tempCipherPath        the hidden staging path
+     * @param targetCipherPath      the target to replace
+     * @param expectedTarget        the target's attributes when the stream opened
+     * @param targetWatch           the watch detecting target changes
+     * @param expectedTargetVersion the target's change version when the stream opened
+     * @throws IOException on filesystem errors or if the target changed
      */
-    private void commitWrite(String tempCipherPath, String targetCipherPath) throws IOException {
+    private void commitWrite(String tempCipherPath, String targetCipherPath,
+                             CipherNode expectedTarget, WriteWatch targetWatch,
+                             long expectedTargetVersion) throws IOException {
         synchronized (fileLock(targetCipherPath)) {
-            // Drop the old registry entry so later opens see the replacement;
-            // handles already open keep their reference to the old file.
-            SharedCipherFile.Entry replaced = sharedFiles.get(targetCipherPath);
-            releaseSharedFile(targetCipherPath);
-            releaseSharedFile(tempCipherPath);
-            forgetRetryPaths(targetCipherPath);
-            forgetRetryPaths(tempCipherPath);
             Lock channelLock = channelGuard.writeLock();
             channelLock.lock();
             try {
+                CipherNode currentTarget;
+                try {
+                    currentTarget = store.stat(targetCipherPath);
+                } catch (NoSuchFileException e) {
+                    throw new FileSystemException(targetCipherPath, tempCipherPath,
+                            "target changed since the stream was opened");
+                }
+                if (!currentTarget.isRegularFile()
+                        || !sameTarget(expectedTarget, currentTarget)
+                        || targetVersion(targetWatch) != expectedTargetVersion) {
+                    throw new FileSystemException(targetCipherPath, tempCipherPath,
+                            "target changed since the stream was opened");
+                }
+                // Drop the old registry entry so later opens see the replacement;
+                // handles already open keep their reference to the old file.
+                SharedCipherFile.Entry replaced = sharedFiles.get(targetCipherPath);
+                releaseSharedFile(targetCipherPath);
+                releaseSharedFile(tempCipherPath);
+                forgetRetryPaths(targetCipherPath);
+                forgetRetryPaths(tempCipherPath);
                 store.rename(tempCipherPath, targetCipherPath, true);
+                bumpTargetVersion(targetCipherPath);
                 // A handle on the replaced target may still be open. Its
                 // journal is now at the new file's path, so disable it before
                 // that handle can publish a journal for the wrong file.
@@ -1382,6 +1553,23 @@ final class FileManager {
                 channelLock.unlock();
             }
         }
+    }
+
+    /**
+     * Returns whether two ciphertext nodes still describe the same unchanged
+     * file. Access time is intentionally ignored because reading a file must
+     * not count as a conflicting change.
+     *
+     * @param expected the attributes captured when the stream opened
+     * @param current  the attributes read before committing
+     * @return {@code true} if the target is unchanged
+     */
+    private static boolean sameTarget(CipherNode expected, CipherNode current) {
+        return expected.kind() == current.kind()
+                && expected.size() == current.size()
+                && expected.lastModifiedTime().equals(current.lastModifiedTime())
+                && expected.creationTime().equals(current.creationTime())
+                && Objects.equals(expected.fileKey(), current.fileKey());
     }
 
     /**
@@ -1420,6 +1608,7 @@ final class FileManager {
         }
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
         synchronized (fileLock(r.cipherPath())) {
+            bumpTargetVersion(r.cipherPath());
             try (SeekableByteChannel ch = openChannel(r.cipherPath(), offset, true, syncPolicy)) {
                 ByteBuffer buf = ByteBuffer.wrap(data);
                 while (buf.hasRemaining()) {
@@ -1463,6 +1652,7 @@ final class FileManager {
         }
         PathResolver.Resolved r = pathResolver.resolve(plainFile);
         synchronized (fileLock(r.cipherPath())) {
+            bumpTargetVersion(r.cipherPath());
             try (SharedCipherFile cf = openCipherFileByName(r.cipherPath(), true, syncPolicy)) {
                 cf.truncate(newSize);
             }
@@ -1585,6 +1775,7 @@ final class FileManager {
         boolean wroteName = nameManager.prepareLongName(r);
         try {
             store.createFile(r.cipherPath());
+            bumpTargetVersion(r.cipherPath());
         } catch (IOException | RuntimeException e) {
             if (wroteName) {
                 nameManager.removeLongName(r);
@@ -1606,6 +1797,7 @@ final class FileManager {
         boolean wroteName = nameManager.prepareLongName(r);
         try {
             store.mkdir(r.cipherPath());
+            bumpTargetVersion(r.cipherPath());
         } catch (IOException | RuntimeException e) {
             if (wroteName) {
                 nameManager.removeLongName(r);
@@ -1644,6 +1836,7 @@ final class FileManager {
         Lock channelLock = channelGuard.writeLock();
         channelLock.lock();
         try {
+            bumpWatchedTargets(r.cipherPath());
             if (store.stat(r.cipherPath()).isDirectory()) {
                 cleanupInternalEntries(r.cipherPath());
                 removeEmptyDir(r.cipherPath());
@@ -1762,6 +1955,8 @@ final class FileManager {
             wroteName = nameManager.prepareLongName(to);
             journalMoves = prepareJournalMoves(from.cipherPath(), to.cipherPath());
             store.rename(from.cipherPath(), to.cipherPath(), replaceExisting);
+            bumpWatchedTargets(from.cipherPath());
+            bumpWatchedTargets(to.cipherPath());
         } catch (IOException | RuntimeException e) {
             rollbackJournalMoves(journalMoves, e);
             // Restore the target's diriv so a failed directory replace leaves
@@ -1852,6 +2047,7 @@ final class FileManager {
         try {
             String cTarget = encryptSymlinkTarget(target, enc, nameTransform, plaintextNames);
             store.createSymlink(r.cipherPath(), cTarget);
+            bumpTargetVersion(r.cipherPath());
         } catch (IOException | RuntimeException e) {
             if (wroteName) {
                 nameManager.removeLongName(r);

@@ -2569,7 +2569,7 @@ public final class GocryptFs implements AutoCloseable {
         try {
             ensureOpen();
             ensureWritable();
-            return fileManager.openWrite(plainFile);
+            return new LockedWriteStream(fileManager.openWrite(plainFile));
         } finally {
             writeLock.unlock();
         }
@@ -2591,7 +2591,7 @@ public final class GocryptFs implements AutoCloseable {
         try {
             ensureOpen();
             ensureWritable();
-            return fileManager.openWrite(plainFile, syncPolicy);
+            return new LockedWriteStream(fileManager.openWrite(plainFile, syncPolicy));
         } finally {
             writeLock.unlock();
         }
@@ -3057,6 +3057,63 @@ public final class GocryptFs implements AutoCloseable {
             }
         } finally {
             writeLock.unlock();
+        }
+    }
+
+    /**
+     * Wraps a staged output stream so that committing or aborting it runs under
+     * the filesystem write lock. This makes the final conflict check and the
+     * replacement atomic with respect to concurrent filesystem operations.
+     */
+    private final class LockedWriteStream extends AbortableOutputStream {
+
+        /** The stream doing the actual staging and commit work. */
+        private final AbortableOutputStream delegate;
+
+        /**
+         * Creates a locking wrapper.
+         *
+         * @param delegate the staged output stream
+         */
+        LockedWriteStream(AbortableOutputStream delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public void write(int b) throws IOException {
+            delegate.write(b);
+        }
+
+        @Override
+        public void write(byte[] b, int off, int len) throws IOException {
+            delegate.write(b, off, len);
+        }
+
+        @Override
+        public void flush() throws IOException {
+            delegate.flush();
+        }
+
+        @Override
+        public void close() throws IOException {
+            Lock writeLock = acquireWriteLock();
+            try {
+                ensureOpen();
+                delegate.close();
+            } finally {
+                writeLock.unlock();
+            }
+        }
+
+        @Override
+        public void abort() throws IOException {
+            Lock writeLock = acquireWriteLock();
+            try {
+                ensureOpen();
+                delegate.abort();
+            } finally {
+                writeLock.unlock();
+            }
         }
     }
 }

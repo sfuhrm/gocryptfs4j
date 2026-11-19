@@ -670,6 +670,50 @@ class GocryptFsTest {
     }
 
     @Test
+    void openWriteRejectsDirectory() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
+            fs.mkdir("/dir");
+
+            assertThrows(IOException.class, () -> fs.openWrite("/dir"),
+                    "a directory cannot be replaced by a streaming write");
+            assertFalse(hasWriteStagingFile(cipherDir),
+                    "a rejected directory target must not leave staged data");
+        }
+    }
+
+    @Test
+    void openWriteFailsWhenTargetChangesBeforeClose() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        byte[] old = "0123456789".getBytes(StandardCharsets.UTF_8);
+        byte[] staged = "abcdefghij".getBytes(StandardCharsets.UTF_8);
+        byte[] concurrent = "ABCDEFGHIJ".getBytes(StandardCharsets.UTF_8);
+
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), "pw".toCharArray())) {
+            fs.createFile("/f.txt");
+            fs.write("/f.txt", 0, old);
+
+            AbortableOutputStream out = fs.openWrite("/f.txt");
+            try {
+                out.write(staged);
+                fs.write("/f.txt", 0, concurrent);
+
+                assertThrows(IOException.class, out::close,
+                        "closing must detect a target changed by another writer");
+                assertArrayEquals(concurrent, fs.readAll("/f.txt"),
+                        "the concurrent write must not be silently lost");
+                assertFalse(hasWriteStagingFile(cipherDir),
+                        "a rejected commit must remove its staging file");
+            } finally {
+                out.abort();
+            }
+        }
+    }
+
+    @Test
     void openWriteAbortDiscardsStagedContent() throws IOException {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
