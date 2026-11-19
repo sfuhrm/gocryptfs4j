@@ -11,6 +11,7 @@ import de.sfuhrm.gocryptfs4j.crypto.Hkdf;
 import de.sfuhrm.gocryptfs4j.crypto.Keys;
 import de.sfuhrm.gocryptfs4j.fido2.Fido2Token;
 import de.sfuhrm.gocryptfs4j.names.NameTransform;
+import de.sfuhrm.gocryptfs4j.store.CipherChannel;
 import de.sfuhrm.gocryptfs4j.store.CipherNode;
 import de.sfuhrm.gocryptfs4j.store.CipherStore;
 import de.sfuhrm.gocryptfs4j.store.CipherStores;
@@ -31,6 +32,7 @@ import java.nio.file.attribute.UserPrincipal;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
@@ -644,7 +646,7 @@ public final class GocryptFs implements AutoCloseable {
      * @param masterKey the 32-byte master key; cloned, so the caller's array is
      *                  neither retained nor wiped by this class
      * @return the opened filesystem
-     * @throws IOException if the config is missing or the filesystem is corrupt
+     * @throws IOException if the config is missing, the master key is wrong or the filesystem is corrupt
      * @throws NullPointerException if {@code store} or {@code masterKey} is {@code null}
      * @throws IllegalArgumentException if {@code masterKey} is not 32 bytes long
      */
@@ -661,8 +663,9 @@ public final class GocryptFs implements AutoCloseable {
      *                  neither retained nor wiped by this class
      * @param options   the policy for downgrade-prone config modes
      * @return the opened filesystem
-     * @throws IOException if the config is missing, the config selects a mode
-     *                     the options do not allow, or the filesystem is corrupt
+     * @throws IOException if the config is missing, the master key is wrong,
+     *                     the config selects a mode the options do not allow, or
+     *                     the filesystem is corrupt
      * @throws NullPointerException if {@code store}, {@code masterKey} or
      *                              {@code options} is {@code null}
      * @throws IllegalArgumentException if {@code masterKey} is not 32 bytes long
@@ -682,8 +685,9 @@ public final class GocryptFs implements AutoCloseable {
      * @param options   the policy for downgrade-prone config modes
      * @param readOnly  whether to open without a writer lock and for reading only
      * @return the opened filesystem
-     * @throws IOException if the config is missing, the config selects a mode
-     *                     the options do not allow, or the filesystem is corrupt
+     * @throws IOException if the config is missing, the master key is wrong,
+     *                     the config selects a mode the options do not allow, or
+     *                     the filesystem is corrupt
      * @throws NullPointerException if {@code store}, {@code masterKey} or
      *                              {@code options} is {@code null}
      * @throws IllegalArgumentException if {@code masterKey} is not 32 bytes long
@@ -708,8 +712,9 @@ public final class GocryptFs implements AutoCloseable {
      * @param masterKey the 32-byte master key
      * @param options   the policy for downgrade-prone config modes
      * @return the opened read-only filesystem
-     * @throws IOException if the config is missing, the config selects a mode
-     *                     the options do not allow, or the filesystem is corrupt
+     * @throws IOException if the config is missing, the master key is wrong,
+     *                     the config selects a mode the options do not allow, or
+     *                     the filesystem is corrupt
      * @throws NullPointerException if {@code store}, {@code masterKey} or
      *                              {@code options} is {@code null}
      * @throws IllegalArgumentException if {@code masterKey} is not 32 bytes long
@@ -728,7 +733,7 @@ public final class GocryptFs implements AutoCloseable {
      *                  neither retained nor wiped by this class
      * @param readOnly  whether to open without a writer lock and for reading only
      * @return the opened filesystem
-     * @throws IOException if the config is missing or the filesystem is corrupt
+     * @throws IOException if the config is missing, the master key is wrong or the filesystem is corrupt
      * @throws NullPointerException if {@code store} or {@code masterKey} is {@code null}
      * @throws IllegalArgumentException if {@code masterKey} is not 32 bytes long
      */
@@ -744,7 +749,7 @@ public final class GocryptFs implements AutoCloseable {
      * @param store     the ciphertext-side store
      * @param masterKey the 32-byte master key
      * @return the opened read-only filesystem
-     * @throws IOException if the config is missing or the filesystem is corrupt
+     * @throws IOException if the config is missing, the master key is wrong or the filesystem is corrupt
      * @throws NullPointerException if {@code store} or {@code masterKey} is {@code null}
      * @throws IllegalArgumentException if {@code masterKey} is not 32 bytes long
      */
@@ -760,7 +765,7 @@ public final class GocryptFs implements AutoCloseable {
      * @param masterKey  the 32-byte master key
      * @param syncPolicy when buffered writes are flushed to storage
      * @return the opened filesystem
-     * @throws IOException if the config is missing or the filesystem is corrupt
+     * @throws IOException if the config is missing, the master key is wrong or the filesystem is corrupt
      * @throws NullPointerException if {@code store}, {@code masterKey} or {@code syncPolicy} is {@code null}
      * @throws IllegalArgumentException if {@code masterKey} is not 32 bytes long
      */
@@ -778,7 +783,7 @@ public final class GocryptFs implements AutoCloseable {
      * @param readOnly   whether to open without a writer lock and for reading only
      * @param syncPolicy when buffered writes are flushed to storage
      * @return the opened filesystem
-     * @throws IOException if the config is missing or the filesystem is corrupt
+     * @throws IOException if the config is missing, the master key is wrong or the filesystem is corrupt
      * @throws NullPointerException if {@code store}, {@code masterKey} or {@code syncPolicy} is {@code null}
      * @throws IllegalArgumentException if {@code masterKey} is not 32 bytes long
      */
@@ -797,7 +802,7 @@ public final class GocryptFs implements AutoCloseable {
      * @param syncPolicy when buffered writes are flushed to storage
      * @param readOnly   whether to open without a writer lock and for reading only
      * @return the opened filesystem
-     * @throws IOException if the config is missing or the filesystem is corrupt
+     * @throws IOException if the config is missing, the master key is wrong or the filesystem is corrupt
      * @throws NullPointerException if {@code store}, {@code masterKey} or {@code syncPolicy} is {@code null}
      * @throws IllegalArgumentException if {@code masterKey} is not 32 bytes long
      */
@@ -814,7 +819,7 @@ public final class GocryptFs implements AutoCloseable {
      * @param masterKey  the 32-byte master key
      * @param syncPolicy when buffered writes are flushed to storage
      * @return the opened read-only filesystem
-     * @throws IOException if the config is missing or the filesystem is corrupt
+     * @throws IOException if the config is missing, the master key is wrong or the filesystem is corrupt
      * @throws NullPointerException if {@code store}, {@code masterKey} or {@code syncPolicy} is {@code null}
      * @throws IllegalArgumentException if {@code masterKey} is not 32 bytes long
      */
@@ -831,6 +836,7 @@ public final class GocryptFs implements AutoCloseable {
         try {
             ConfigFile config = ConfigFile.load(store);
             checkOpenPolicy(config, options);
+            verifyMasterKey(store, config, masterKey);
             GocryptFs fs = new GocryptFs(store, config, masterKey.clone(), ownsStore,
                     readOnly, rootLock);
             fs.cleanupOrphans();
@@ -841,6 +847,228 @@ public final class GocryptFs implements AutoCloseable {
                 closeQuietly(rootLock);
             }
         }
+    }
+
+    /**
+     * Verifies a raw master key before it is used to open a filesystem.
+     *
+     * <p>Only data already authenticated by the key can prove that it is
+     * correct, so the key is checked against an existing file content block or
+     * symlink target. This does not change the config or add anything to the
+     * vault, and works for filesystems created by gocryptfs as well. An empty
+     * vault contains no authenticated data and therefore cannot be checked.</p>
+     *
+     * @param store     the ciphertext-side store
+     * @param config    the loaded config
+     * @param masterKey the candidate master key
+     * @throws IOException if the key does not match the filesystem
+     */
+    private static void verifyMasterKey(CipherStore store, ConfigFile config, byte[] masterKey)
+            throws IOException {
+        Boolean verified = verifyMasterKeyAgainstContent(store, config, masterKey);
+        if (Boolean.FALSE.equals(verified)) {
+            throw new IOException("master key does not match this filesystem");
+        }
+    }
+
+    /**
+     * Best-effort verification of a raw master key against existing ciphertext.
+     *
+     * <p>Only file content blocks and symlink targets are authenticated by the
+     * key; encrypted file names are not, so they cannot prove that a key is
+     * correct. The scan stops as soon as one authenticated value is found and
+     * is bounded in depth and size, so opening a normal vault stays cheap.</p>
+     *
+     * @param store     the ciphertext-side store
+     * @param config    the loaded config
+     * @param masterKey the candidate master key
+     * @return {@link Boolean#TRUE} if the key was proven correct,
+     *         {@link Boolean#FALSE} if authenticated data rejected it, or
+     *         {@code null} if there was nothing to check
+     * @throws IOException on storage errors
+     */
+    private static @Nullable Boolean verifyMasterKeyAgainstContent(
+            CipherStore store, ConfigFile config, byte[] masterKey) throws IOException {
+        return verifyMasterKeyAgainstContent(store, config, masterKey, store.root(), 0,
+                new int[]{0});
+    }
+
+    /**
+     * Recursively probes a ciphertext directory for authenticated content.
+     *
+     * @param store     the ciphertext-side store
+     * @param config    the loaded config
+     * @param masterKey the candidate master key
+     * @param dir       the ciphertext directory to scan
+     * @param depth     the current recursion depth
+     * @param visited   a one-element counter bounding the number of entries
+     * @return {@link Boolean#TRUE} if the key was proven correct,
+     *         {@link Boolean#FALSE} if authenticated data rejected it, or
+     *         {@code null} if nothing verifiable was found
+     * @throws IOException on storage errors
+     */
+    private static @Nullable Boolean verifyMasterKeyAgainstContent(
+            CipherStore store, ConfigFile config, byte[] masterKey, String dir, int depth,
+            int[] visited) throws IOException {
+        if (depth > 16) {
+            return null;
+        }
+        boolean rejected = false;
+        for (CipherNode node : store.list(dir)) {
+            if (++visited[0] > 1024) {
+                break;
+            }
+            String name = node.name();
+            if (isControlEntry(name)) {
+                continue;
+            }
+            String path = PathResolver.join(dir, name);
+            if (node.isRegularFile()) {
+                Boolean result = verifyMasterKeyAgainstFile(store, config, masterKey, path);
+                if (Boolean.TRUE.equals(result)) {
+                    return Boolean.TRUE;
+                }
+                rejected |= Boolean.FALSE.equals(result);
+            } else if (node.isDirectory()) {
+                Boolean result = verifyMasterKeyAgainstContent(store, config, masterKey,
+                        path, depth + 1, visited);
+                if (Boolean.TRUE.equals(result)) {
+                    return Boolean.TRUE;
+                }
+                rejected |= Boolean.FALSE.equals(result);
+            } else if (node.isSymbolicLink() && !config.plaintextNames()) {
+                Boolean result = verifyMasterKeyAgainstSymlink(store, config, masterKey, path);
+                if (Boolean.TRUE.equals(result)) {
+                    return Boolean.TRUE;
+                }
+                rejected |= Boolean.FALSE.equals(result);
+            }
+        }
+        return rejected ? Boolean.FALSE : null;
+    }
+
+    /**
+     * Checks one ciphertext symlink target against a raw key.
+     *
+     * @param store     the ciphertext-side store
+     * @param config    the loaded config
+     * @param masterKey the candidate master key
+     * @param path      the ciphertext path of the symlink
+     * @return {@link Boolean#TRUE} if the target authenticated,
+     *         {@link Boolean#FALSE} if authentication failed, or {@code null}
+     *         if the target cannot be used as a check
+     * @throws IOException on storage errors
+     */
+    private static @Nullable Boolean verifyMasterKeyAgainstSymlink(
+            CipherStore store, ConfigFile config, byte[] masterKey, String path)
+            throws IOException {
+        String target = store.readSymlink(path);
+        if (target.isEmpty()) {
+            return null;
+        }
+        byte[] ciphertext;
+        try {
+            ciphertext = Base64.getUrlDecoder().decode(target);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+        ContentEnc enc = config.contentEnc(masterKey);
+        try {
+            enc.decryptBlock(ciphertext, 0, null);
+            return Boolean.TRUE;
+        } catch (GeneralSecurityException e) {
+            return Boolean.FALSE;
+        } catch (IllegalArgumentException e) {
+            return null;
+        } finally {
+            enc.wipe();
+        }
+    }
+
+    /**
+     * Checks one ciphertext file's first content block against a raw key.
+     *
+     * @param store     the ciphertext-side store
+     * @param config    the loaded config
+     * @param masterKey the candidate master key
+     * @param path      the ciphertext path of the file
+     * @return {@link Boolean#TRUE} if the block authenticated,
+     *         {@link Boolean#FALSE} if authentication failed, or {@code null}
+     *         if the file has no verifiable content
+     * @throws IOException on storage errors
+     */
+    private static @Nullable Boolean verifyMasterKeyAgainstFile(
+            CipherStore store, ConfigFile config, byte[] masterKey, String path)
+            throws IOException {
+        CipherChannel channel = null;
+        CipherFile file = null;
+        ContentEnc enc = null;
+        try {
+            channel = store.open(path, false);
+            if (channel.size() <= Constants.HEADER_LEN) {
+                return null;
+            }
+            enc = config.contentEnc(masterKey);
+            file = CipherFile.open(channel, enc, false);
+            byte[] plain = new byte[file.blockSize()];
+            int read = file.readBlock(0, plain, 0);
+            // Sparse zero-filled blocks are not authenticated; only a real
+            // plaintext block proves that the key is correct.
+            for (int i = 0; i < read; i++) {
+                if (plain[i] != 0) {
+                    return Boolean.TRUE;
+                }
+            }
+            return null;
+        } catch (IOException e) {
+            return isAuthenticationFailure(e) ? Boolean.FALSE : null;
+        } finally {
+            if (file != null) {
+                closeQuietly(file);
+            } else {
+                if (channel != null) {
+                    closeQuietly(channel);
+                }
+                if (enc != null) {
+                    enc.wipe();
+                }
+            }
+        }
+    }
+
+    /**
+     * Returns whether {@code name} is a gocryptfs control file rather than a
+     * user entry that could carry authenticated content.
+     *
+     * @param name the ciphertext name
+     * @return {@code true} for control files
+     */
+    private static boolean isControlEntry(String name) {
+        if (name.startsWith(Constants.LONG_NAME_PREFIX)) {
+            return name.endsWith(Constants.LONG_NAME_SUFFIX);
+        }
+        return name.equals(Constants.CONF_DEFAULT_NAME)
+                || name.equals(Constants.DIR_IV_FILENAME)
+                || name.startsWith(Constants.RESERVED_ROOT_PREFIX)
+                || name.startsWith(Constants.INTERNAL_NAME_PREFIX);
+    }
+
+    /**
+     * Returns whether an I/O failure ultimately came from AEAD authentication.
+     *
+     * @param failure the failure to inspect
+     * @return {@code true} if an authentication failure is in the cause chain
+     */
+    private static boolean isAuthenticationFailure(Throwable failure) {
+        for (Throwable t = failure; t != null; t = t.getCause()) {
+            if (t instanceof GeneralSecurityException) {
+                return true;
+            }
+            if (t.getCause() == t) {
+                break;
+            }
+        }
+        return false;
     }
 
     /**

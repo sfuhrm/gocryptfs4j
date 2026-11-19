@@ -63,6 +63,31 @@ class GocryptFsTest {
     }
 
     @Test
+    void openWithWrongMasterKeyIsRejected() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+
+        byte[] masterKey;
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir),
+                "pw".toCharArray())) {
+            fs.createFile("/hello.txt");
+            fs.write("/hello.txt", 0, "secret".getBytes(StandardCharsets.UTF_8));
+            masterKey = fs.exportMasterKey();
+        }
+
+        byte[] wrongKey = masterKey.clone();
+        wrongKey[0] ^= 1;
+        try (PathCipherStore store = new PathCipherStore(cipherDir)) {
+            assertThrows(IOException.class, () -> GocryptFs.open(store, wrongKey));
+            assertThrows(IOException.class, () -> GocryptFs.openReadOnly(store, wrongKey));
+        }
+        try (GocryptFs fs = GocryptFs.open(new PathCipherStore(cipherDir), masterKey)) {
+            assertEquals("secret", new String(fs.readAll("/hello.txt"),
+                    StandardCharsets.UTF_8));
+        }
+    }
+
+    @Test
     void openRejectsPlaintextNamesByDefault() throws IOException {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
