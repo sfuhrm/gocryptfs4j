@@ -59,6 +59,12 @@
         <module.name>de.sfuhrm.gocryptfs4j</module.name>
         <!-- Empty default so forked tests still start when JaCoCo is skipped. -->
         <jacoco.argLine/>
+        <!-- Burn-in tests are tagged and skipped unless -Pburn-in is active. -->
+        <burnin.groups/>
+        <burnin.excludedGroups>burn-in</burnin.excludedGroups>
+        <burnin.seconds>5</burnin.seconds>
+        <burnin.threads>8</burnin.threads>
+        <burnin.seed>1</burnin.seed>
     </properties>
 
     <dependencyManagement>
@@ -185,6 +191,13 @@
                 <artifactId>maven-failsafe-plugin</artifactId>
                 <configuration>
                     <argLine>${jacoco.argLine}</argLine>
+                    <groups>${burnin.groups}</groups>
+                    <excludedGroups>${burnin.excludedGroups}</excludedGroups>
+                    <systemPropertyVariables>
+                        <burnin.seconds>${burnin.seconds}</burnin.seconds>
+                        <burnin.threads>${burnin.threads}</burnin.threads>
+                        <burnin.seed>${burnin.seed}</burnin.seed>
+                    </systemPropertyVariables>
                 </configuration>
                 <executions>
                     <execution>
@@ -329,6 +342,16 @@
                     </plugin>
                 </plugins>
             </build>
+        </profile>
+        <profile>
+            <id>burn-in</id>
+            <properties>
+                <burnin.groups>burn-in</burnin.groups>
+                <burnin.excludedGroups/>
+                <burnin.seconds>30</burnin.seconds>
+                <burnin.threads>8</burnin.threads>
+                <burnin.seed>1</burnin.seed>
+            </properties>
         </profile>
         <!--
             Static nullness checking with NullAway/Error Prone. Error Prone

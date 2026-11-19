@@ -166,6 +166,40 @@ tests against a matrix of pinned gocryptfs releases (1.4, 1.8.0, 2.0 and the
 current release), downloading each static binary from GitHub releases to catch
 format regressions across the version history.
 
+### Burn-in tests
+
+The concurrency, locking, buffer-coherence and crash-recovery tests live in
+`core/src/test/java/de/sfuhrm/gocryptfs4j/core/burnin/`. They are tagged
+`burn-in` and excluded from normal `mvn verify` runs. Activate the `burn-in`
+profile to run them:
+
+```bash
+# Run the burn-in suite (30 seconds per time-boxed workload, 8 threads).
+mvn -pl core -Pburn-in verify
+
+# Longer soak with more workers and an explicit seed.
+mvn -pl core -Pburn-in -Dburnin.seconds=600 -Dburnin.threads=16 \
+    -Dburnin.seed=42 verify
+
+# Run only the burn-in tests, without re-running the rest of the core build.
+mvn -pl core -Pburn-in -Dburnin.seconds=60 \
+    test-compile failsafe:integration-test failsafe:verify
+```
+
+The workload is configured with these system properties:
+
+| Property          | Default (profile) | Meaning                                                        |
+|-------------------|-------------------|----------------------------------------------------------------|
+| `burnin.seconds`  | `30`              | Duration of each time-boxed workload.                          |
+| `burnin.threads`  | `8`               | Number of worker threads.                                      |
+| `burnin.seed`     | `1`               | Master RNG seed; rerun a failed seed to reproduce the workload. |
+
+The suite covers a mixed writer/reader workload with a plaintext oracle,
+concurrent range writes and appends, every `SyncPolicy`, block-boundary and
+sparse accesses, multi-instance root locking, and simulated crashes at the
+journal/force boundaries. It needs no `gocryptfs` binary or FUSE, and a stalled
+run dumps all thread stacks to help diagnose deadlocks.
+
 ## Usage
 
 ### 1. Plain Java API (`core` module)
