@@ -250,6 +250,25 @@ public final class GocryptFs implements AutoCloseable {
     }
 
     /**
+     * Removes stale internal temporaries and orphaned journals. Only a writable
+     * instance, which holds the cipher root lock, may do this; a read-only
+     * instance never writes to the cipher directory.
+     *
+     * <p>Cleanup is best effort: an unrelated stale file that cannot be removed
+     * must not prevent the filesystem from opening.</p>
+     */
+    private void cleanupOrphans() {
+        if (readOnly) {
+            return;
+        }
+        try {
+            fileManager.cleanupOrphans();
+        } catch (IOException | RuntimeException ignored) {
+            // Best effort; the filesystem itself is still usable.
+        }
+    }
+
+    /**
      * Deletes the control files this create call actually created, ignoring any
      * failure. Files that already existed (in particular a config written by a
      * concurrent creator that won the race) are never removed. The config is
@@ -608,6 +627,7 @@ public final class GocryptFs implements AutoCloseable {
             checkOpenPolicy(config, options);
             byte[] masterKey = config.decryptMasterKey(password);
             GocryptFs fs = new GocryptFs(store, config, masterKey, ownsStore, readOnly, rootLock);
+            fs.cleanupOrphans();
             ok = true;
             return fs;
         } finally {
@@ -813,6 +833,7 @@ public final class GocryptFs implements AutoCloseable {
             checkOpenPolicy(config, options);
             GocryptFs fs = new GocryptFs(store, config, masterKey.clone(), ownsStore,
                     readOnly, rootLock);
+            fs.cleanupOrphans();
             ok = true;
             return fs;
         } finally {
@@ -947,6 +968,7 @@ public final class GocryptFs implements AutoCloseable {
                 byte[] masterKey = config.decryptMasterKey(secret);
                 GocryptFs fs = new GocryptFs(store, config, masterKey, ownsStore, readOnly,
                         rootLock);
+                fs.cleanupOrphans();
                 ok = true;
                 return fs;
             } catch (IOException e) {
@@ -1341,6 +1363,7 @@ public final class GocryptFs implements AutoCloseable {
                 }
                 store.writeConfig(configName, configBytes, false);
                 configCreated = true;
+                fs.cleanupOrphans();
                 ok = true;
                 return fs;
             } catch (FileAlreadyExistsException e) {
@@ -1536,6 +1559,7 @@ public final class GocryptFs implements AutoCloseable {
                         }
                         store.writeConfig(configName, configBytes, false);
                         configCreated = true;
+                        fs.cleanupOrphans();
                         created = true;
                         ok = true;
                         return fs;

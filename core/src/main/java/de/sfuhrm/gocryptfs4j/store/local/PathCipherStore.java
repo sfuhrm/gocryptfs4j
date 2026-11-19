@@ -247,6 +247,11 @@ public final class PathCipherStore implements CipherStore {
     }
 
     @Override
+    public void writeJournal(String name, byte[] data) throws IOException {
+        delegate.writeJournal(name, data);
+    }
+
+    @Override
     public void writeConfig(String name, byte[] data, boolean overwrite) throws IOException {
         delegate.writeConfig(name, data, overwrite);
     }

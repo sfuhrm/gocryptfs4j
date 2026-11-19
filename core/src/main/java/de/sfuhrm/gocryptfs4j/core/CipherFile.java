@@ -57,6 +57,13 @@ public final class CipherFile implements AutoCloseable {
     private boolean dirty;
 
     /**
+     * Whether the current journal record has not yet been fully applied and
+     * forced. Such a journal must survive close so the next open can finish the
+     * update; only a record whose data is already durable may be cleared.
+     */
+    private boolean journalPending;
+
+    /**
      * Creates an instance over an open channel.
      *
      * @param channel  the underlying file channel
@@ -177,25 +184,188 @@ public final class CipherFile implements AutoCloseable {
         if (!writable) {
             throw new IOException("pending write-ahead journal for a read-only file");
         }
-        byte[] id = fileId();
-        if (!record.matches(id)) {
-            // The journal belongs to an older file that used the same name.
+        byte[] id;
+        if (record.hasHeader()) {
+            if (!recoverHeader(record)) {
+                // The header belongs to an older file that used the same name,
+                // or it is not a valid header at all.
+                journal.clear();
+                return;
+            }
+            id = record.fileId.clone();
+        } else {
+            try {
+                id = fileId();
+            } catch (IOException e) {
+                // The header itself was torn, and this record does not carry a
+                // replacement. There is nothing safe to replay.
+                journal.clear();
+                return;
+            }
+            if (!record.matches(id)) {
+                // The journal belongs to an older file that used the same name.
+                journal.clear();
+                return;
+            }
+        }
+        if (id == null) {
+            // An empty file has no id for a block record to belong to.
+            journal.clear();
+            return;
+        }
+        if (!recordAppliesToFile(record, id, record.hasHeader())) {
+            // A malformed or forged journal must never make recovery write at a
+            // huge sparse offset, truncate to an arbitrary size, or fail the
+            // open with an unbounded exception.
             journal.clear();
             return;
         }
         if (record.blockNo >= 0 && record.block.length > 0) {
-            writeCipherRange(enc.blockNoToCipherOff(record.blockNo), record.block);
+            writeCipherRange(cipherOffset(record.blockNo, record.block.length), record.block);
         }
         if (record.targetCipherSize >= 0) {
             channel.truncate(record.targetCipherSize);
         }
         channel.force(true);
         dirty = false;
+        journalPending = false;
         if (record.targetCipherSize == 0) {
             fileId = null;
             fileIdLoaded = false;
         }
         journal.clear();
+    }
+
+    /**
+     * Installs the header carried by a journal record, unless the file already
+     * has a different valid header (which means the record belongs to an older
+     * file that used the same name).
+     *
+     * @param record the journal record
+     * @return {@code true} if the record's header is now in place
+     * @throws IOException on filesystem errors
+     */
+    private boolean recoverHeader(CipherJournal.Record record) throws IOException {
+        byte[] replacement = record.header;
+        if (replacement.length != Constants.HEADER_LEN) {
+            return false;
+        }
+        byte[] replacementId;
+        try {
+            replacementId = FileHeader.parse(replacement).id();
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+        if (!Arrays.equals(replacementId, record.fileId)) {
+            return false;
+        }
+        long size = channel.size();
+        if (size >= Constants.HEADER_LEN) {
+            byte[] existing = readCipherRange(0, Constants.HEADER_LEN);
+            if (existing.length == Constants.HEADER_LEN) {
+                try {
+                    byte[] existingId = FileHeader.parse(existing).id();
+                    if (!Arrays.equals(existingId, record.fileId)) {
+                        return false;
+                    }
+                    // The header is already in place; only the size or block
+                    // part (if any) still needs to be replayed.
+                    fileId = existingId;
+                    fileIdLoaded = true;
+                    return true;
+                } catch (IllegalArgumentException e) {
+                    // A torn/corrupt header: repairing it is the point of the
+                    // journal record.
+                }
+            }
+        }
+        writeCipherRange(0, replacement);
+        fileId = replacementId;
+        fileIdLoaded = true;
+        return true;
+    }
+
+    /**
+     * Validates a journal record against the file it is about to modify. A
+     * record's ciphertext block must authenticate with the file id at its
+     * block number, which prevents a forged journal from writing arbitrary data
+     * at an attacker-chosen offset. The size fields are bounded so recovery
+     * cannot truncate to, or write at, an absurd position.
+     *
+     * @param record     the journal record
+     * @param id         the current file id
+     * @param headerSeen whether the record carries a header
+     * @return {@code true} if the record can safely be applied
+     */
+    private boolean recordAppliesToFile(CipherJournal.Record record, byte[] id,
+                                         boolean headerSeen) {
+        if (record.block.length == 0) {
+            if (record.blockNo != -1) {
+                return false;
+            }
+            if (record.targetCipherSize < 0) {
+                return true;
+            }
+            if (headerSeen) {
+                // A header-only record ends at the header boundary.
+                return record.targetCipherSize == Constants.HEADER_LEN;
+            }
+            try {
+                return record.targetCipherSize <= channel.size();
+            } catch (IOException e) {
+                return false;
+            }
+        }
+        if (record.blockNo < 0 || record.block.length > enc.cipherBS()) {
+            return false;
+        }
+        // A journalled write always contains real ciphertext. An all-zero block
+        // is a sparse hole, not something writeBlock ever journals, so refuse it
+        // rather than letting a forged record create a huge sparse extension.
+        boolean allZero = true;
+        for (byte b : record.block) {
+            if (b != 0) {
+                allZero = false;
+                break;
+            }
+        }
+        if (allZero) {
+            return false;
+        }
+        long offset = cipherOffset(record.blockNo, record.block.length);
+        if (offset < 0) {
+            return false;
+        }
+        long end = offset + record.block.length;
+        if (record.targetCipherSize >= 0 && record.targetCipherSize != end) {
+            return false;
+        }
+        try {
+            enc.decryptBlocks(record.block, 0, record.block.length, record.blockNo, id,
+                    blockPlain, 0);
+            return true;
+        } catch (GeneralSecurityException | IllegalArgumentException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Returns the ciphertext offset of a journal block, or {@code -1} when the
+     * block number would overflow the offset calculation.
+     *
+     * @param blockNo   the block number
+     * @param blockLen  the ciphertext block length
+     * @return the offset, or {@code -1}
+     */
+    private long cipherOffset(long blockNo, int blockLen) {
+        if (blockNo < 0) {
+            return -1;
+        }
+        long blockSize = enc.cipherBS();
+        if (blockNo > (Long.MAX_VALUE - Constants.HEADER_LEN - blockLen) / blockSize) {
+            return -1;
+        }
+        return enc.blockNoToCipherOff(blockNo);
     }
 
     /**
@@ -311,6 +481,15 @@ public final class CipherFile implements AutoCloseable {
         }
         int len = (int) Math.min(enc.cipherBS(), cipherSize - cipherOffset);
         int read = readCipherRange(cipherOffset, blockCipher, len);
+        if (read > 0 && read < enc.cipherBS() && isAllZero(blockCipher, read)) {
+            // A zero-extended partial tail is a sparse hole, not a block with
+            // an all-zero nonce. Its plaintext is the part before the per-block
+            // overhead, and it must read back as zeros instead of failing with
+            // an all-zero-nonce error.
+            int plainLen = Math.max(read - (int) enc.blockOverhead(), 0);
+            Arrays.fill(out, off, off + plainLen, (byte) 0);
+            return plainLen;
+        }
         return enc.decryptBlocks(blockCipher, 0, read, blockNo, id, out, off);
     }
 
@@ -335,13 +514,20 @@ public final class CipherFile implements AutoCloseable {
         int cipherLen = enc.encryptBlocks(plain, off, len, blockNo, id, blockCipher, 0);
         long cipherOffset = enc.blockNoToCipherOff(blockNo);
         CipherJournal j = journal;
-        if (j != null && cipherOffset < channel.size()) {
-            j.write(new CipherJournal.Record(blockNo, -1, id,
+        if (j != null && cipherLen > 0) {
+            // Journal every block update, including appends and blocks written
+            // past the current end. For an extending write the target size lets
+            // recovery finish a torn append; for an overwrite it stays unchanged.
+            long end = cipherOffset + cipherLen;
+            long currentSize = channel.size();
+            long targetSize = end > currentSize ? end : -1;
+            j.write(new CipherJournal.Record(blockNo, targetSize, id,
                     Arrays.copyOf(blockCipher, cipherLen)));
+            journalPending = true;
             writeCipherRange(cipherOffset, blockCipher, 0, cipherLen);
             channel.force(true);
             dirty = false;
-            j.clear();
+            journalPending = false;
         } else {
             writeCipherRange(cipherOffset, blockCipher, 0, cipherLen);
         }
@@ -416,6 +602,7 @@ public final class CipherFile implements AutoCloseable {
             }
             if (j != null && id != null) {
                 j.write(new CipherJournal.Record(-1, 0, id, new byte[0]));
+                journalPending = true;
                 channel.truncate(0);
                 dirty = true;
                 fileId = null;
@@ -424,7 +611,7 @@ public final class CipherFile implements AutoCloseable {
                 fileIdLoaded = false;
                 channel.force(true);
                 dirty = false;
-                j.clear();
+                journalPending = false;
                 return;
             }
             channel.truncate(0);
@@ -453,13 +640,14 @@ public final class CipherFile implements AutoCloseable {
             CipherJournal j = journal;
             if (j != null) {
                 j.write(new CipherJournal.Record(-1, targetSize, id, new byte[0]));
+                journalPending = true;
             }
             channel.truncate(targetSize);
             dirty = true;
             if (j != null) {
                 channel.force(true);
                 dirty = false;
-                j.clear();
+                journalPending = false;
             }
             return;
         }
@@ -471,6 +659,7 @@ public final class CipherFile implements AutoCloseable {
         CipherJournal j = journal;
         if (j != null) {
             j.write(new CipherJournal.Record(blockNo, targetSize, id, cipherBlock));
+            journalPending = true;
         }
         // Write the re-encrypted partial block first, then truncate the stale
         // tail away. Without a journal a crash between the two steps could
@@ -482,12 +671,14 @@ public final class CipherFile implements AutoCloseable {
         if (j != null) {
             channel.force(true);
             dirty = false;
-            j.clear();
+            journalPending = false;
         }
     }
 
     /**
-     * Forces any updates to this file to be written to the storage device.
+     * Forces any updates to this file to be written to the storage device. The
+     * journal can be removed once the data it describes is durable, so a forced
+     * file does not leave a journal for the next reader to trip over.
      *
      * @param metaData whether metadata updates should be forced as well
      * @throws IOException on filesystem errors
@@ -495,20 +686,22 @@ public final class CipherFile implements AutoCloseable {
     public synchronized void force(boolean metaData) throws IOException {
         channel.force(metaData);
         dirty = false;
+        clearJournalIfWritable();
     }
 
     /**
      * Closes the underlying channel, first forcing any pending content updates
      * to stable storage if the file was opened for writing and has been
-     * modified since the last force, and wipes this file's own
-     * content-encryption key material and the scratch buffers, which may hold
-     * plaintext or ciphertext of the last operation. Calling this method more
-     * than once has no effect.
+     * modified since the last force, then removing any journal record whose
+     * data is already durable. Wipes this file's own content-encryption key
+     * material and the scratch buffers, which may hold plaintext or ciphertext
+     * of the last operation. Calling this method more than once has no effect.
      *
      * @throws IOException on filesystem errors
      */
     @Override
     public synchronized void close() throws IOException {
+        IOException failure = null;
         try {
             // fsync writable files only when a write since the last force would
             // otherwise be lost by a power loss after close(). Read-only files,
@@ -519,6 +712,13 @@ public final class CipherFile implements AutoCloseable {
                 channel.force(true);
                 dirty = false;
             }
+            if (writable) {
+                try {
+                    clearJournalIfWritable();
+                } catch (IOException e) {
+                    failure = e;
+                }
+            }
         } finally {
             try {
                 channel.close();
@@ -527,6 +727,23 @@ public final class CipherFile implements AutoCloseable {
                 Arrays.fill(blockCipher, (byte) 0);
                 Arrays.fill(blockPlain, (byte) 0);
             }
+        }
+        if (failure != null) {
+            throw failure;
+        }
+    }
+
+    /**
+     * Removes the journal record if this file is writable. The record is only
+     * dropped after the data it describes has been forced, so leaving it in
+     * place is also safe; this just avoids making a later read-only open fail.
+     *
+     * @throws IOException on filesystem errors
+     */
+    private void clearJournalIfWritable() throws IOException {
+        CipherJournal j = journal;
+        if (writable && j != null && !journalPending) {
+            j.clear();
         }
     }
 
@@ -539,10 +756,12 @@ public final class CipherFile implements AutoCloseable {
     private byte @Nullable [] loadFileId() throws IOException {
         if (!fileIdLoaded) {
             long size = channel.size();
-            if (size == 0) {
+            if (size < Constants.HEADER_LEN) {
                 // Do not cache an empty file. Another handle or process may
                 // mint a header at any time, so the size has to be re-checked
-                // on the next call.
+                // on the next call. A file shorter than a header is a torn
+                // first write and carries no usable content, so it reads as
+                // empty; a later write mints a fresh header in its place.
                 fileId = null;
                 return null;
             }
@@ -584,9 +803,12 @@ public final class CipherFile implements AutoCloseable {
         if (id == null) {
             // The file looked empty, but another handle may have minted a header
             // between loadFileId's size check and here. Re-check the size and,
-            // if a header appeared, adopt it instead of overwriting it with a
-            // fresh one (which would make every block written so far unreadable).
-            if (channel.size() > 0) {
+            // if a complete header appeared, adopt it instead of overwriting it
+            // with a fresh one (which would make every block written so far
+            // unreadable). A partial header is a torn first write; it carries no
+            // usable content and is replaced below.
+            long size = channel.size();
+            if (size >= Constants.HEADER_LEN) {
                 fileIdLoaded = false;
                 id = loadFileId();
                 if (id == null) {
@@ -594,14 +816,48 @@ public final class CipherFile implements AutoCloseable {
                 }
                 return id;
             }
-            // The file is empty (or was truncated to empty): mint a fresh header.
+            // The file is empty (or has a torn header): mint a fresh header.
             FileHeader h = FileHeader.random();
-            writeCipherRange(0, h.pack());
+            byte[] header = h.pack();
+            CipherJournal j = journal;
+            if (j != null) {
+                // Publish the header before writing it so a crash between the
+                // two leaves a recoverable journal instead of a corrupt file.
+                j.write(new CipherJournal.Record(-1, Constants.HEADER_LEN, h.id(),
+                        new byte[0], header));
+                journalPending = true;
+            }
+            writeCipherRange(0, header);
             fileId = h.id();
             fileIdLoaded = true;
             id = fileId;
+            if (j != null) {
+                // The header must be durable before the next journal record
+                // replaces this one; after that record a torn header would no
+                // longer be recoverable.
+                channel.force(true);
+                dirty = false;
+                journalPending = false;
+                j.clear();
+            }
         }
         return id;
+    }
+
+    /**
+     * Returns whether the first {@code length} bytes of an array are all zero.
+     *
+     * @param data   the array
+     * @param length the number of bytes to inspect
+     * @return {@code true} if every inspected byte is zero
+     */
+    private static boolean isAllZero(byte[] data, int length) {
+        for (int i = 0; i < length; i++) {
+            if (data[i] != 0) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

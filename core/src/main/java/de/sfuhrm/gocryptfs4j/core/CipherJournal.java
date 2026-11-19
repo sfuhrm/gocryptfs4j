@@ -1,6 +1,7 @@
 package de.sfuhrm.gocryptfs4j.core;
 
 import de.sfuhrm.gocryptfs4j.crypto.Constants;
+import de.sfuhrm.gocryptfs4j.store.CipherNode;
 import de.sfuhrm.gocryptfs4j.store.CipherStore;
 import org.jspecify.annotations.Nullable;
 
@@ -20,10 +21,11 @@ import java.util.Objects;
  * A small write-ahead journal for a single encrypted file.
  *
  * <p>The ciphertext format has no atomic in-place block update. Before a block
- * is overwritten (or a file is shrunk), the new ciphertext and target size are
- * published atomically in a hidden sibling journal. After the main file has
- * been written and forced, the journal is removed. If the process dies in
- * between, the next open replays the journal before any read or write.</p>
+ * is written (including an append), a file is shrunk, or a new file header is
+ * installed, the new ciphertext and target size are published durably in a
+ * hidden sibling journal. After the main file has been written and forced, the
+ * journal can be removed. If the process dies in between, the next open replays
+ * the journal before any read or write.</p>
  *
  * <p>Journal files use the reserved {@code .gocryptfs} prefix and are hidden
  * from directory listings. They are only left behind after a crash and are
@@ -37,8 +39,11 @@ final class CipherJournal {
     /** Journal file format magic. */
     private static final int MAGIC = 0x47434657;
 
-    /** Journal file format version. */
-    private static final byte VERSION = 1;
+    /** Current journal file format version (adds an optional file header). */
+    private static final byte VERSION = 2;
+
+    /** Legacy journal file format version without a header field. */
+    private static final byte VERSION_LEGACY = 1;
 
     /** Maximum accepted ciphertext block length in a journal record. */
     private static final int MAX_BLOCK_LEN = 1 << 20;
@@ -74,11 +79,21 @@ final class CipherJournal {
      * @param cipherFile the ciphertext file whose blocks are journalled
      * @return the journal path
      */
-    private static String journalName(String cipherFile) {
+    static String journalName(String cipherFile) {
         Objects.requireNonNull(cipherFile, "cipherFile");
         int slash = Math.max(cipherFile.lastIndexOf('/'), cipherFile.lastIndexOf('\\'));
         String parent = slash < 0 ? "" : cipherFile.substring(0, slash + 1);
         return parent + NAME_PREFIX + hash(cipherFile);
+    }
+
+    /**
+     * Returns whether a file name has the journal name prefix.
+     *
+     * @param name the file name to test
+     * @return {@code true} if the name is a journal file name
+     */
+    static boolean isJournalName(String name) {
+        return name.startsWith(NAME_PREFIX);
     }
 
     /**
@@ -102,7 +117,13 @@ final class CipherJournal {
     @Nullable Record read() throws IOException {
         byte[] data;
         try {
-            store.stat(journalName);
+            CipherNode node = store.stat(journalName);
+            if (!node.isRegularFile() || node.size() > MAX_BLOCK_LEN + 64) {
+                // Treat an oversized or non-regular journal as unparseable
+                // instead of letting it make the file open fail; a writable
+                // open discards it.
+                return null;
+            }
             data = store.readSmall(journalName, MAX_BLOCK_LEN + 64);
         } catch (NoSuchFileException e) {
             return null;
@@ -132,7 +153,7 @@ final class CipherJournal {
      * @throws IOException on filesystem errors
      */
     void write(Record record) throws IOException {
-        store.writeSmall(journalName, record.encode(), true);
+        store.writeJournal(journalName, record.encode());
     }
 
     /**
@@ -292,13 +313,26 @@ final class CipherJournal {
      */
     private static @Nullable Record parse(byte[] data) {
         try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(data))) {
-            if (in.readInt() != MAGIC || in.readByte() != VERSION) {
+            if (in.readInt() != MAGIC) {
+                return null;
+            }
+            int version = in.readUnsignedByte();
+            if (version != VERSION && version != VERSION_LEGACY) {
                 return null;
             }
             long blockNo = in.readLong();
             long targetCipherSize = in.readLong();
             byte[] fileId = new byte[Constants.HEADER_ID_LEN];
             in.readFully(fileId);
+            byte[] header = new byte[0];
+            if (version >= VERSION) {
+                int headerLength = in.readInt();
+                if (headerLength != 0 && headerLength != Constants.HEADER_LEN) {
+                    return null;
+                }
+                header = new byte[headerLength];
+                in.readFully(header);
+            }
             int length = in.readInt();
             if (length < 0 || length > MAX_BLOCK_LEN) {
                 return null;
@@ -311,7 +345,7 @@ final class CipherJournal {
             if (blockNo < -1 || targetCipherSize < -1) {
                 return null;
             }
-            return new Record(blockNo, targetCipherSize, fileId, block);
+            return new Record(blockNo, targetCipherSize, fileId, block, header);
         } catch (IOException | RuntimeException e) {
             return null;
         }
@@ -355,8 +389,11 @@ final class CipherJournal {
         /** The new ciphertext block, possibly empty. */
         final byte[] block;
 
+        /** A new file header to install before the block, or an empty array. */
+        final byte[] header;
+
         /**
-         * Creates a record.
+         * Creates a record without a header.
          *
          * @param blockNo          the block number, or {@code -1}
          * @param targetCipherSize the target ciphertext size, or {@code -1}
@@ -364,10 +401,34 @@ final class CipherJournal {
          * @param block            the new ciphertext block
          */
         Record(long blockNo, long targetCipherSize, byte[] fileId, byte[] block) {
+            this(blockNo, targetCipherSize, fileId, block, new byte[0]);
+        }
+
+        /**
+         * Creates a record.
+         *
+         * @param blockNo          the block number, or {@code -1}
+         * @param targetCipherSize the target ciphertext size, or {@code -1}
+         * @param fileId           the file id
+         * @param block            the new ciphertext block
+         * @param header           a new file header, or an empty array
+         */
+        Record(long blockNo, long targetCipherSize, byte[] fileId, byte[] block,
+               byte[] header) {
             this.blockNo = blockNo;
             this.targetCipherSize = targetCipherSize;
             this.fileId = fileId.clone();
             this.block = block.clone();
+            this.header = header.clone();
+        }
+
+        /**
+         * Returns whether this record installs a file header.
+         *
+         * @return {@code true} if a header is present
+         */
+        boolean hasHeader() {
+            return header.length != 0;
         }
 
         /**
@@ -394,6 +455,8 @@ final class CipherJournal {
                 out.writeLong(blockNo);
                 out.writeLong(targetCipherSize);
                 out.write(fileId);
+                out.writeInt(header.length);
+                out.write(header);
                 out.writeInt(block.length);
                 out.write(block);
             }

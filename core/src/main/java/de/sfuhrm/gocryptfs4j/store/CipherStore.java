@@ -117,6 +117,25 @@ public interface CipherStore extends AutoCloseable {
     void writeSmall(String name, byte[] data, boolean overwrite) throws IOException;
 
     /**
+     * Writes a small write-ahead journal record durably.
+     *
+     * <p>The journal is not a user-visible file: it only has to survive a crash
+     * if the following data write does, so an in-place overwrite followed by a
+     * force is sufficient. Implementations may override the default atomic
+     * temporary-file write to avoid the extra rename and directory fsync on
+     * every journal update. A partially written record is detected when it is
+     * parsed and is safe to discard because the associated data write has not
+     * happened yet.</p>
+     *
+     * @param name the ciphertext path of the journal
+     * @param data the complete journal record
+     * @throws IOException if the journal cannot be written
+     */
+    default void writeJournal(String name, byte[] data) throws IOException {
+        writeSmall(name, data, true);
+    }
+
+    /**
      * Writes the {@code gocryptfs.conf} control file, atomically replacing any
      * existing file of the same name.
      *

@@ -155,6 +155,17 @@ final class SecurePathStore implements CipherStore {
     }
 
     @Override
+    public void writeJournal(String name, byte[] data) throws IOException {
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(data, "data");
+        // Keep the secure parent pinned while the in-place journal write runs;
+        // the write itself is a path-based overwrite of a hidden, non-user file.
+        try (SecurePath parent = requireParent(name)) {
+            delegate.writeJournal(name, data);
+        }
+    }
+
+    @Override
     public void writeConfig(String name, byte[] data, boolean overwrite) throws IOException {
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(data, "data");

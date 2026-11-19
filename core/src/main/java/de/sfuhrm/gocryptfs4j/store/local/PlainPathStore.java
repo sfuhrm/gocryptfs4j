@@ -127,6 +127,31 @@ final class PlainPathStore implements CipherStore {
     }
 
     @Override
+    public void writeJournal(String name, byte[] data) throws IOException {
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(data, "data");
+        Path p = resolve(name);
+        boolean existed = Files.exists(p, LinkOption.NOFOLLOW_LINKS);
+        // A journal is never user-visible and is discarded if a crash tears it;
+        // writing it in place avoids the temporary file, rename and directory
+        // fsync of the generic atomic small-file write on every data update.
+        try (FileChannel channel = FileChannel.open(p,
+                StandardOpenOption.CREATE, StandardOpenOption.WRITE,
+                StandardOpenOption.TRUNCATE_EXISTING, LinkOption.NOFOLLOW_LINKS)) {
+            ByteBuffer buffer = ByteBuffer.wrap(data);
+            while (buffer.hasRemaining()) {
+                channel.write(buffer);
+            }
+            channel.force(true);
+        }
+        if (!existed) {
+            // Force the new directory entry once, before the associated data
+            // write is allowed to reach stable storage.
+            fsyncDirectory(p.getParent());
+        }
+    }
+
+    @Override
     public void writeConfig(String name, byte[] data, boolean overwrite) throws IOException {
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(data, "data");

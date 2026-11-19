@@ -774,6 +774,75 @@ class FileManagerTest {
     }
 
     @Test
+    void forgedJournalCannotWriteAtHugeOffsetOrGrowFile() throws Exception {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.fileManager.createFile("/f.txt");
+        byte[] data = new byte[]{1, 2, 3};
+        h.fileManager.write("/f.txt", 0, data);
+        String cipherPath = h.pathResolver.resolve("/f.txt").cipherPath();
+        byte[] fileId;
+        try (SharedCipherFile cf = h.fileManager.openCipherFile("/f.txt", true)) {
+            fileId = backingOf(cf).fileId();
+        }
+        long size = h.store.stat(cipherPath).size();
+        CipherJournal journal = new CipherJournal(h.store, cipherPath);
+
+        journal.write(new CipherJournal.Record(Long.MAX_VALUE - 1, -1, fileId,
+                new byte[(int) h.contentEnc.cipherBS()]));
+        try (SharedCipherFile ignored = h.fileManager.openCipherFile("/f.txt", true)) {
+            // The forged record is discarded.
+        }
+        assertFalse(journal.exists());
+        assertEquals(size, h.store.stat(cipherPath).size());
+
+        journal.write(new CipherJournal.Record(-1, Long.MAX_VALUE, fileId, new byte[0]));
+        try (SharedCipherFile ignored = h.fileManager.openCipherFile("/f.txt", true)) {
+            // The forged truncate record is discarded as well.
+        }
+        assertFalse(journal.exists());
+        assertEquals(size, h.store.stat(cipherPath).size());
+        assertArrayEquals(data, h.fileManager.readAll("/f.txt"));
+    }
+
+    @Test
+    void cleanupRemovesStaleTemporariesAndOrphanJournals() throws Exception {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.fileManager.createFile("/keep.txt");
+        h.fileManager.write("/keep.txt", 0, new byte[]{1});
+        h.fileManager.mkdir("/dir");
+        String keep = h.pathResolver.resolve("/keep.txt").cipherPath();
+        String dir = h.pathResolver.resolve("/dir").cipherPath();
+
+        h.store.writeSmall(".gocryptfs-stale.tmp", new byte[]{1}, true);
+        h.store.writeSmall(".gocryptfs-write-abandoned", new byte[]{1}, true);
+        h.store.writeSmall(PathResolver.join(dir, ".gocryptfs-stale.tmp"),
+                new byte[]{1}, true);
+        CipherJournal keepJournal = new CipherJournal(h.store, keep);
+        keepJournal.write(new CipherJournal.Record(-1, -1, new byte[Constants.HEADER_ID_LEN],
+                new byte[0]));
+        CipherJournal orphan = new CipherJournal(h.store, "missing");
+        orphan.write(new CipherJournal.Record(-1, -1, new byte[Constants.HEADER_ID_LEN],
+                new byte[0]));
+        CipherJournal writeJournal = new CipherJournal(h.store, ".gocryptfs-write-abandoned");
+        writeJournal.write(new CipherJournal.Record(-1, -1, new byte[Constants.HEADER_ID_LEN],
+                new byte[0]));
+
+        h.fileManager.cleanupOrphans();
+
+        assertThrows(NoSuchFileException.class,
+                () -> h.store.stat(".gocryptfs-stale.tmp"));
+        assertThrows(NoSuchFileException.class,
+                () -> h.store.stat(".gocryptfs-write-abandoned"));
+        assertThrows(NoSuchFileException.class,
+                () -> h.store.stat(PathResolver.join(dir, ".gocryptfs-stale.tmp")));
+        assertFalse(orphan.exists(), "an orphan journal must be removed");
+        assertFalse(writeJournal.exists(),
+                "the journal of an abandoned staging file must be removed");
+        assertTrue(keepJournal.exists(),
+                "the pending journal of an existing file must be kept");
+    }
+
+    @Test
     void failedOpenDoesNotRetainSharedEntry() throws Exception {
         ManagerHarness h = ManagerHarness.encrypted();
         String cipherPath = h.pathResolver.resolve("/missing.txt").cipherPath();

@@ -29,6 +29,7 @@ import java.nio.file.attribute.UserPrincipal;
 import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -1585,6 +1586,7 @@ final class FileManager {
         channelLock.lock();
         try {
             if (store.stat(r.cipherPath()).isDirectory()) {
+                cleanupInternalEntries(r.cipherPath());
                 removeEmptyDir(r.cipherPath());
             } else {
                 store.delete(r.cipherPath());
@@ -1852,6 +1854,101 @@ final class FileManager {
     // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
+
+    /** Prefix of the hidden staging file used by {@link #openWrite(String)}. */
+    private static final String WRITE_TEMP_PREFIX =
+            Constants.INTERNAL_NAME_PREFIX + "-write-";
+
+    /**
+     * Removes stale internal artifacts left behind by a crash: atomic-write
+     * temporaries, abandoned streaming-write staging files, and journals whose
+     * cipher file no longer exists. This runs only for a writable filesystem,
+     * under the cipher root lock, so another writer cannot be using them.
+     *
+     * <p>A journal for an existing cipher file is intentionally kept: opening
+     * that file replays it. Journals are named after their cipher file, so a
+     * journal with no matching regular file in the same directory is an orphan
+     * (for example the file was deleted before the journal was removed).</p>
+     *
+     * @throws IOException on filesystem errors
+     */
+    void cleanupOrphans() throws IOException {
+        cleanupOrphans(store.root());
+    }
+
+    /**
+     * Recursively removes stale internal artifacts below a cipher directory.
+     *
+     * @param dir the cipher directory
+     * @throws IOException on filesystem errors
+     */
+    private void cleanupOrphans(String dir) throws IOException {
+        List<CipherNode> entries = store.list(dir);
+        cleanupInternalEntries(dir, entries);
+        for (CipherNode entry : entries) {
+            if (entry.isDirectory()
+                    && !entry.name().startsWith(Constants.INTERNAL_NAME_PREFIX)) {
+                cleanupOrphans(PathResolver.join(dir, entry.name()));
+            }
+        }
+    }
+
+    /**
+     * Removes stale internal files directly inside one cipher directory.
+     *
+     * @param dir the cipher directory
+     * @throws IOException on filesystem errors
+     */
+    private void cleanupInternalEntries(String dir) throws IOException {
+        cleanupInternalEntries(dir, store.list(dir));
+    }
+
+    /**
+     * Removes stale internal files directly inside one cipher directory, given
+     * its current listing.
+     *
+     * @param dir     the cipher directory
+     * @param entries the directory listing
+     * @throws IOException on filesystem errors
+     */
+    private void cleanupInternalEntries(String dir, List<CipherNode> entries)
+            throws IOException {
+        List<String> journals = new ArrayList<>();
+        for (CipherNode entry : entries) {
+            if (entry.isDirectory()) {
+                continue;
+            }
+            String name = entry.name();
+            if (!name.startsWith(Constants.INTERNAL_NAME_PREFIX)) {
+                continue;
+            }
+            String path = PathResolver.join(dir, name);
+            if (name.endsWith(".tmp") || name.startsWith(WRITE_TEMP_PREFIX)) {
+                deleteIfExists(store, path);
+                if (name.startsWith(WRITE_TEMP_PREFIX)) {
+                    deleteIfExists(store, CipherJournal.journalName(path));
+                }
+            } else if (CipherJournal.isJournalName(name)) {
+                journals.add(name);
+            }
+        }
+        if (journals.isEmpty()) {
+            return;
+        }
+        Set<String> expected = new HashSet<>();
+        for (CipherNode entry : entries) {
+            if (entry.isRegularFile()
+                    && !entry.name().startsWith(Constants.INTERNAL_NAME_PREFIX)) {
+                String path = PathResolver.join(dir, entry.name());
+                expected.add(PathResolver.baseName(CipherJournal.journalName(path)));
+            }
+        }
+        for (String journal : journals) {
+            if (!expected.contains(journal)) {
+                deleteIfExists(store, PathResolver.join(dir, journal));
+            }
+        }
+    }
 
     /**
      * Removes an empty ciphertext directory together with its

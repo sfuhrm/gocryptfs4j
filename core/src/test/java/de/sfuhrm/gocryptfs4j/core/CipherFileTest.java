@@ -157,6 +157,25 @@ class CipherFileTest {
     }
 
     @Test
+    void tornHeaderReadsAsEmptyAndWriteRepairsIt() throws IOException {
+        ContentEnc enc = enc();
+        Path p = newFile();
+        Files.write(p, new byte[Constants.HEADER_LEN - 1]);
+
+        try (CipherFile cf = open(p, enc, true)) {
+            assertNull(cf.fileId(), "a torn header has no usable file id");
+            assertEquals(0, cf.plainSize());
+
+            cf.writeBlock(0, new byte[]{1, 2, 3}, 0, 3);
+
+            assertNotNull(cf.fileId());
+            byte[] out = new byte[3];
+            assertEquals(3, cf.readBlock(0, out, 0));
+            assertArrayEquals(new byte[]{1, 2, 3}, out);
+        }
+    }
+
+    @Test
     void truncateToZeroRepairsTornHeader() throws IOException {
         ContentEnc enc = enc();
         Path p = newFile();
