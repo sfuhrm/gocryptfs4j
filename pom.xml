@@ -4,7 +4,7 @@
 
     <groupId>de.sfuhrm</groupId>
     <artifactId>gocryptfs4j</artifactId>
-    <version>0.8.2-SNAPSHOT</version>
+    <version>0.8.2</version>
     <packaging>pom</packaging>
 
     <name>gocryptfs4j</name>
@@ -34,7 +34,7 @@
     <scm>
         <url>git@github.com:sfuhrm/gocryptfs4j.git</url>
         <connection>scm:git:git@github.com:sfuhrm/gocryptfs4j.git</connection>
-        <tag>HEAD</tag>
+        <tag>v0.8.2</tag>
     </scm>
 
     <modules>
@@ -58,9 +58,9 @@
         <!-- Name of the module being built; overridden by each subproject. -->
         <module.name>de.sfuhrm.gocryptfs4j</module.name>
         <!-- Empty default so forked tests still start when JaCoCo is skipped. -->
-        <jacoco.argLine/>
+        <jacoco.argLine />
         <!-- Burn-in tests are tagged and skipped unless -Pburn-in is active. -->
-        <burnin.groups/>
+        <burnin.groups />
         <burnin.excludedGroups>burn-in</burnin.excludedGroups>
         <burnin.seconds>5</burnin.seconds>
         <burnin.threads>8</burnin.threads>
@@ -347,7 +347,7 @@
             <id>burn-in</id>
             <properties>
                 <burnin.groups>burn-in</burnin.groups>
-                <burnin.excludedGroups/>
+                <burnin.excludedGroups />
                 <burnin.seconds>30</burnin.seconds>
                 <burnin.threads>8</burnin.threads>
                 <burnin.seed>1</burnin.seed>
