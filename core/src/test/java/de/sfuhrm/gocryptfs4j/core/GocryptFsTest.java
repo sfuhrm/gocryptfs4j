@@ -713,9 +713,14 @@ class GocryptFsTest {
             fs.createFile("/f.txt");
             fs.write("/f.txt", 0, old);
 
-            // Simulate a crash before the returned stream receives any data or
-            // is closed: the old content must still be there.
+            // Simulate a crash after data was written and flushed but before
+            // the stream is closed: readers must still see the old content and
+            // never a mix of the new prefix and the old tail.
             OutputStream abandoned = fs.openWrite("/f.txt");
+            abandoned.write("new content that is longer".getBytes(StandardCharsets.UTF_8));
+            abandoned.flush();
+            assertArrayEquals(old, fs.readAll("/f.txt"),
+                    "an unclosed stream must not expose its staged content");
             fs.close();
             assertNotNull(abandoned);
         }
