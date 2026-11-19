@@ -103,6 +103,13 @@ final class FileManager {
     private final Set<SharedCipherFile.Entry> openEntries = ConcurrentHashMap.newKeySet();
 
     /**
+     * Paths whose last close failed. The next open recovers any journal left by
+     * the failed write with a writable backing file, so a later read is not
+     * blocked by a pending journal that only a writable open may replay.
+     */
+    private final Set<String> retryOpenPaths = ConcurrentHashMap.newKeySet();
+
+    /**
      * Guards channel I/O against the owning filesystem closing or moving and
      * deleting paths. Every entry created here shares this guard so a close can
      * exclude all channels at once while it flushes pending writes and then
@@ -281,21 +288,21 @@ final class FileManager {
         boolean opened = false;
         try {
             synchronized (entry.lock) {
-                IOException failure = entry.failure;
-                if (failure != null) {
-                    // A previous flush failed and its dirty block may have been
-                    // discarded. Never let a reopen hide that loss.
-                    throw failure;
-                }
+                // A failed close may leave a pending journal that only a
+                // writable open may replay. Even a read-only request opens
+                // writable once to recover it, so the failed write cannot block
+                // every later read.
+                boolean recover = entry.closeFailed || retryOpenPaths.contains(cipherFile);
+                boolean openWritable = writable || recover;
                 if (entry.file == null) {
                     // Opening the channel, deriving the content key and
                     // initializing the cipher all happen outside the map's bin
                     // lock, so an unrelated open is never stalled behind this
                     // store or crypto work.
-                    entry.file = openBackingFile(store, cipherFile, writable,
+                    entry.file = openBackingFile(store, cipherFile, openWritable,
                             contentEncFactory);
-                    entry.writable = writable;
-                } else if (writable && !entry.writable) {
+                    entry.writable = openWritable;
+                } else if (openWritable && !entry.writable) {
                     // A read-only shared file is already open (other read-only
                     // handles hold it). Upgrade to a writable channel; the old
                     // one never buffered a write, so it can be retired safely.
@@ -311,6 +318,8 @@ final class FileManager {
                         entry.retired.add(old);
                     }
                 }
+                entry.closeFailed = false;
+                retryOpenPaths.remove(cipherFile);
                 openEntries.add(entry);
             }
             SharedCipherFile handle = new SharedCipherFile(entry, syncPolicy);
@@ -499,9 +508,52 @@ final class FileManager {
     }
 
     /**
+     * Forgets the failed-close recovery state for a path and everything below
+     * it, so a deleted or replaced path does not force a later file at the same
+     * path to open writable.
+     *
+     * @param cipherPath the ciphertext path that is gone
+     */
+    private void forgetRetryPaths(String cipherPath) {
+        String prefix = cipherPath + "/";
+        List<String> keys = new ArrayList<>();
+        for (String key : retryOpenPaths) {
+            if (key.equals(cipherPath) || key.startsWith(prefix)) {
+                keys.add(key);
+            }
+        }
+        for (String key : keys) {
+            retryOpenPaths.remove(key);
+        }
+    }
+
+    /**
+     * Moves the failed-close recovery state of a renamed ciphertext path,
+     * including every file below a renamed directory.
+     *
+     * @param from the source ciphertext path
+     * @param to   the target ciphertext path
+     */
+    private void moveRetryPaths(String from, String to) {
+        forgetRetryPaths(to);
+        String prefix = from + "/";
+        List<String> keys = new ArrayList<>();
+        for (String key : retryOpenPaths) {
+            if (key.equals(from) || key.startsWith(prefix)) {
+                keys.add(key);
+            }
+        }
+        for (String key : keys) {
+            if (retryOpenPaths.remove(key)) {
+                retryOpenPaths.add(key.equals(from) ? to : to + key.substring(from.length()));
+            }
+        }
+    }
+
+    /**
      * Drops a fully released entry from the open-file registry and prunes its
-     * path entry. A failed close stays registered by path so the next open
-     * reports the loss, but its backing file is already gone.
+     * path entry. A failed close is reported by that close; its entry is not
+     * kept behind to poison later opens.
      *
      * @param entry the entry whose last handle was released
      */
@@ -509,6 +561,13 @@ final class FileManager {
         synchronized (entry.lock) {
             if (entry.refs == 0) {
                 openEntries.remove(entry);
+            }
+            if (entry.closeFailed) {
+                String key = entry.key;
+                if (key != null) {
+                    retryOpenPaths.add(key);
+                }
+                entry.closeFailed = false;
             }
         }
         pruneSharedFile(entry);
@@ -528,10 +587,7 @@ final class FileManager {
      */
     private void pruneSharedFile(SharedCipherFile.Entry entry) {
         synchronized (entry.lock) {
-            if (entry.refs != 0 || entry.failure != null) {
-                // A concurrent failed close may have marked the entry after the
-                // release that scheduled this prune. Keep it so the failure
-                // stays visible to the next open.
+            if (entry.refs != 0) {
                 return;
             }
             String key = entry.key;
@@ -595,7 +651,7 @@ final class FileManager {
                     // between the lookup and taking the entry monitor.
                     continue;
                 }
-                if (entry.refs == 0 && entry.failure == null) {
+                if (entry.refs == 0) {
                     if (!sharedFiles.remove(from, entry)) {
                         continue;
                     }
@@ -655,8 +711,8 @@ final class FileManager {
                     }
                 }
                 if (file == null) {
-                    // A failed close keeps the entry registered without a
-                    // backing file; its journal may still be pending.
+                    // An entry without a backing file may still have a pending
+                    // journal that has to move with the path.
                     CipherJournal journal = new CipherJournal(store, key);
                     CipherJournal.Move move = journal.beginMove(renamedCipherPath(from, to, key));
                     if (move != null) {
@@ -1266,6 +1322,7 @@ final class FileManager {
      */
     private @Nullable IOException cleanupWrite(String tempCipherPath) {
         releaseSharedFile(tempCipherPath);
+        forgetRetryPaths(tempCipherPath);
         IOException failure = null;
         try {
             new CipherJournal(store, tempCipherPath).clear();
@@ -1300,6 +1357,8 @@ final class FileManager {
             SharedCipherFile.Entry replaced = sharedFiles.get(targetCipherPath);
             releaseSharedFile(targetCipherPath);
             releaseSharedFile(tempCipherPath);
+            forgetRetryPaths(targetCipherPath);
+            forgetRetryPaths(tempCipherPath);
             Lock channelLock = channelGuard.writeLock();
             channelLock.lock();
             try {
@@ -1593,6 +1652,7 @@ final class FileManager {
                 forgetJournal(r.cipherPath());
             }
             releaseSharedFile(r.cipherPath());
+            forgetRetryPaths(r.cipherPath());
             nameManager.removeLongName(r);
             directoryManager.invalidateDirIvCache(r.cipherPath());
         } finally {
@@ -1731,6 +1791,7 @@ final class FileManager {
         }
         nameManager.removeLongName(from);
         moveSharedFile(from.cipherPath(), to.cipherPath());
+        moveRetryPaths(from.cipherPath(), to.cipherPath());
         directoryManager.invalidateDirIvCache(from.cipherPath());
         directoryManager.invalidateDirIvCache(to.cipherPath());
         if (journalFailure != null) {

@@ -766,10 +766,10 @@ final class DirectoryManager {
                         size = fileManager.plainSizeIncludingWriteBack(
                                 PathResolver.join(cipherDir, cName), node.size());
                     } catch (IOException e) {
-                        // A sticky flush failure makes the write-back-aware
-                        // plaintext size uncomputable. Skip only this entry so a
-                        // single failed file cannot make its whole directory
-                        // unlistable, and report it if a listener was supplied.
+                        // A size lookup can still fail on a storage error. Skip
+                        // only this entry so a single unreadable file cannot
+                        // make its whole directory unlistable, and report it if
+                        // a listener was supplied.
                         reportSkipped(listener, cipherName,
                                 new IOException("cannot determine plaintext size", e));
                         continue;

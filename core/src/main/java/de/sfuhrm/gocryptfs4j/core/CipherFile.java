@@ -64,6 +64,14 @@ public final class CipherFile implements AutoCloseable {
     private boolean journalPending;
 
     /**
+     * Whether the pending journal record may already have modified the main
+     * file. A record whose write failed before touching the file can be
+     * discarded on close; one that may have left a partial write must stay so
+     * the next writable open can finish or replace it.
+     */
+    private boolean journalFileTouched;
+
+    /**
      * Creates an instance over an open channel.
      *
      * @param channel  the underlying file channel
@@ -521,9 +529,8 @@ public final class CipherFile implements AutoCloseable {
             long end = cipherOffset + cipherLen;
             long currentSize = channel.size();
             long targetSize = end > currentSize ? end : -1;
-            j.write(new CipherJournal.Record(blockNo, targetSize, id,
+            publishJournal(new CipherJournal.Record(blockNo, targetSize, id,
                     Arrays.copyOf(blockCipher, cipherLen)));
-            journalPending = true;
             writeCipherRange(cipherOffset, blockCipher, 0, cipherLen);
             channel.force(true);
             dirty = false;
@@ -601,8 +608,8 @@ public final class CipherFile implements AutoCloseable {
                 }
             }
             if (j != null && id != null) {
-                j.write(new CipherJournal.Record(-1, 0, id, new byte[0]));
-                journalPending = true;
+                publishJournal(new CipherJournal.Record(-1, 0, id, new byte[0]));
+                journalFileTouched = true;
                 channel.truncate(0);
                 dirty = true;
                 fileId = null;
@@ -639,8 +646,8 @@ public final class CipherFile implements AutoCloseable {
             long targetSize = enc.blockNoToCipherOff(blockNo + 1);
             CipherJournal j = journal;
             if (j != null) {
-                j.write(new CipherJournal.Record(-1, targetSize, id, new byte[0]));
-                journalPending = true;
+                publishJournal(new CipherJournal.Record(-1, targetSize, id, new byte[0]));
+                journalFileTouched = true;
             }
             channel.truncate(targetSize);
             dirty = true;
@@ -658,14 +665,14 @@ public final class CipherFile implements AutoCloseable {
         long targetSize = blockCipherOff + cipherBlock.length;
         CipherJournal j = journal;
         if (j != null) {
-            j.write(new CipherJournal.Record(blockNo, targetSize, id, cipherBlock));
-            journalPending = true;
+            publishJournal(new CipherJournal.Record(blockNo, targetSize, id, cipherBlock));
         }
         // Write the re-encrypted partial block first, then truncate the stale
         // tail away. Without a journal a crash between the two steps could
         // leave a tail that no longer authenticates; with a journal the next
         // open completes both steps.
         writeCipherRange(blockCipherOff, cipherBlock);
+        journalFileTouched = true;
         channel.truncate(targetSize);
         dirty = true;
         if (j != null) {
@@ -711,6 +718,8 @@ public final class CipherFile implements AutoCloseable {
             if (dirty && writable && channel.isOpen()) {
                 channel.force(true);
                 dirty = false;
+                // The force succeeded, so every journalled change is durable.
+                journalPending = false;
             }
             if (writable) {
                 try {
@@ -742,8 +751,27 @@ public final class CipherFile implements AutoCloseable {
      */
     private void clearJournalIfWritable() throws IOException {
         CipherJournal j = journal;
-        if (writable && j != null && !journalPending) {
+        if (writable && j != null && (!journalPending || !journalFileTouched)) {
+            // Either the data is durable, or the failed write never touched the
+            // main file. In both cases the record has nothing left to recover.
             j.clear();
+            journalPending = false;
+            journalFileTouched = false;
+        }
+    }
+
+    /**
+     * Publishes a new journal record before modifying the main file.
+     *
+     * @param record the record to publish
+     * @throws IOException on filesystem errors
+     */
+    private void publishJournal(CipherJournal.Record record) throws IOException {
+        CipherJournal j = journal;
+        if (j != null) {
+            j.write(record);
+            journalPending = true;
+            journalFileTouched = false;
         }
     }
 
@@ -823,9 +851,8 @@ public final class CipherFile implements AutoCloseable {
             if (j != null) {
                 // Publish the header before writing it so a crash between the
                 // two leaves a recoverable journal instead of a corrupt file.
-                j.write(new CipherJournal.Record(-1, Constants.HEADER_LEN, h.id(),
+                publishJournal(new CipherJournal.Record(-1, Constants.HEADER_LEN, h.id(),
                         new byte[0], header));
-                journalPending = true;
             }
             writeCipherRange(0, header);
             fileId = h.id();
@@ -918,8 +945,18 @@ public final class CipherFile implements AutoCloseable {
     private void writeCipherRange(long offset, byte[] data, int dataOff, int dataLen) throws IOException {
         ByteBuffer bb = ByteBuffer.wrap(data, dataOff, dataLen);
         channel.position(offset);
-        while (bb.hasRemaining()) {
-            channel.write(bb);
+        int start = bb.position();
+        try {
+            while (bb.hasRemaining()) {
+                if (channel.write(bb) > 0) {
+                    journalFileTouched = true;
+                }
+            }
+        } catch (IOException e) {
+            if (bb.position() > start) {
+                journalFileTouched = true;
+            }
+            throw e;
         }
         dirty = true;
     }

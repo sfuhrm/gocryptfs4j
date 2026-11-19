@@ -18,7 +18,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -44,11 +44,12 @@ class FlushFailureTest {
         for (byte b : blockOf(cache)) {
             assertEquals(0, b, "buffered plaintext must be wiped");
         }
-        assertNotNull(entry.failure, "the failed entry must be marked");
+        assertNull(entry.file, "the failed backing file must be released");
+        assertNull(entry.key, "the failed entry must not stay registered by path");
     }
 
     @Test
-    void lastCloseFailureStaysVisibleAcrossSizeStatAndReopen() throws Exception {
+    void lastCloseFailureDoesNotPoisonLaterAccess() throws Exception {
         FailingWriteStore store = new FailingWriteStore();
         ManagerHarness h = ManagerHarness.encrypted(store);
         h.fileManager.createFile("/f.txt");
@@ -62,23 +63,24 @@ class FlushFailureTest {
         assertThrows(IOException.class, cf::close);
 
         store.failWrites = false;
-        assertThrows(IOException.class, () -> h.fileManager.size("/f.txt"),
-                "a later size must report the lost write");
-        assertThrows(IOException.class, () -> h.fileManager.stat("/f.txt"),
-                "a later stat must report the lost write");
-        assertThrows(IOException.class,
-                () -> h.fileManager.openCipherFile("/f.txt", false),
-                "a reopen must report the lost write");
+        // The failed close already reported the lost write. Later access must
+        // start from the on-disk state instead of failing forever with that
+        // stale error.
+        assertEquals(0, h.fileManager.size("/f.txt"));
+        assertEquals(0, h.fileManager.stat("/f.txt").size());
+        try (SharedCipherFile reopened = h.fileManager.openCipherFile("/f.txt", false)) {
+            assertEquals(0, reopened.effectiveSize());
+        }
+        assertEquals(0, h.fileManager.readAll("/f.txt").length);
 
-        // Deleting the damaged file is the explicit way to discard the sticky
-        // failure and start over.
+        // Deleting and recreating still starts over cleanly.
         h.fileManager.delete("/f.txt");
         h.fileManager.createFile("/f.txt");
         assertEquals(0, h.fileManager.readAll("/f.txt").length);
     }
 
     @Test
-    void stickyFailureDoesNotMakeDirectoryUnlistable() throws Exception {
+    void failedFileDoesNotMakeDirectoryUnlistable() throws Exception {
         FailingWriteStore store = new FailingWriteStore();
         ManagerHarness h = ManagerHarness.encrypted(store);
         h.fileManager.createFile("/f.txt");
@@ -97,8 +99,8 @@ class FlushFailureTest {
         List<DirEntry> entries = h.directoryManager.listCipherDir(h.store.root(), iv,
                 (cipherName, reason) -> skipped.add(cipherName));
 
-        assertTrue(entries.isEmpty(), "the failed file must be skipped, not abort the listing");
-        assertEquals(1, skipped.size(), "the skipped file must be reported");
+        assertEquals(1, entries.size(), "the file must remain listable after a failed flush");
+        assertTrue(skipped.isEmpty(), "the recovered file must not be skipped");
     }
 
     @Test
@@ -120,6 +122,28 @@ class FlushFailureTest {
         byte[] read = h.fileManager.readAll("/f.txt");
         assertEquals(payload.length, read.length);
         assertEquals(0x5a, read[0], "the retried write must be durable");
+    }
+
+    @Test
+    void failedForceIsRecoveredByALaterRead() throws Exception {
+        FailingWriteStore store = new FailingWriteStore();
+        ManagerHarness h = ManagerHarness.encrypted(store);
+        h.fileManager.createFile("/f.txt");
+
+        SharedCipherFile cf = h.fileManager.openCipherFile("/f.txt", true);
+        BlockBufferedChannel ch = cf.newChannel(0, true);
+        byte[] payload = new byte[100];
+        java.util.Arrays.fill(payload, (byte) 0x5a);
+        ch.write(ByteBuffer.wrap(payload));
+
+        store.failForces = true;
+        assertThrows(IOException.class, ch::close);
+        assertThrows(IOException.class, cf::close);
+        store.failForces = false;
+
+        // The journalled block is replayed by the next open even though the
+        // caller only asked for a read.
+        assertArrayEquals(payload, h.fileManager.readAll("/f.txt"));
     }
 
     @Test
@@ -234,6 +258,7 @@ class FlushFailureTest {
         private final List<FailingChannel> channels = new ArrayList<>();
         private boolean failWrites;
         private boolean failNextWriteOnly;
+        private boolean failForces;
 
         @Override
         public String root() {
@@ -369,6 +394,9 @@ class FlushFailureTest {
 
         @Override
         public void force(boolean metaData) throws IOException {
+            if (store.failForces) {
+                throw new IOException("simulated force failure");
+            }
             delegate.force(metaData);
         }
     }

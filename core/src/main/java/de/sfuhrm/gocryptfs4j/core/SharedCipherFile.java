@@ -62,10 +62,11 @@ public final class SharedCipherFile implements AutoCloseable {
          */
         @Nullable volatile BlockCache cache;
 
-        @Nullable volatile IOException failure;
-
         /** The map key under which {@link FileManager} currently stores this entry. */
         @Nullable volatile String key;
+
+        /** Whether the last close reported a failed flush. */
+        boolean closeFailed;
 
         /**
          * Guards channel I/O against the owning filesystem closing, or
@@ -125,10 +126,6 @@ public final class SharedCipherFile implements AutoCloseable {
      * @throws ClosedChannelException if the handle is already closed
      */
     private CipherFile file() throws IOException {
-        IOException failure = entry.failure;
-        if (failure != null) {
-            throw failure;
-        }
         CipherFile file = entry.file;
         if (file == null) {
             throw new ClosedChannelException();
@@ -326,14 +323,8 @@ public final class SharedCipherFile implements AutoCloseable {
         Lock ioLock = acquireChannelIo();
         try {
             synchronized (entry.lock) {
-                try {
-                    flushEntry(entry);
-                    file().force(metaData);
-                    entry.failure = null;
-                } catch (IOException e) {
-                    entry.failure = e;
-                    throw e;
-                }
+                flushEntry(entry);
+                file().force(metaData);
             }
         } finally {
             releaseChannelIo(ioLock);
@@ -450,10 +441,6 @@ public final class SharedCipherFile implements AutoCloseable {
      */
     static long effectiveSize(Entry entry) throws IOException {
         synchronized (entry.lock) {
-            IOException failure = entry.failure;
-            if (failure != null) {
-                throw failure;
-            }
             CipherFile file = entry.file;
             long size = file == null ? 0 : file.plainSize();
             BlockCache cache = entry.cache;
@@ -500,22 +487,10 @@ public final class SharedCipherFile implements AutoCloseable {
     static boolean flushEntry(Entry entry) throws IOException {
         BlockCache cache = entry.cache;
         if (cache != null) {
-            try {
-                boolean wrote = cache.flush();
-                entry.failure = null;
-                return wrote;
-            } catch (IOException e) {
-                entry.failure = e;
-                throw e;
-            }
+            return cache.flush();
         }
         // A failed close may have discarded the dirty block already. There is
-        // nothing left to write, but the failure stays visible to later callers
-        // instead of silently looking like a successful flush.
-        IOException failure = entry.failure;
-        if (failure != null) {
-            throw failure;
-        }
+        // nothing left to write, so this is not an error by itself.
         return false;
     }
 
@@ -526,14 +501,10 @@ public final class SharedCipherFile implements AutoCloseable {
      * while the keys are still usable for a retry.
      *
      * @param entry the shared entry
-     * @throws IOException on filesystem errors or a previous sticky failure
+     * @throws IOException on filesystem errors
      */
     static void forceEntry(Entry entry) throws IOException {
         synchronized (entry.lock) {
-            IOException failure = entry.failure;
-            if (failure != null) {
-                throw failure;
-            }
             CipherFile file = entry.file;
             if (file != null && entry.writable) {
                 file.force(true);
@@ -699,20 +670,16 @@ public final class SharedCipherFile implements AutoCloseable {
                         // already-open handles are closed one by one.
                         cache.wipe();
                     }
-                    if (failure != null) {
-                        // Keep the dirty block so a later close or force on
-                        // another still-open handle can retry the failed write.
-                        entry.failure = failure;
-                    }
+                    // A failed flush leaves the dirty block in place so a later
+                    // close or force on another still-open handle can retry it.
                 }
 
-                if (failure != null) {
-                    entry.failure = failure;
-                }
-                // Keep a failed entry registered even after its last handle is
-                // gone, so the next open on this path can report the lost write
-                // instead of silently starting over. A delete/recreate clears
-                // it through FileManager.
+                // Drop the entry once the last handle is gone, even after a
+                // failed flush. The failure was reported to the close that
+                // produced it; later opens must start from the on-disk state
+                // instead of failing forever with that old error. A pending
+                // journal still has to be recovered with a writable open.
+                entry.closeFailed = last && failure != null;
                 releaseAction = last ? entry.releaseAction : null;
             }
             // The registry callback must run outside this entry's monitor: it
