@@ -5,7 +5,7 @@ All notable changes to gocryptfs4j are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.8.2] - Unreleased
+## [0.8.2]
 
 Changes since [v0.8.1](https://github.com/sfuhrm/gocryptfs4j/releases/tag/v0.8.1).
 This release is dominated by concurrency, crash-safety and key-handling fixes.
