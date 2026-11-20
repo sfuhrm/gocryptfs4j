@@ -194,6 +194,23 @@ class ConfigFileTest {
     }
 
     @Test
+    void reencryptMasterKeyRejectsCostThatOpenPathWouldReject() throws Exception {
+        byte[] masterKey = Keys.randomBytes(Constants.KEY_LEN);
+        ConfigFile cf = ConfigFile.create(masterKey, PASSWORD, false, ContentCipherType.AES_GCM);
+        String originalSalt = cf.scryptObject().salt();
+
+        // N=2^19 with R=8 costs 512 MiB, above the open path's ceiling.
+        assertThrows(IllegalArgumentException.class,
+                () -> cf.reencryptMasterKeyCopy(masterKey, "new-password".toCharArray(), 19));
+        assertThrows(IllegalArgumentException.class,
+                () -> cf.reencryptMasterKey(masterKey, "new-password".toCharArray(), 19));
+
+        // The source config is untouched and still unlocks with the old password.
+        assertEquals(originalSalt, cf.scryptObject().salt());
+        assertArrayEquals(masterKey, cf.decryptMasterKey(PASSWORD));
+    }
+
+    @Test
     void reencryptMasterKeyRejectsFido2Config() {
         byte[] masterKey = Keys.randomBytes(Constants.KEY_LEN);
         Fido2Params fido2 = new Fido2Params(new byte[]{1, 2, 3}, new byte[32], null);

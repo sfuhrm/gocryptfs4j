@@ -511,6 +511,31 @@ class GocryptFsTest {
     }
 
     @Test
+    void changePasswordRejectsCostThatCannotBeReopened() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        char[] oldPassword = "old-password".toCharArray();
+        char[] newPassword = "new-password".toCharArray();
+
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), oldPassword)) {
+            fs.createFile("/hello.txt");
+
+            // N=2^19 with R=8 costs 512 MiB and would be rejected on open.
+            assertThrows(IllegalArgumentException.class,
+                    () -> fs.changePassword(newPassword, 19));
+
+            // The failed change must leave the filesystem fully usable.
+            fs.createFile("/still-writable.txt");
+        }
+
+        try (GocryptFs fs = GocryptFs.open(new PathCipherStore(cipherDir), oldPassword)) {
+            assertEquals(DirEntry.Kind.FILE, fs.stat("/still-writable.txt").kind());
+        }
+        assertThrows(IOException.class,
+                () -> GocryptFs.open(new PathCipherStore(cipherDir), newPassword));
+    }
+
+    @Test
     void createReplacesOrphanRootDirIV() throws IOException {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);

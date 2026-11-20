@@ -378,7 +378,20 @@ public final class ConfigFile {
      * @throws IOException if a parameter is missing, malformed or out of range
      */
     private void validateScrypt() throws IOException {
-        ScryptKdf s = scryptObject;
+        validateScryptParameters(scryptObject);
+    }
+
+    /**
+     * Validates a set of scrypt parameters against hard bounds.
+     *
+     * <p>This is shared by the open path, which validates attacker-controlled
+     * on-disk parameters, and the password-change path, which must not write a
+     * config that the open path would reject.</p>
+     *
+     * @param s the scrypt parameters to validate
+     * @throws IOException if a parameter is missing, malformed or out of range
+     */
+    private static void validateScryptParameters(ScryptKdf s) throws IOException {
         if (s == null) {
             throw new IOException("scrypt object is missing");
         }
@@ -709,9 +722,22 @@ public final class ConfigFile {
 
         byte[] passwordBytes = charsToBytes(password);
         byte[] salt = Keys.randomBytes(Constants.KEY_LEN);
-        byte[] scryptHash = Keys.scrypt(passwordBytes, salt, n, r, p, Constants.KEY_LEN);
+        byte[] scryptHash = null;
         byte[] contentKey = null;
         try {
+            ScryptKdf newParams = new ScryptKdf(
+                    Base64.getEncoder().encodeToString(salt),
+                    n, r, p, Constants.KEY_LEN);
+            // Reuse the open path's bounds: writing a config that fromBytes()
+            // would reject would otherwise lock the user out on the next open.
+            try {
+                validateScryptParameters(newParams);
+            } catch (IOException e) {
+                throw new IllegalArgumentException(e.getMessage(), e);
+            }
+
+            scryptHash = Keys.scrypt(passwordBytes, salt, n, r, p, Constants.KEY_LEN);
+
             // The master key is always protected with AES-256-GCM; the content
             // cipher selection only affects file content.
             boolean useHkdf = isFeatureFlagSet(Constants.FLAG_HKDF);
@@ -740,8 +766,23 @@ public final class ConfigFile {
             copy.longNameMax = longNameMax;
             copy.fido2 = fido2;
             copy.encryptedKey = Base64.getEncoder().encodeToString(encrypted);
-            copy.scryptObject = new ScryptKdf(Base64.getEncoder().encodeToString(salt),
-                    n, r, p, Constants.KEY_LEN);
+            copy.scryptObject = newParams;
+
+            // Confirm the new config can actually be unlocked before the caller
+            // replaces the old one on disk.
+            byte[] verified = null;
+            try {
+                verified = copy.decryptMasterKey(password);
+                if (!MessageDigest.isEqual(masterKey, verified)) {
+                    throw new IllegalStateException(
+                            "re-encrypted config does not round-trip");
+                }
+            } catch (IOException e) {
+                throw new IllegalStateException(
+                        "re-encrypted config cannot be decrypted", e);
+            } finally {
+                Keys.wipe(verified);
+            }
             return copy;
         } finally {
             Keys.wipe(contentKey);
