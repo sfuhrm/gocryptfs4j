@@ -2220,7 +2220,7 @@ final class FileManager {
             if (name.endsWith(".tmp") || name.startsWith(WRITE_TEMP_PREFIX)) {
                 deleteIfExists(store, path);
                 if (name.startsWith(WRITE_TEMP_PREFIX)) {
-                    deleteIfExists(store, CipherJournal.journalName(path));
+                    new CipherJournal(store, path).clear();
                 }
             } else if (CipherJournal.isJournalName(name)) {
                 journals.add(name);
@@ -2235,6 +2235,7 @@ final class FileManager {
                     && !entry.name().startsWith(Constants.INTERNAL_NAME_PREFIX)) {
                 String path = PathResolver.join(dir, entry.name());
                 expected.add(PathResolver.baseName(CipherJournal.journalName(path)));
+                expected.add(PathResolver.baseName(CipherJournal.legacyJournalName(path)));
             }
         }
         for (String journal : journals) {

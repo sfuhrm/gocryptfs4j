@@ -78,6 +78,13 @@ final class CipherJournal {
     private volatile String journalName;
 
     /**
+     * The journal path used by releases that hashed the full ciphertext path.
+     * It is only read (and removed), never written, for one release so a
+     * pending journal from an older version is still replayed.
+     */
+    private volatile String legacyJournalName;
+
+    /**
      * Creates a journal for the given ciphertext file.
      *
      * @param store      the ciphertext store
@@ -87,15 +94,37 @@ final class CipherJournal {
     CipherJournal(CipherStore store, String cipherFile) {
         this.store = Objects.requireNonNull(store, "store");
         this.journalName = journalName(cipherFile);
+        this.legacyJournalName = legacyJournalName(cipherFile);
     }
 
     /**
      * Returns the hidden journal path for a ciphertext file.
      *
+     * <p>Only the ciphertext base name is hashed. The journal lives in the same
+     * directory, where that name is unique, so moving the vault to another path
+     * or renaming a directory leaves the journal name unchanged.</p>
+     *
      * @param cipherFile the ciphertext file whose blocks are journalled
      * @return the journal path
      */
     static String journalName(String cipherFile) {
+        Objects.requireNonNull(cipherFile, "cipherFile");
+        int slash = Math.max(cipherFile.lastIndexOf('/'), cipherFile.lastIndexOf('\\'));
+        String parent = slash < 0 ? "" : cipherFile.substring(0, slash + 1);
+        String base = cipherFile.substring(slash + 1);
+        return parent + NAME_PREFIX + hash(base);
+    }
+
+    /**
+     * Returns the legacy journal path that hashed the full ciphertext path.
+     *
+     * <p>This format is still accepted for one release so an upgrade can replay
+     * a journal left by the previous version. New journals never use it.</p>
+     *
+     * @param cipherFile the ciphertext file whose blocks are journalled
+     * @return the legacy journal path
+     */
+    static String legacyJournalName(String cipherFile) {
         Objects.requireNonNull(cipherFile, "cipherFile");
         int slash = Math.max(cipherFile.lastIndexOf('/'), cipherFile.lastIndexOf('\\'));
         String parent = slash < 0 ? "" : cipherFile.substring(0, slash + 1);
@@ -131,16 +160,34 @@ final class CipherJournal {
      * @throws IOException on filesystem errors
      */
     @Nullable Record read() throws IOException {
+        Record record = read(journalName);
+        if (record != null || journalName.equals(legacyJournalName)
+                || existsAt(journalName)) {
+            // A present but unparseable primary journal wins over an older
+            // legacy one; a writable open discards both.
+            return record;
+        }
+        return read(legacyJournalName);
+    }
+
+    /**
+     * Reads one journal path without falling back.
+     *
+     * @param name the journal path
+     * @return the record, or {@code null} if it is absent or invalid
+     * @throws IOException on filesystem errors
+     */
+    private @Nullable Record read(String name) throws IOException {
         byte[] data;
         try {
-            CipherNode node = store.stat(journalName);
+            CipherNode node = store.stat(name);
             if (!node.isRegularFile() || node.size() > MAX_JOURNAL_LEN) {
                 // Treat an oversized or non-regular journal as unparseable
                 // instead of letting it make the file open fail; a writable
                 // open discards it.
                 return null;
             }
-            data = store.readSmall(journalName, MAX_JOURNAL_LEN);
+            data = store.readSmall(name, MAX_JOURNAL_LEN);
         } catch (NoSuchFileException e) {
             return null;
         }
@@ -154,8 +201,20 @@ final class CipherJournal {
      * @throws IOException on filesystem errors
      */
     boolean exists() throws IOException {
+        return existsAt(journalName)
+                || (!journalName.equals(legacyJournalName) && existsAt(legacyJournalName));
+    }
+
+    /**
+     * Returns whether one journal path exists.
+     *
+     * @param name the journal path
+     * @return {@code true} if the file exists
+     * @throws IOException on filesystem errors
+     */
+    private boolean existsAt(String name) throws IOException {
         try {
-            store.stat(journalName);
+            store.stat(name);
             return true;
         } catch (NoSuchFileException e) {
             return false;
@@ -170,6 +229,9 @@ final class CipherJournal {
      */
     void write(Record record) throws IOException {
         store.writeJournal(journalName, record.encode());
+        if (!journalName.equals(legacyJournalName)) {
+            deleteIfExists(legacyJournalName);
+        }
     }
 
     /**
@@ -179,6 +241,9 @@ final class CipherJournal {
      */
     void clear() throws IOException {
         deleteIfExists(journalName);
+        if (!journalName.equals(legacyJournalName)) {
+            deleteIfExists(legacyJournalName);
+        }
     }
 
     /**
@@ -195,11 +260,16 @@ final class CipherJournal {
      */
     @Nullable Move beginMove(String newCipherFile) throws IOException {
         String oldName = journalName;
+        String oldLegacy = legacyJournalName;
         String newName = journalName(newCipherFile);
-        if (newName.equals(oldName)) {
+        String newLegacy = legacyJournalName(newCipherFile);
+        if (newName.equals(oldName) && newLegacy.equals(oldLegacy)) {
             return null;
         }
         byte[] data = readIfExists(oldName);
+        if (data == null && !oldLegacy.equals(oldName)) {
+            data = readIfExists(oldLegacy);
+        }
         byte[] replaced = readIfExists(newName);
         boolean copied = false;
         if (data != null) {
@@ -211,7 +281,8 @@ final class CipherJournal {
                 // does not exist yet. Copy it after the cipher file has moved.
             }
         }
-        return new Move(oldName, newName, data, replaced, copied);
+        return new Move(oldName, oldLegacy, newName, newLegacy,
+                data, replaced, copied);
     }
 
     /**
@@ -222,16 +293,31 @@ final class CipherJournal {
      */
     void commitMove(Move move) throws IOException {
         journalName = move.newName;
+        legacyJournalName = move.newLegacy;
         if (move.data != null) {
             if (!move.copied) {
                 store.writeSmall(move.newName, move.data, true);
             }
-            deleteIfExists(move.oldName);
-        } else if (move.replaced != null) {
-            // The source had no pending journal. The journal at the target
-            // belonged to the entry that the rename replaced, so it must not be
-            // replayed for the new file.
+            if (!move.oldName.equals(move.newName)) {
+                deleteIfExists(move.oldName);
+            }
+            if (!move.oldLegacy.equals(move.oldName)
+                    && !move.oldLegacy.equals(move.newName)) {
+                deleteIfExists(move.oldLegacy);
+            }
+            if (!move.newLegacy.equals(move.newName)) {
+                // A legacy journal at the target belonged to the entry that the
+                // rename replaced, not to the moved file.
+                deleteIfExists(move.newLegacy);
+            }
+        } else {
+            // The source had no pending journal. Journals at the target
+            // belonged to the entry that the rename replaced, so they must not
+            // be replayed for the new file.
             deleteIfExists(move.newName);
+            if (!move.newLegacy.equals(move.newName)) {
+                deleteIfExists(move.newLegacy);
+            }
         }
     }
 
@@ -290,8 +376,14 @@ final class CipherJournal {
         /** The journal path before the rename. */
         private final String oldName;
 
+        /** The legacy journal path before the rename. */
+        private final String oldLegacy;
+
         /** The journal path after the rename. */
         private final String newName;
+
+        /** The legacy journal path after the rename. */
+        private final String newLegacy;
 
         /** The journal contents, or {@code null} if there was no journal. */
         private final byte @Nullable [] data;
@@ -305,16 +397,20 @@ final class CipherJournal {
         /**
          * Creates a pending move.
          *
-         * @param oldName  the old journal path
-         * @param newName  the new journal path
-         * @param data     the journal contents, or {@code null}
-         * @param replaced the target's previous contents, or {@code null}
-         * @param copied   whether the journal was already copied
+         * @param oldName   the old journal path
+         * @param oldLegacy the old legacy journal path
+         * @param newName   the new journal path
+         * @param newLegacy the new legacy journal path
+         * @param data      the journal contents, or {@code null}
+         * @param replaced  the target's previous contents, or {@code null}
+         * @param copied    whether the journal was already copied
          */
-        private Move(String oldName, String newName, byte @Nullable [] data,
-                     byte @Nullable [] replaced, boolean copied) {
+        private Move(String oldName, String oldLegacy, String newName, String newLegacy,
+                     byte @Nullable [] data, byte @Nullable [] replaced, boolean copied) {
             this.oldName = oldName;
+            this.oldLegacy = oldLegacy;
             this.newName = newName;
+            this.newLegacy = newLegacy;
             this.data = data;
             this.replaced = replaced;
             this.copied = copied;

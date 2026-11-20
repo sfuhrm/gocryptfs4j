@@ -730,6 +730,96 @@ class FileManagerTest {
     }
 
     @Test
+    void directoryRenameKeepsPendingJournalOfClosedFile() throws Exception {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.fileManager.mkdir("/dir");
+        h.fileManager.createFile("/dir/f.txt");
+        h.fileManager.write("/dir/f.txt", 0, new byte[]{1, 2, 3});
+        String from = h.pathResolver.resolve("/dir/f.txt").cipherPath();
+        byte[] fileId;
+        try (SharedCipherFile cf = h.fileManager.openCipherFile("/dir/f.txt", true)) {
+            fileId = backingOf(cf).fileId();
+        }
+        CipherJournal oldJournal = new CipherJournal(h.store, from);
+        oldJournal.write(new CipherJournal.Record(-1, 0, fileId, new byte[0]));
+
+        h.fileManager.rename("/dir", "/moved", false);
+        String to = h.pathResolver.resolve("/moved/f.txt").cipherPath();
+
+        assertEquals(PathResolver.baseName(oldJournal.name()),
+                PathResolver.baseName(new CipherJournal(h.store, to).name()),
+                "a directory rename must not change the journal basename");
+        assertTrue(new CipherJournal(h.store, to).exists(),
+                "a closed file's journal must survive a directory rename");
+
+        try (SharedCipherFile ignored = h.fileManager.openCipherFile("/moved/f.txt", true)) {
+            // A writable open replays and removes the journal.
+        }
+        assertFalse(new CipherJournal(h.store, to).exists());
+        assertEquals(0, h.fileManager.readAll("/moved/f.txt").length);
+    }
+
+    @Test
+    void journalNameHashesOnlyBaseName() {
+        assertEquals(PathResolver.baseName(CipherJournal.journalName("old/name")),
+                PathResolver.baseName(CipherJournal.journalName("new/name")),
+                "moving the vault must not change a journal's basename");
+        assertNotEquals(CipherJournal.journalName("dir/first"),
+                CipherJournal.journalName("dir/second"),
+                "different files in one directory must have different journals");
+    }
+
+    @Test
+    void legacyFullPathJournalIsStillReplayed() throws Exception {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.fileManager.mkdir("/dir");
+        h.fileManager.createFile("/dir/f.txt");
+        h.fileManager.write("/dir/f.txt", 0, new byte[]{1, 2, 3});
+        String cipherPath = h.pathResolver.resolve("/dir/f.txt").cipherPath();
+        byte[] fileId;
+        try (SharedCipherFile cf = h.fileManager.openCipherFile("/dir/f.txt", true)) {
+            fileId = backingOf(cf).fileId();
+        }
+        String legacy = CipherJournal.legacyJournalName(cipherPath);
+        assertNotEquals(legacy, CipherJournal.journalName(cipherPath));
+        CipherJournal legacyJournal = new CipherJournal(h.store, cipherPath);
+        h.store.writeSmall(legacy, new CipherJournal.Record(-1, 0, fileId, new byte[0])
+                .encode(), true);
+
+        assertTrue(legacyJournal.exists());
+        try (SharedCipherFile ignored = h.fileManager.openCipherFile("/dir/f.txt", true)) {
+            // A writable open replays the journal written by the old format.
+        }
+        assertFalse(legacyJournal.exists());
+        assertThrows(NoSuchFileException.class, () -> h.store.stat(legacy));
+        assertEquals(0, h.fileManager.readAll("/dir/f.txt").length);
+    }
+
+    @Test
+    void cleanupKeepsLegacyJournalOfExistingFile() throws Exception {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.fileManager.mkdir("/dir");
+        h.fileManager.createFile("/dir/keep.txt");
+        h.fileManager.write("/dir/keep.txt", 0, new byte[]{1});
+        String dir = h.pathResolver.resolve("/dir").cipherPath();
+        String keep = h.pathResolver.resolve("/dir/keep.txt").cipherPath();
+        String missing = PathResolver.join(dir, "missing");
+        String keepLegacy = CipherJournal.legacyJournalName(keep);
+        String missingLegacy = CipherJournal.legacyJournalName(missing);
+        byte[] record = new CipherJournal.Record(-1, -1,
+                new byte[Constants.HEADER_ID_LEN], new byte[0]).encode();
+
+        h.store.writeSmall(keepLegacy, record, true);
+        h.store.writeSmall(missingLegacy, record, true);
+
+        h.fileManager.cleanupOrphans();
+
+        h.store.stat(keepLegacy);
+        assertThrows(NoSuchFileException.class, () -> h.store.stat(missingLegacy),
+                "a legacy journal without its cipher file is still an orphan");
+    }
+
+    @Test
     void deleteDisablesJournalForOpenHandle() throws Exception {
         ManagerHarness h = ManagerHarness.encrypted();
         h.fileManager.createFile("/f.txt");
