@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.NoSuchFileException;
+import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
@@ -23,6 +24,7 @@ import java.util.Map;
 import java.util.NavigableSet;
 import java.util.Objects;
 import java.util.TreeSet;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 /**
@@ -229,16 +231,48 @@ final class DirectoryManager {
         }
         for (byte b : data) {
             if (b != 0) {
-                // Only cache an IV whose file can be identified later. A store
-                // without file keys cannot cheaply prove that the bytes it
-                // would serve are still current.
-                if (cacheDirIVs && stamp != null && stamp.fileKey() != null) {
+                // Only cache an IV whose file can be identified later. A file
+                // key identifies a replaced diriv even on a filesystem with
+                // coarse timestamps. Without one, rely on the timestamp, but
+                // only when it has sub-second resolution: a file system that
+                // truncates mtime to whole seconds could serve a stale IV after
+                // an in-place rewrite of the same size within one tick.
+                if (cacheDirIVs && stamp != null && canIdentifyDirIV(stamp)) {
                     putCachedDirIV(cipherDir, new CachedDirIV(data, stamp));
                 }
                 return data.clone();
             }
         }
         throw new IOException("diriv is all-zero in " + cipherDir);
+    }
+
+    /**
+     * Returns whether a diriv file stamp is precise enough to detect an in-place
+     * rewrite later.
+     *
+     * <p>A file key is authoritative. Without one, a timestamp that is
+     * truncated to a whole second (or coarser) is considered too coarse to
+     * cache: two writes within the same tick can have the same size and mtime,
+     * so the cached IV would not be refreshed.</p>
+     *
+     * @param stamp the diriv file metadata
+     * @return {@code true} if the IV may be cached against this stamp
+     */
+    private static boolean canIdentifyDirIV(CipherNode stamp) {
+        if (stamp.fileKey() != null) {
+            return true;
+        }
+        return !hasCoarseTimestamp(stamp.lastModifiedTime());
+    }
+
+    /**
+     * Returns whether a timestamp has only whole-second resolution.
+     *
+     * @param time the timestamp
+     * @return {@code true} if the timestamp has no sub-second component
+     */
+    private static boolean hasCoarseTimestamp(FileTime time) {
+        return time.to(TimeUnit.NANOSECONDS) % TimeUnit.SECONDS.toNanos(1) == 0L;
     }
 
     /**

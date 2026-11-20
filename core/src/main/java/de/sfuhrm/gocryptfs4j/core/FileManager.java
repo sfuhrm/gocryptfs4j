@@ -2201,6 +2201,12 @@ final class FileManager {
      * Removes stale internal files directly inside one cipher directory, given
      * its current listing.
      *
+     * <p>Besides atomic-write temporaries, abandoned staging files and orphaned
+     * journals, this removes long-name support files ({@code *.name}) whose
+     * matching content entry no longer exists. Such a support file can be left
+     * behind when a process crashes between writing it and creating or renaming
+     * the entry it belongs to.</p>
+     *
      * @param dir     the cipher directory
      * @param entries the directory listing
      * @throws IOException on filesystem errors
@@ -2208,12 +2214,17 @@ final class FileManager {
     private void cleanupInternalEntries(String dir, List<CipherNode> entries)
             throws IOException {
         List<String> journals = new ArrayList<>();
+        List<String> nameFiles = new ArrayList<>();
         for (CipherNode entry : entries) {
             if (entry.isDirectory()) {
                 continue;
             }
             String name = entry.name();
             if (!name.startsWith(Constants.INTERNAL_NAME_PREFIX)) {
+                if (!plaintextNames
+                        && nameTransform.nameType(name) == NameTransform.LONG_NAME_FILENAME) {
+                    nameFiles.add(name);
+                }
                 continue;
             }
             String path = PathResolver.join(dir, name);
@@ -2224,6 +2235,19 @@ final class FileManager {
                 }
             } else if (CipherJournal.isJournalName(name)) {
                 journals.add(name);
+            }
+        }
+        if (!nameFiles.isEmpty()) {
+            Set<String> longContent = new HashSet<>();
+            for (CipherNode entry : entries) {
+                if (nameTransform.nameType(entry.name()) == NameTransform.LONG_NAME_CONTENT) {
+                    longContent.add(entry.name());
+                }
+            }
+            for (String nameFile : nameFiles) {
+                if (!longContent.contains(NameTransform.removeLongNameSuffix(nameFile))) {
+                    deleteIfExists(store, PathResolver.join(dir, nameFile));
+                }
             }
         }
         if (journals.isEmpty()) {

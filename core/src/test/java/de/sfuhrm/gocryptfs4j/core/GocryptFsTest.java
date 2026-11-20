@@ -555,6 +555,51 @@ class GocryptFsTest {
     }
 
     @Test
+    void openOnlyCleansOrphansWhenRequested() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir),
+                "pw".toCharArray())) {
+            fs.mkdir("/dir");
+            fs.createFile("/dir/a.txt");
+        }
+        Path orphan = cipherDir.resolve(".gocryptfs-stale.tmp");
+        Files.write(orphan, new byte[]{1});
+
+        FailingStore store = new FailingStore(new PathCipherStore(cipherDir));
+        try (GocryptFs ignored = GocryptFs.open(store, "pw".toCharArray())) {
+            assertEquals(0, store.listCalls,
+                    "a default open must not walk the whole ciphertext tree");
+            assertTrue(Files.exists(orphan),
+                    "a default open must leave orphan cleanup to the caller");
+        }
+
+        store.listCalls = 0;
+        OpenOptions cleanup = OpenOptions.builder().cleanupOrphansOnOpen(true).build();
+        try (GocryptFs ignored = GocryptFs.open(store, "pw".toCharArray(), cleanup)) {
+            assertTrue(store.listCalls > 0, "an opted-in open must clean the tree");
+            assertFalse(Files.exists(orphan),
+                    "an opted-in open must remove the orphan");
+        }
+    }
+
+    @Test
+    void cleanupOrphansCanBeRequestedExplicitly() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        Path orphan = cipherDir.resolve(".gocryptfs-stale.tmp");
+        try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir),
+                "pw".toCharArray())) {
+            Files.write(orphan, new byte[]{1});
+
+            fs.cleanupOrphans();
+
+            assertFalse(Files.exists(orphan),
+                    "an explicit cleanup must remove stale internal artifacts");
+        }
+    }
+
+    @Test
     void createFailureRemovesDirIVAndConfig() throws IOException {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
@@ -1668,6 +1713,7 @@ class GocryptFsTest {
         byte[] injectedConfig;
         boolean injectConfigAfterList;
         boolean injectConfigBeforeWriteConfig;
+        int listCalls;
 
         FailingStore(CipherStore delegate) {
             this.delegate = delegate;
@@ -1710,6 +1756,7 @@ class GocryptFsTest {
 
         @Override
         public List<CipherNode> list(String dir) throws IOException {
+            listCalls++;
             List<CipherNode> entries = delegate.list(dir);
             if (injectConfigAfterList) {
                 injectConfigAfterList = false;

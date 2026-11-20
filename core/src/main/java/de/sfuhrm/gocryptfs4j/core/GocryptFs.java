@@ -252,19 +252,51 @@ public final class GocryptFs implements AutoCloseable {
     }
 
     /**
-     * Removes stale internal temporaries and orphaned journals. Only a writable
-     * instance, which holds the cipher root lock, may do this; a read-only
-     * instance never writes to the cipher directory.
+     * Removes stale internal temporaries, orphaned journals and long-name
+     * support files whose content entry no longer exists.
      *
-     * <p>Cleanup is best effort: an unrelated stale file that cannot be removed
-     * must not prevent the filesystem from opening.</p>
+     * <p>Only a writable instance, which holds the cipher root lock, may do
+     * this; a read-only instance returns without doing anything. This is not
+     * run automatically on open (that would walk the whole tree and make
+     * opening a large vault slow); opt in with
+     * {@link OpenOptions.Builder#cleanupOrphansOnOpen(boolean)} or call this
+     * method explicitly.</p>
+     *
+     * @throws IOException on filesystem errors
      */
-    private void cleanupOrphans() {
-        if (readOnly) {
+    public void cleanupOrphans() throws IOException {
+        Lock writeLock = acquireWriteLock();
+        try {
+            ensureOpen();
+            if (!readOnly) {
+                fileManager.cleanupOrphans();
+            }
+        } finally {
+            writeLock.unlock();
+        }
+    }
+
+    /**
+     * Removes stale internal artifacts after an open when the caller opted in.
+     *
+     * @param options the open policy
+     */
+    private void cleanupOrphansOnOpen(OpenOptions options) {
+        if (readOnly || !options.cleanupOrphansOnOpen()) {
             return;
         }
+        cleanupOrphansBestEffort();
+    }
+
+    /**
+     * Runs orphan cleanup without failing the caller.
+     *
+     * <p>Cleanup is best effort: an unrelated stale file that cannot be removed
+     * must not prevent the filesystem from opening or being created.</p>
+     */
+    private void cleanupOrphansBestEffort() {
         try {
-            fileManager.cleanupOrphans();
+            cleanupOrphans();
         } catch (IOException | RuntimeException ignored) {
             // Best effort; the filesystem itself is still usable.
         }
@@ -629,7 +661,7 @@ public final class GocryptFs implements AutoCloseable {
             checkOpenPolicy(config, options);
             byte[] masterKey = config.decryptMasterKey(password);
             GocryptFs fs = new GocryptFs(store, config, masterKey, ownsStore, readOnly, rootLock);
-            fs.cleanupOrphans();
+            fs.cleanupOrphansOnOpen(options);
             ok = true;
             return fs;
         } finally {
@@ -839,7 +871,7 @@ public final class GocryptFs implements AutoCloseable {
             verifyMasterKey(store, config, masterKey);
             GocryptFs fs = new GocryptFs(store, config, masterKey.clone(), ownsStore,
                     readOnly, rootLock);
-            fs.cleanupOrphans();
+            fs.cleanupOrphansOnOpen(options);
             ok = true;
             return fs;
         } finally {
@@ -1196,7 +1228,7 @@ public final class GocryptFs implements AutoCloseable {
                 byte[] masterKey = config.decryptMasterKey(secret);
                 GocryptFs fs = new GocryptFs(store, config, masterKey, ownsStore, readOnly,
                         rootLock);
-                fs.cleanupOrphans();
+                fs.cleanupOrphansOnOpen(options);
                 ok = true;
                 return fs;
             } catch (IOException e) {
@@ -1591,7 +1623,7 @@ public final class GocryptFs implements AutoCloseable {
                 }
                 store.writeConfig(configName, configBytes, false);
                 configCreated = true;
-                fs.cleanupOrphans();
+                fs.cleanupOrphansBestEffort();
                 ok = true;
                 return fs;
             } catch (FileAlreadyExistsException e) {
@@ -1787,7 +1819,7 @@ public final class GocryptFs implements AutoCloseable {
                         }
                         store.writeConfig(configName, configBytes, false);
                         configCreated = true;
-                        fs.cleanupOrphans();
+                        fs.cleanupOrphansBestEffort();
                         created = true;
                         ok = true;
                         return fs;

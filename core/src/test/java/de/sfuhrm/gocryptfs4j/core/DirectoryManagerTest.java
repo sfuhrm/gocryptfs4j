@@ -103,6 +103,30 @@ class DirectoryManagerTest {
     }
 
     @Test
+    void readDirIVCachesWithFineMtimeWithoutFileKeys() throws Exception {
+        ReadOnlyStore store = new ReadOnlyStore();
+        store.timestamp = FileTime.fromMillis(1_700_000_000_123L);
+        ManagerHarness h = ManagerHarness.encrypted(store);
+
+        h.directoryManager.readDirIV(store.root());
+
+        assertTrue(dirIvCache(h).containsKey(store.root()),
+                "a fine-grained timestamp can identify the diriv without a file key");
+    }
+
+    @Test
+    void readDirIVSkipsCacheWithCoarseMtimeWithoutFileKeys() throws Exception {
+        ReadOnlyStore store = new ReadOnlyStore();
+        store.timestamp = FileTime.fromMillis(1_700_000_000_000L);
+        ManagerHarness h = ManagerHarness.encrypted(store);
+
+        h.directoryManager.readDirIV(store.root());
+
+        assertFalse(dirIvCache(h).containsKey(store.root()),
+                "a whole-second timestamp cannot detect an in-place rewrite");
+    }
+
+    @Test
     void readDirIVRefreshesWhenDirIVFileIsReplaced() throws IOException {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
@@ -465,8 +489,21 @@ class DirectoryManagerTest {
         /** The wrapped node. */
         private final CipherNode delegate;
 
+        /** The file key to report, or {@code null}. */
+        private final @Nullable Object fileKey;
+
+        /** The last-modified time to report, or {@code null} to delegate. */
+        private final @Nullable FileTime timestamp;
+
         KeyedNode(CipherNode delegate) {
+            this(delegate, delegate.name(), null);
+        }
+
+        KeyedNode(CipherNode delegate, @Nullable Object fileKey,
+                  @Nullable FileTime timestamp) {
             this.delegate = delegate;
+            this.fileKey = fileKey;
+            this.timestamp = timestamp;
         }
 
         @Override
@@ -486,7 +523,7 @@ class DirectoryManagerTest {
 
         @Override
         public FileTime lastModifiedTime() {
-            return delegate.lastModifiedTime();
+            return timestamp != null ? timestamp : delegate.lastModifiedTime();
         }
 
         @Override
@@ -501,7 +538,7 @@ class DirectoryManagerTest {
 
         @Override
         public Object fileKey() {
-            return delegate.name();
+            return fileKey;
         }
     }
 
@@ -515,6 +552,7 @@ class DirectoryManagerTest {
         boolean readOnly;
         boolean listingConsistent = true;
         boolean withFileKeys;
+        @Nullable FileTime timestamp;
 
         @Override
         public String root() {
@@ -554,7 +592,10 @@ class DirectoryManagerTest {
         }
 
         private CipherNode withFileKey(CipherNode node) {
-            return withFileKeys ? new KeyedNode(node) : node;
+            if (!withFileKeys && timestamp == null) {
+                return node;
+            }
+            return new KeyedNode(node, withFileKeys ? node.name() : null, timestamp);
         }
 
         @Override

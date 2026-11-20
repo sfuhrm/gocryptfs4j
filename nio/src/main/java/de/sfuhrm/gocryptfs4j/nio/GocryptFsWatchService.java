@@ -23,6 +23,15 @@ import java.util.concurrent.TimeUnit;
  * by periodically listing registered directories and diffing against the
  * previous snapshot. The service supports the {@code ENTRY_CREATE},
  * {@code ENTRY_DELETE}, {@code ENTRY_MODIFY} and {@code OVERFLOW} event kinds.</p>
+ *
+ * <p><strong>Change detection is best effort.</strong> The diff compares
+ * ciphertext names, entry kind, ciphertext size and last-modified time. A
+ * modification that leaves all of these unchanged &mdash; for example an
+ * in-place rewrite that keeps the same ciphertext size on a filesystem whose
+ * mtime did not advance or is truncated &mdash; produces no
+ * {@code ENTRY_MODIFY} event. Events are also delayed by up to one poll
+ * interval. Use a native platform watch service when exact event delivery is
+ * required.</p>
  */
 final class GocryptFsWatchService implements WatchService {
 

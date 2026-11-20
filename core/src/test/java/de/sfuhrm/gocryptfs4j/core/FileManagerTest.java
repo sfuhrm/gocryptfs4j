@@ -933,6 +933,42 @@ class FileManagerTest {
     }
 
     @Test
+    void cleanupRemovesOrphanLongNameSupportFiles() throws Exception {
+        ManagerHarness h = ManagerHarness.encrypted();
+        StringBuilder longName = new StringBuilder();
+        for (int i = 0; i < 220; i++) {
+            longName.append('x');
+        }
+        h.fileManager.createFile("/" + longName);
+        PathResolver.Resolved kept = h.pathResolver.resolve("/" + longName);
+        String keptNameFile = PathResolver.join(h.store.root(),
+                kept.cipherName() + Constants.LONG_NAME_SUFFIX);
+        String orphanName = Constants.LONG_NAME_PREFIX + "orphan" + Constants.LONG_NAME_SUFFIX;
+        h.store.writeSmall(orphanName, new byte[]{1}, false);
+
+        h.fileManager.cleanupOrphans();
+
+        assertThrows(NoSuchFileException.class, () -> h.store.stat(orphanName),
+                "a .name file without its content entry must be removed");
+        h.store.stat(keptNameFile);
+        h.store.stat(kept.cipherPath());
+    }
+
+    @Test
+    void cleanupKeepsLongNameLookingUserFilesInPlaintextMode() throws Exception {
+        ManagerHarness h = ManagerHarness.plaintext();
+        h.fileManager.mkdir("/dir");
+        String name = "gocryptfs.longname.user.name";
+        h.fileManager.createFile("/dir/" + name);
+        String cipherPath = h.pathResolver.resolve("/dir/" + name).cipherPath();
+
+        h.fileManager.cleanupOrphans();
+
+        assertTrue(h.store.stat(cipherPath).isRegularFile(),
+                "plaintext user files that look like .name support files must be kept");
+    }
+
+    @Test
     void failedOpenDoesNotRetainSharedEntry() throws Exception {
         ManagerHarness h = ManagerHarness.encrypted();
         String cipherPath = h.pathResolver.resolve("/missing.txt").cipherPath();

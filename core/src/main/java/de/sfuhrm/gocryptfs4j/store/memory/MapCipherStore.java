@@ -43,11 +43,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * creation time, and {@link #setTimes(String, FileTime, FileTime, FileTime)}
  * is a no-op.</p>
  *
- * <p>{@link #open(String, boolean)} returns a channel that operates on a
- * snapshot copy of the file's content taken at open time. Two concurrently
- * open channels on the same file do not observe each other's writes, and when
- * both are writable the one closed last wins. This last-write-wins snapshot
- * semantics is acceptable for a test store, not for a production backend.</p>
+ * <p><strong>Do not use this class to back a real remote store.</strong>
+ * {@link #open(String, boolean)} returns a channel that operates on a snapshot
+ * copy of the file's content taken at open time. Two concurrently open channels
+ * on the same file do not observe each other's writes, and when both are
+ * writable the one closed last wins, silently discarding the other's changes.
+ * This last-close-wins snapshot behaviour is suitable only for tests and as a
+ * minimal reference; a production or remote backend must provide a channel with
+ * coherent concurrent access and its own durability semantics.</p>
  */
 public final class MapCipherStore implements CipherStore {
 

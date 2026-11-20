@@ -23,6 +23,9 @@ import java.util.Objects;
  * taken when the key was registered (or last reset) with the directory contents
  * on each scan. Only the names of entries that actually changed are decrypted.
  * Pending events are held in a queue until they are retrieved.</p>
+ *
+ * <p>Detection is best effort: a modification that preserves the ciphertext
+ * size and last-modified time is not reported as {@code ENTRY_MODIFY}.</p>
  */
 final class GocryptFsWatchKey implements WatchKey {
 

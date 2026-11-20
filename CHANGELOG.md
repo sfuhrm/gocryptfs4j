@@ -7,8 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `OpenOptions.cleanupOrphansOnOpen(true)` and `GocryptFs.cleanupOrphans()` so
+  stale internal artifacts can be removed explicitly instead of on every
+  writable open.
+
+### Changed
+
+- Orphan cleanup no longer walks the whole ciphertext tree on every writable
+  open, which made opening large vaults slow. It is opt-in on open and
+  available on demand.
+- `MapCipherStore` now documents explicitly that its last-close-wins channel
+  semantics make it unsuitable for a real remote store.
+- `GocryptFsWatchService` now documents that polling-based change detection is
+  best effort and can miss modifications that preserve size and mtime.
+
 ### Fixed
 
+- Orphan cleanup now removes long-name `.name` support files whose matching
+  content entry no longer exists, for example after a crash during `createFile`
+  or `rename`.
+- The directory-IV cache is no longer populated from coarse whole-second
+  timestamps when the store has no file keys, where an in-place rewrite could
+  otherwise serve a stale IV.
 - A crash between the hard link and the following unlink of a create-new write
   or a no-replace rename could leave two ciphertext names for one inode, so
   editing one name changed the other. A writable open now detects an unexpected

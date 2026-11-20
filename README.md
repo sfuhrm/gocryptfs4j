@@ -287,6 +287,12 @@ try (GocryptFs fs = GocryptFs.open(store, "my-password".toCharArray(), options))
 Creating a plaintext-names filesystem remains explicit through
 `GocryptFs.create(store, password, true)`.
 
+A writable open does not scan the whole ciphertext tree for stale internal
+files; that would make opening a large vault slow. Call
+`fs.cleanupOrphans()` to remove them on demand, or pass
+`OpenOptions.builder().cleanupOrphansOnOpen(true).build()` to opt back into the
+eager scan.
+
 Passwords are encoded as UTF-8 before they reach scrypt, matching the raw bytes
 gocryptfs reads from a UTF-8 terminal, passfile or extpass program. Non-ASCII
 passwords, such as German umlauts, therefore interoperate with gocryptfs.
@@ -458,7 +464,8 @@ API only: the NIO view always uses a local `PathCipherStore` (see [section 2](#2
   and is what the examples above use.
 * **In-memory** — `MapCipherStore`
   (`de.sfuhrm.gocryptfs4j.store.memory`) is a dependency-free reference
-  implementation, useful for tests.
+  implementation, useful for tests. It snapshots file content per open channel
+  and lets the last close win, so it must not back a real remote store.
 * **Remote / object stores** — implement the `CipherStore` SPI (see
   [`CipherStore`](core/src/main/java/de/sfuhrm/gocryptfs4j/store/CipherStore.java)
   and [`CipherStoreProvider`](core/src/main/java/de/sfuhrm/gocryptfs4j/store/CipherStoreProvider.java)),
