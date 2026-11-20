@@ -1,5 +1,6 @@
 package de.sfuhrm.gocryptfs4j.store.local;
 
+import de.sfuhrm.gocryptfs4j.store.CipherChannel;
 import de.sfuhrm.gocryptfs4j.store.CipherNode;
 import de.sfuhrm.gocryptfs4j.store.CipherStore;
 import org.junit.jupiter.api.Test;
@@ -491,6 +492,97 @@ class PathCipherStoreTest {
             Path dir = Files.createDirectory(fs.getPath("/cipher"));
             assertThrows(IOException.class, () -> PathCipherStore.requireSymlinkSafe(dir));
         }
+    }
+
+    @Test
+    void writableOpenDetachesUnexpectedHardLink() throws Exception {
+        Path dir = Files.createDirectory(tmp.resolve("cipher"));
+        assumeTrue(Files.getFileStore(dir).supportsFileAttributeView("unix"),
+                "unix attributes are not supported");
+        PathCipherStore store = new PathCipherStore(dir);
+        Path original = dir.resolve("original");
+        Path alias = dir.resolve("alias");
+        byte[] data = "original".getBytes(StandardCharsets.UTF_8);
+        Files.write(original, data);
+        Files.createLink(alias, original);
+
+        byte[] replacement = "replacement".getBytes(StandardCharsets.UTF_8);
+        try (CipherChannel channel = store.open(original.toString(), true)) {
+            channel.position(0);
+            channel.write(ByteBuffer.wrap(replacement));
+            channel.truncate(replacement.length);
+        }
+
+        assertEquals(1L, linkCount(original), "the opened name must be detached");
+        assertEquals(1L, linkCount(alias), "the other name must keep its own inode");
+        assertArrayEquals(replacement, Files.readAllBytes(original));
+        assertArrayEquals(data, Files.readAllBytes(alias));
+    }
+
+    @Test
+    void plainWritableOpenDetachesUnexpectedHardLink() throws Exception {
+        Path dir = Files.createDirectory(tmp.resolve("cipher"));
+        assumeTrue(Files.getFileStore(dir).supportsFileAttributeView("unix"),
+                "unix attributes are not supported");
+        PlainPathStore store = new PlainPathStore(dir);
+        Path original = dir.resolve("original");
+        Path alias = dir.resolve("alias");
+        byte[] data = "original".getBytes(StandardCharsets.UTF_8);
+        Files.write(original, data);
+        Files.createLink(alias, original);
+
+        try (CipherChannel ignored = store.open(original.toString(), true)) {
+            // The repair happens before the channel is returned.
+        }
+
+        assertEquals(1L, linkCount(original));
+        assertEquals(1L, linkCount(alias));
+        assertArrayEquals(data, Files.readAllBytes(original));
+        assertArrayEquals(data, Files.readAllBytes(alias));
+    }
+
+    @Test
+    void writableOpenRemovesLeftoverPublishTempLink() throws Exception {
+        Path dir = Files.createDirectory(tmp.resolve("cipher"));
+        assumeTrue(Files.getFileStore(dir).supportsFileAttributeView("unix"),
+                "unix attributes are not supported");
+        PathCipherStore store = new PathCipherStore(dir);
+        Path target = dir.resolve("target");
+        Path temp = dir.resolve(".gocryptfs-leftover.tmp");
+        byte[] data = "content".getBytes(StandardCharsets.UTF_8);
+        Files.write(target, data);
+        Files.createLink(temp, target);
+
+        try (CipherChannel ignored = store.open(target.toString(), true)) {
+            // The repair happens before the channel is returned.
+        }
+
+        assertFalse(Files.exists(temp), "the leftover publish name must be removed");
+        assertEquals(1L, linkCount(target));
+        assertArrayEquals(data, Files.readAllBytes(target));
+    }
+
+    @Test
+    void readOnlyOpenLeavesHardLinkUntouched() throws Exception {
+        Path dir = Files.createDirectory(tmp.resolve("cipher"));
+        assumeTrue(Files.getFileStore(dir).supportsFileAttributeView("unix"),
+                "unix attributes are not supported");
+        PathCipherStore store = new PathCipherStore(dir);
+        Path original = dir.resolve("original");
+        Path alias = dir.resolve("alias");
+        Files.write(original, "original".getBytes(StandardCharsets.UTF_8));
+        Files.createLink(alias, original);
+
+        try (CipherChannel ignored = store.open(original.toString(), false)) {
+            // A read-only open must not write to the ciphertext directory.
+        }
+
+        assertEquals(2L, linkCount(original));
+    }
+
+    private static long linkCount(Path p) throws IOException {
+        return ((Number) Files.getAttribute(p, "unix:nlink", LinkOption.NOFOLLOW_LINKS))
+                .longValue();
     }
 
     private static void assertNoTempFiles(Path dir) throws IOException {

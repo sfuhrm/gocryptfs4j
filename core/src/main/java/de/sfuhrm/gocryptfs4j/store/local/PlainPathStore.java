@@ -233,6 +233,12 @@ final class PlainPathStore implements CipherStore {
      * capability is remembered as unsupported and the temporary file is moved
      * into place instead.</p>
      *
+     * <p>A crash between the link and the caller's unlink of {@code temp}
+     * leaves both names pointing at one inode. The target is still complete
+     * and readable; the next writable open removes the hidden temporary alias
+     * and, if another alias remains, detaches the opened name (see
+     * {@link #repairHardLinks(Path)}).</p>
+     *
      * @param temp the fully written temporary file
      * @param p    the target path
      * @throws IOException if the target exists or the file cannot be published
@@ -479,11 +485,19 @@ final class PlainPathStore implements CipherStore {
      * only stats the target before calling {@code rename(2)}, which then
      * replaces it.</p>
      *
+     * <p>A crash between the {@code link(2)} and the unlink of {@code src}
+     * leaves both names pointing at one inode. The data is intact, but editing
+     * one name would change the other. A later writable open detects the
+     * unexpected link count and detaches the opened name, as described in
+     * {@link #repairHardLinks(Path)}.</p>
+     *
      * <p>Directories and symbolic links cannot be hard-linked, so they fall
-     * back to a plain {@code Files.move} whose no-replace check has that same
-     * residual window: a target that appears between the existence check and
-     * the rename is replaced. That window only affects entries an external
-     * writer races to create, and is documented here for completeness.</p>
+     * back to a plain {@code Files.move} whose no-replace check has the
+     * residual check-then-rename window: a target that appears between the
+     * existence check and the rename is replaced. That window only affects
+     * entries an external writer races to create, and cannot be removed through
+     * the {@code java.nio.file} API, which exposes neither {@code renameat2}
+     * with {@code RENAME_NOREPLACE} nor an atomic no-replace move.</p>
      *
      * @param src the source path
      * @param dst the target path
@@ -546,6 +560,9 @@ final class PlainPathStore implements CipherStore {
     public CipherChannel open(String name, boolean writable) throws IOException {
         Objects.requireNonNull(name, "name");
         Path p = resolve(name);
+        if (writable) {
+            repairHardLinks(p);
+        }
         // Do not follow symlinks so a symlink swapped into the ciphertext
         // directory cannot redirect the read/write to an arbitrary file.
         FileChannel ch = writable
@@ -553,6 +570,156 @@ final class PlainPathStore implements CipherStore {
                         LinkOption.NOFOLLOW_LINKS)
                 : FileChannel.open(p, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS);
         return new FileChannelAdapter(ch);
+    }
+
+    /**
+     * Returns the hard-link count of a ciphertext file, or {@code 1} when the
+     * backing provider cannot report one.
+     *
+     * <p>The count is read through the {@code unix:nlink} attribute. Providers
+     * without the unix attribute view (for example Windows or zip filesystems)
+     * cannot have left a hard-link duplicate behind, so they are treated as
+     * having a single link.</p>
+     *
+     * @param p the ciphertext file path
+     * @return the hard-link count, or {@code 1} if it is unavailable
+     */
+    static long linkCount(Path p) {
+        try {
+            Object value = Files.getAttribute(p, "unix:nlink", LinkOption.NOFOLLOW_LINKS);
+            if (value instanceof Number) {
+                return ((Number) value).longValue();
+            }
+        } catch (IOException | UnsupportedOperationException
+                 | IllegalArgumentException | SecurityException e) {
+            // No unix attribute view or no permission to read it: skip repair.
+        }
+        return 1L;
+    }
+
+    /**
+     * Repairs a ciphertext file left with more than one hard link by a crash
+     * between {@code link(2)} and the following unlink.
+     *
+     * <p>A create-new publish leaves a hidden {@code .gocryptfs-*.tmp} name
+     * behind. Those names are removed. A no-replace rename instead leaves the
+     * source and target names behind; which one is authoritative cannot be
+     * recovered, so the name being opened is copied onto a fresh inode and
+     * atomically moved into place. Both names then keep their data and later
+     * writes through one no longer change the other. A repair failure is
+     * ignored: it must not make an otherwise readable file unopenable.</p>
+     *
+     * @param p the ciphertext file being opened for writing
+     */
+    private void repairHardLinks(Path p) throws IOException {
+        if (linkCount(p) <= 1) {
+            return;
+        }
+        Path dir = p.getParent();
+        boolean removed = removeTemporaryAliases(p);
+        if (removed) {
+            fsyncDirectory(dir);
+        }
+        if (linkCount(p) <= 1 || dir == null) {
+            return;
+        }
+        try {
+            detachHardLink(p, dir);
+        } catch (IOException e) {
+            // Best effort: keeping the file readable is more important than a
+            // repair that the backing filesystem cannot perform.
+        }
+        fsyncDirectory(dir);
+    }
+
+    /**
+     * Copies {@code p} to a fresh inode in {@code dir} and atomically replaces
+     * {@code p} with it. The original inode stays linked under the other name,
+     * so both names keep their data but no longer share later edits.
+     *
+     * @param p   the ciphertext file to detach
+     * @param dir the file's parent directory
+     * @throws IOException on filesystem errors
+     */
+    private static void detachHardLink(Path p, Path dir) throws IOException {
+        Path temp = Files.createTempFile(dir, ".gocryptfs-repair-", ".tmp");
+        boolean moved = false;
+        try {
+            try {
+                Files.copy(p, temp, StandardCopyOption.REPLACE_EXISTING,
+                        StandardCopyOption.COPY_ATTRIBUTES, LinkOption.NOFOLLOW_LINKS);
+            } catch (UnsupportedOperationException e) {
+                Files.copy(p, temp, StandardCopyOption.REPLACE_EXISTING,
+                        LinkOption.NOFOLLOW_LINKS);
+            }
+            try (FileChannel channel = FileChannel.open(temp, StandardOpenOption.WRITE)) {
+                channel.force(true);
+            }
+            try {
+                Files.move(temp, p, StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException e) {
+                Files.move(temp, p, StandardCopyOption.REPLACE_EXISTING);
+            }
+            moved = true;
+        } finally {
+            if (!moved) {
+                try {
+                    Files.deleteIfExists(temp);
+                } catch (IOException e) {
+                    // Best effort cleanup.
+                }
+            }
+        }
+    }
+
+    /**
+     * Removes hidden temporary names that are hard links to {@code p}, as left
+     * by a create-new publish that crashed between linking and unlinking the
+     * temporary file.
+     *
+     * @param p the ciphertext file being repaired
+     * @return whether any temporary alias was removed
+     */
+    private static boolean removeTemporaryAliases(Path p) {
+        Path dir = p.getParent();
+        if (dir == null) {
+            return false;
+        }
+        Object key;
+        try {
+            key = Files.readAttributes(p, BasicFileAttributes.class,
+                    LinkOption.NOFOLLOW_LINKS).fileKey();
+        } catch (IOException e) {
+            return false;
+        }
+        if (key == null) {
+            return false;
+        }
+        boolean removed = false;
+        try (DirectoryStream<Path> aliases =
+                     Files.newDirectoryStream(dir, ".gocryptfs-*.tmp")) {
+            for (Path alias : aliases) {
+                if (alias.equals(p)) {
+                    continue;
+                }
+                try {
+                    BasicFileAttributes attrs = Files.readAttributes(alias,
+                            BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+                    if (key.equals(attrs.fileKey())) {
+                        Files.delete(alias);
+                        removed = true;
+                    }
+                } catch (NoSuchFileException e) {
+                    // Removed concurrently.
+                } catch (IOException e) {
+                    // Best effort: leave the alias rather than fail the open.
+                }
+            }
+        } catch (IOException e) {
+            // Best effort: the detach below still removes the aliasing.
+        }
+        return removed;
     }
 
     @Override

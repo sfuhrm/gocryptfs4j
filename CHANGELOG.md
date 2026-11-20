@@ -5,6 +5,18 @@ All notable changes to gocryptfs4j are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- A crash between the hard link and the following unlink of a create-new write
+  or a no-replace rename could leave two ciphertext names for one inode, so
+  editing one name changed the other. A writable open now detects an unexpected
+  link count through `unix:nlink`, removes a leftover hidden publish name, or
+  detaches the opened name onto a fresh inode if another name remains. The
+  check-then-rename window for directory and symlink renames is unchanged and
+  now documented.
+
 ## [0.8.2]
 
 Changes since [v0.8.1](https://github.com/sfuhrm/gocryptfs4j/releases/tag/v0.8.1).

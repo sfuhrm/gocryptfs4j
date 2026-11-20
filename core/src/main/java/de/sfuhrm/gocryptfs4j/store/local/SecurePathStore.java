@@ -429,6 +429,9 @@ final class SecurePathStore implements CipherStore {
         SecurePath parent = requireParent(name);
         SeekableByteChannel channel;
         try {
+            if (writable) {
+                repairHardLinks(name, parent);
+            }
             channel = parent.dir().newByteChannel(parent.name(),
                     writable ? READ_WRITE_NOFOLLOW : READ_NOFOLLOW);
         } finally {
@@ -445,6 +448,194 @@ final class SecurePathStore implements CipherStore {
         // the required force() semantics either.
         channel.close();
         throw new IOException("provider returned a non-file channel for " + name);
+    }
+
+    /**
+     * Repairs a ciphertext file left with more than one hard link by a crash
+     * between {@code link(2)} and the following unlink.
+     *
+     * <p>The file is addressed through the pinned parent handle so the repair
+     * keeps the same symlink protection as the normal open. Hidden
+     * {@code .gocryptfs-*.tmp} publish aliases are removed; any other extra
+     * alias cannot be resolved to a single authoritative name, so the opened
+     * name is copied onto a fresh inode and atomically moved into place. The
+     * two names then keep independent contents. A repair failure is ignored so
+     * it cannot make an otherwise readable file unopenable.</p>
+     *
+     * @param name   the ciphertext file name
+     * @param parent the pinned parent handle plus the file name
+     * @throws IOException on filesystem errors
+     */
+    private void repairHardLinks(String name, SecurePath parent) throws IOException {
+        Path path = absolutePath(name);
+        if (PlainPathStore.linkCount(path) <= 1) {
+            return;
+        }
+        boolean removed = removeTemporaryAliases(parent);
+        if (removed) {
+            fsyncParent(name);
+        }
+        if (PlainPathStore.linkCount(path) <= 1) {
+            return;
+        }
+        try {
+            detachHardLink(parent);
+        } catch (IOException e) {
+            // Best effort: keeping the file readable is more important than a
+            // repair that the backing filesystem cannot perform.
+        }
+        fsyncParent(name);
+    }
+
+    /**
+     * Returns the absolute, normalized path of a ciphertext name. It is used
+     * only to read the provider's link count, not to address the entry.
+     *
+     * @param name the ciphertext name
+     * @return the absolute, normalized path
+     */
+    private Path absolutePath(String name) {
+        Path p = root.getFileSystem().getPath(name);
+        if (!p.isAbsolute()) {
+            p = root.resolve(p);
+        }
+        return p.normalize();
+    }
+
+    /**
+     * Removes hidden temporary names that are hard links to the entry addressed
+     * by {@code parent}. The listing is opened through the pinned directory
+     * handle, so the repair cannot be redirected through an intermediate
+     * symlink.
+     *
+     * @param parent the pinned parent handle plus the file name
+     * @return whether any temporary alias was removed
+     */
+    private boolean removeTemporaryAliases(SecurePath parent) {
+        Object key;
+        try {
+            key = basicAttributes(parent.dir(), parent.name()).fileKey();
+        } catch (IOException e) {
+            return false;
+        }
+        if (key == null) {
+            return false;
+        }
+        boolean removed = false;
+        try (SecureDirectoryStream<Path> listing = parent.dir().newDirectoryStream(
+                Paths.get("."), LinkOption.NOFOLLOW_LINKS)) {
+            for (Path entry : listing) {
+                String entryName = entry.toString();
+                if (!entryName.startsWith(".gocryptfs-") || !entryName.endsWith(".tmp")
+                        || entryName.equals(parent.name().toString())) {
+                    continue;
+                }
+                try {
+                    if (key.equals(basicAttributes(parent.dir(), entry).fileKey())) {
+                        parent.dir().deleteFile(entry);
+                        removed = true;
+                    }
+                } catch (NoSuchFileException e) {
+                    // Removed concurrently.
+                } catch (IOException e) {
+                    // Best effort: leave the alias rather than fail the open.
+                }
+            }
+        } catch (IOException e) {
+            // Best effort: the detach below still removes the aliasing.
+        }
+        return removed;
+    }
+
+    /**
+     * Copies the entry addressed by {@code parent} to a fresh inode in the same
+     * directory and atomically moves it over the original name, breaking the
+     * unexpected hard link while preserving the content under both names.
+     *
+     * @param parent the pinned parent handle plus the file name
+     * @throws IOException on filesystem errors
+     */
+    private void detachHardLink(SecurePath parent) throws IOException {
+        Path temp = Paths.get(".gocryptfs-repair-" + UUID.randomUUID() + ".tmp");
+        boolean moved = false;
+        try {
+            try (SeekableByteChannel in = parent.dir().newByteChannel(parent.name(),
+                    READ_NOFOLLOW);
+                 SeekableByteChannel out = openTempChannel(parent, temp, null)) {
+                ByteBuffer buffer = ByteBuffer.allocate(8192);
+                int read;
+                while ((read = in.read(buffer)) != -1) {
+                    buffer.flip();
+                    while (buffer.hasRemaining()) {
+                        out.write(buffer);
+                    }
+                    buffer.clear();
+                }
+                if (out instanceof FileChannel) {
+                    ((FileChannel) out).force(true);
+                }
+            }
+            copyAttributes(parent, temp);
+            parent.dir().move(temp, parent.dir(), parent.name());
+            moved = true;
+        } finally {
+            if (!moved) {
+                try {
+                    parent.dir().deleteFile(temp);
+                } catch (NoSuchFileException ignored) {
+                    // Already gone.
+                }
+            }
+        }
+    }
+
+    /**
+     * Copies the POSIX permissions, ownership and basic times of the entry
+     * addressed by {@code parent} onto its fresh replacement.
+     *
+     * @param parent the pinned parent handle plus the original file name
+     * @param temp   the replacement file name
+     */
+    private static void copyAttributes(SecurePath parent, Path temp) {
+        try {
+            PosixFileAttributeView source = parent.dir().getFileAttributeView(parent.name(),
+                    PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
+            PosixFileAttributeView target = parent.dir().getFileAttributeView(temp,
+                    PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
+            if (source != null && target != null) {
+                PosixFileAttributes attrs = source.readAttributes();
+                try {
+                    target.setPermissions(attrs.permissions());
+                } catch (IOException | UnsupportedOperationException e) {
+                    // Best effort: keep the replacement's owner-only mode.
+                }
+                try {
+                    target.setOwner(attrs.owner());
+                } catch (IOException | UnsupportedOperationException e) {
+                    // Best effort: the replacement is created by this process.
+                }
+                try {
+                    target.setGroup(attrs.group());
+                } catch (IOException | UnsupportedOperationException e) {
+                    // Best effort: the replacement is created with this process's group.
+                }
+            }
+        } catch (IOException | UnsupportedOperationException e) {
+            // No POSIX support: the content is what matters here.
+        }
+        try {
+            BasicFileAttributeView source = parent.dir().getFileAttributeView(parent.name(),
+                    BasicFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
+            BasicFileAttributeView target = parent.dir().getFileAttributeView(temp,
+                    BasicFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
+            if (source != null && target != null) {
+                BasicFileAttributes attrs = source.readAttributes();
+                target.setTimes(attrs.lastModifiedTime(), attrs.lastAccessTime(),
+                        attrs.creationTime());
+            }
+        } catch (IOException | UnsupportedOperationException e) {
+            // Best effort: a provider may not allow setting every time field.
+        }
     }
 
     @Override

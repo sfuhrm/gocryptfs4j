@@ -258,6 +258,17 @@ equivalent `boolean readOnly` overload) for a reader that takes no lock and
 never writes, including on read-only media; it may coexist with a writable
 instance.
 
+Create-new writes and no-replace renames on the local stores use a hard link so
+an existing target is never replaced. A crash between creating that link and
+unlinking the old name can leave two names for one inode. On the next writable
+open the local store checks `unix:nlink`: it removes a leftover hidden
+`.gocryptfs-*.tmp` publish name, or, when another name remains, copies the
+opened name onto a fresh inode so that later edits through the two names stay
+independent. The link count is unavailable on Windows and zip filesystems,
+where this window does not arise. Directory and symlink renames cannot use a
+hard link and retain a check-then-rename window against a concurrent external
+creator; `java.nio.file` exposes no atomic no-replace move to close it.
+
 Opening a config that selects a downgrade-prone name mode is opt-in. By default
 `GocryptFs.open(...)` rejects `PlaintextNames` and legacy deterministic names
 (`EMENames` without `DirIV`); pass an `OpenOptions` to accept them:
