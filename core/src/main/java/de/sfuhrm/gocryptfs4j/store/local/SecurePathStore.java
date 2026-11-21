@@ -525,14 +525,18 @@ final class SecurePathStore implements CipherStore {
         try (SecureDirectoryStream<Path> listing = parent.dir().newDirectoryStream(
                 Paths.get("."), LinkOption.NOFOLLOW_LINKS)) {
             for (Path entry : listing) {
-                String entryName = entry.toString();
-                if (!entryName.startsWith(".gocryptfs-") || !entryName.endsWith(".tmp")
-                        || entryName.equals(parent.name().toString())) {
+                Path entryName = entry.getFileName();
+                if (entryName == null) {
+                    continue;
+                }
+                String name = entryName.toString();
+                if (!name.startsWith(".gocryptfs-") || !name.endsWith(".tmp")
+                        || name.equals(parent.name().toString())) {
                     continue;
                 }
                 try {
-                    if (key.equals(basicAttributes(parent.dir(), entry).fileKey())) {
-                        parent.dir().deleteFile(entry);
+                    if (key.equals(basicAttributes(parent.dir(), entryName).fileKey())) {
+                        parent.dir().deleteFile(entryName);
                         removed = true;
                     }
                 } catch (NoSuchFileException e) {

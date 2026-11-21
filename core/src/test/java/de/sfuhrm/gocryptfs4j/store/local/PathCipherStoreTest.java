@@ -11,6 +11,7 @@ import org.mockito.Mockito;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.channels.SeekableByteChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AccessMode;
@@ -24,6 +25,7 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.SecureDirectoryStream;
+import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributeView;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileAttribute;
@@ -559,6 +561,59 @@ class PathCipherStoreTest {
 
         assertFalse(Files.exists(temp), "the leftover publish name must be removed");
         assertEquals(1L, linkCount(target));
+        assertArrayEquals(data, Files.readAllBytes(target));
+    }
+
+    @Test
+    void secureWritableOpenRemovesPublishTempLinkListedByAbsolutePath() throws Exception {
+        Path dir = Files.createDirectory(tmp.resolve("cipher"));
+        assumeTrue(Files.getFileStore(dir).supportsFileAttributeView("unix"),
+                "unix attributes are not supported");
+        Path target = dir.resolve("target");
+        Path temp = dir.resolve(".gocryptfs-leftover.tmp");
+        byte[] data = "content".getBytes(StandardCharsets.UTF_8);
+        Files.write(target, data);
+        Files.createLink(temp, target);
+
+        SecureDirectoryStream<Path> root = mockSecureDirectory();
+        SecureDirectoryStream<Path> listing = mockSecureDirectory();
+        when(root.newDirectoryStream(Paths.get("."), LinkOption.NOFOLLOW_LINKS))
+                .thenReturn(listing);
+        when(listing.iterator()).thenReturn(Collections.singletonList(temp).iterator());
+
+        Object key = new Object();
+        BasicFileAttributeView targetView = mock(BasicFileAttributeView.class);
+        BasicFileAttributes targetAttrs = mock(BasicFileAttributes.class);
+        when(targetAttrs.fileKey()).thenReturn(key);
+        when(targetView.readAttributes()).thenReturn(targetAttrs);
+        when(root.getFileAttributeView(Paths.get("target"), BasicFileAttributeView.class,
+                LinkOption.NOFOLLOW_LINKS)).thenReturn(targetView);
+
+        Path tempName = Paths.get(".gocryptfs-leftover.tmp");
+        BasicFileAttributeView tempView = mock(BasicFileAttributeView.class);
+        BasicFileAttributes tempAttrs = mock(BasicFileAttributes.class);
+        when(tempAttrs.fileKey()).thenReturn(key);
+        when(tempView.readAttributes()).thenReturn(tempAttrs);
+        when(root.getFileAttributeView(tempName, BasicFileAttributeView.class,
+                LinkOption.NOFOLLOW_LINKS)).thenReturn(tempView);
+
+        Mockito.doAnswer(invocation -> {
+            Files.delete(dir.resolve(invocation.getArgument(0, Path.class)));
+            return null;
+        }).when(root).deleteFile(tempName);
+
+        when(root.newByteChannel(Mockito.eq(Paths.get("target")), any()))
+                .thenAnswer(invocation -> FileChannel.open(target,
+                        StandardOpenOption.READ, StandardOpenOption.WRITE,
+                        LinkOption.NOFOLLOW_LINKS));
+
+        PathCipherStore store = new PathCipherStore(dir, root);
+        try (CipherChannel ignored = store.open(target.toString(), true)) {
+            // The repair happens before the channel is returned.
+        }
+
+        assertFalse(Files.exists(temp), "the leftover publish name must be removed");
+        verify(root).deleteFile(tempName);
         assertArrayEquals(data, Files.readAllBytes(target));
     }
 
