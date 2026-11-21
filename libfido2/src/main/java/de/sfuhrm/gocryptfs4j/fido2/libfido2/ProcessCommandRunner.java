@@ -171,7 +171,7 @@ final class ProcessCommandRunner implements Fido2CommandRunner {
     private static final class StreamCollector implements Runnable {
         private final InputStream in;
         private final WipeableByteArrayOutputStream out = new WipeableByteArrayOutputStream();
-        private boolean truncated;
+        private volatile boolean truncated;
 
         StreamCollector(InputStream in) {
             this.in = in;
@@ -218,9 +218,26 @@ final class ProcessCommandRunner implements Fido2CommandRunner {
 
     /** A byte buffer whose contents can be overwritten once they are copied out. */
     private static final class WipeableByteArrayOutputStream extends ByteArrayOutputStream {
-        void wipe() {
+        private boolean wiped;
+
+        @Override
+        public synchronized void write(int b) {
+            if (!wiped) {
+                super.write(b);
+            }
+        }
+
+        @Override
+        public synchronized void write(byte[] b, int off, int len) {
+            if (!wiped) {
+                super.write(b, off, len);
+            }
+        }
+
+        synchronized void wipe() {
             Arrays.fill(buf, (byte) 0);
             reset();
+            wiped = true;
         }
     }
 }

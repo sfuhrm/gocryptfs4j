@@ -1,8 +1,12 @@
 package de.sfuhrm.gocryptfs4j.store;
 
+import de.sfuhrm.gocryptfs4j.store.local.PathCipherStoreProvider;
+import de.sfuhrm.gocryptfs4j.store.memory.MapCipherStoreProvider;
+
 import java.io.IOException;
 import java.net.URI;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -16,7 +20,9 @@ import java.util.WeakHashMap;
  * to a registered {@link CipherStoreProvider}.
  *
  * <p>Providers are discovered through {@link ServiceLoader}; see
- * {@link CipherStoreProvider} for how to register one.</p>
+ * {@link CipherStoreProvider} for how to register one. The built-in
+ * {@code file} and {@code memory} schemes always take precedence over
+ * service-loaded providers, so a third-party jar cannot shadow them.</p>
  */
 public final class CipherStores {
 
@@ -29,6 +35,16 @@ public final class CipherStores {
      */
     private static final Map<ClassLoader, List<CipherStoreProvider>> PROVIDERS =
             Collections.synchronizedMap(new WeakHashMap<>());
+
+    /**
+     * Providers for the schemes built into this module. They are consulted
+     * before any service-loaded provider so that a third-party jar cannot
+     * shadow {@code file} or {@code memory} by registering the same scheme.
+     */
+    private static final List<CipherStoreProvider> BUILT_IN_PROVIDERS =
+            Collections.unmodifiableList(Arrays.asList(
+                    new PathCipherStoreProvider(),
+                    new MapCipherStoreProvider()));
 
     /** Prevents instantiation. */
     private CipherStores() {
@@ -78,6 +94,11 @@ public final class CipherStores {
         String scheme = uri.getScheme();
         if (scheme == null) {
             throw new IllegalArgumentException("URI has no scheme: " + uri);
+        }
+        for (CipherStoreProvider provider : BUILT_IN_PROVIDERS) {
+            if (provider.scheme().equalsIgnoreCase(scheme)) {
+                return provider.newStore(uri, env);
+            }
         }
         for (CipherStoreProvider provider : providersFor(classLoader)) {
             if (provider.scheme().equalsIgnoreCase(scheme)) {

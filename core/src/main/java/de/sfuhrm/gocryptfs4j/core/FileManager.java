@@ -3,6 +3,7 @@ package de.sfuhrm.gocryptfs4j.core;
 import de.sfuhrm.gocryptfs4j.crypto.Constants;
 import de.sfuhrm.gocryptfs4j.crypto.ContentEnc;
 import de.sfuhrm.gocryptfs4j.crypto.ContentGeometry;
+import de.sfuhrm.gocryptfs4j.crypto.Keys;
 import de.sfuhrm.gocryptfs4j.names.NameTransform;
 import de.sfuhrm.gocryptfs4j.store.CipherChannel;
 import de.sfuhrm.gocryptfs4j.store.CipherNode;
@@ -2139,9 +2140,15 @@ final class FileManager {
         }
         try {
             byte[] data = contentEnc.decryptBlock(cData, 0, null);
-            return new String(data, StandardCharsets.UTF_8);
+            try {
+                return new String(data, StandardCharsets.UTF_8);
+            } finally {
+                Keys.wipe(data);
+            }
         } catch (GeneralSecurityException | IllegalArgumentException e) {
             throw new IOException("corrupt symlink target", e);
+        } finally {
+            Keys.wipe(cData);
         }
     }
 
