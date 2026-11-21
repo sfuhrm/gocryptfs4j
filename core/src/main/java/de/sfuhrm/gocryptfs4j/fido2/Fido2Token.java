@@ -1,5 +1,7 @@
 package de.sfuhrm.gocryptfs4j.fido2;
 
+import org.jspecify.annotations.Nullable;
+
 import java.io.IOException;
 import java.util.List;
 
@@ -31,6 +33,25 @@ public interface Fido2Token {
      * The relying-party ID that gocryptfs uses for its credentials.
      */
     String RELYING_PARTY_ID = "gocryptfs";
+
+    /**
+     * Returns whether an assertion option is safe to pass to a token.
+     *
+     * <p>Assertion options can weaken the user-presence or user-verification
+     * requirement (for example {@code up=false} or {@code uv=false}) and the
+     * options come from the unauthenticated {@code gocryptfs.conf}. Only
+     * options that strengthen or preserve the requirement are accepted:
+     * {@code pin=true}, {@code uv=true} and {@code up=true}. Everything else,
+     * including {@code null}, is rejected.</p>
+     *
+     * @param option the assertion option to check, may be {@code null}
+     * @return {@code true} if the option is on the whitelist
+     */
+    static boolean isAllowedAssertOption(@Nullable String option) {
+        return "pin=true".equals(option)
+                || "uv=true".equals(option)
+                || "up=true".equals(option);
+    }
 
     /**
      * Registers a new credential on the token that supports the

@@ -448,7 +448,11 @@ try (GocryptFs fs = GocryptFs.create(store, token, null, false,
 }
 ```
 
-The options are stored in the config and reused on every open.
+The options are stored in the config and reused on every open. Only the
+whitelisted options `pin=true`, `uv=true` and `up=true` are accepted; options
+that would relax the touch or PIN requirement, such as `up=false` or `uv=false`,
+are rejected because anyone who can edit the unauthenticated config could
+otherwise downgrade the token check.
 
 ### 5. Storage backends: local and remote
 

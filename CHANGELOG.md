@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- FIDO2 assertion options from the unauthenticated `gocryptfs.conf` are now
+  checked against a whitelist (`pin=true`, `uv=true`, `up=true`). This prevents
+  an attacker who can edit the config from injecting `up=false` or `uv=false`
+  and downgrading the touch or PIN requirement. Unsupported options are rejected
+  both by `ConfigFile.validate` and by `LibFido2Token`.
 - Orphan cleanup now removes long-name `.name` support files whose matching
   content entry no longer exists, for example after a crash during `createFile`
   or `rename`.

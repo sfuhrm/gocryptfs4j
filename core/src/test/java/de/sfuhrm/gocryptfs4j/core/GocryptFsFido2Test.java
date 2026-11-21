@@ -120,6 +120,21 @@ class GocryptFsFido2Test {
     }
 
     @Test
+    void createRejectsNonWhitelistedAssertOptions() throws IOException {
+        Path cipherDir = tmp.resolve("cipher");
+        Files.createDirectory(cipherDir);
+        Fido2Token token = new FakeToken("seed-h".getBytes(StandardCharsets.UTF_8));
+
+        for (String option : new String[]{"up=false", "uv=false", "pin=false", "other"}) {
+            IOException e = assertThrows(IOException.class,
+                    () -> GocryptFs.create(new PathCipherStore(cipherDir), token, null, false,
+                            ContentCipherType.AES_GCM, Collections.singletonList(option)));
+            assertTrue(e.getMessage().contains("unsupported"), e.getMessage());
+        }
+        assertFalse(Files.exists(cipherDir.resolve(Constants.CONF_DEFAULT_NAME)));
+    }
+
+    @Test
     void createRejectsShortFido2Secret() throws IOException {
         Path cipherDir = tmp.resolve("cipher");
         Files.createDirectory(cipherDir);
@@ -168,14 +183,14 @@ class GocryptFsFido2Test {
         Fido2Token token = new FakeToken("seed-f".getBytes(StandardCharsets.UTF_8));
 
         try (GocryptFs fs = GocryptFs.create(new PathCipherStore(cipherDir), token, "my-user", false,
-                ContentCipherType.XCHACHA20_POLY1305, Collections.singletonList("uv=1"))) {
+                ContentCipherType.XCHACHA20_POLY1305, Collections.singletonList("uv=true"))) {
             fs.createFile("/a");
             fs.write("/a", 0, new byte[]{1, 2, 3});
         }
 
         ConfigFile config = ConfigFile.load(new PathCipherStore(cipherDir));
         assertTrue(config.xchacha());
-        assertEquals(Collections.singletonList("uv=1"), config.fido2().assertOptions());
+        assertEquals(Collections.singletonList("uv=true"), config.fido2().assertOptions());
 
         try (GocryptFs fs = GocryptFs.open(new PathCipherStore(cipherDir), token)) {
             assertArrayEquals(new byte[]{1, 2, 3}, fs.readAll("/a"));

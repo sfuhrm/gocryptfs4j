@@ -27,6 +27,12 @@ import java.util.Objects;
  * HMAC secret. Set {@code -t pin=true} via the assertion options to request PIN
  * entry. Because the tools read the PIN from the terminal if one is available,
  * a PIN-protected token works when gocryptfs4j runs interactively.</p>
+ *
+ * <p>Assertion options are validated against a whitelist before they reach the
+ * command line: {@code pin=true}, {@code uv=true} and {@code up=true} are
+ * accepted, everything else is rejected. The options are stored in the
+ * unauthenticated {@code gocryptfs.conf}, so accepting arbitrary options would
+ * let anyone who can edit the config disable the touch or PIN requirement.</p>
  */
 public final class LibFido2Token implements Fido2Token {
 
@@ -139,6 +145,9 @@ public final class LibFido2Token implements Fido2Token {
         command.add("-G");
         command.add("-h");
         for (String option : assertOptions) {
+            if (!Fido2Token.isAllowedAssertOption(option)) {
+                throw new IOException("unsupported FIDO2 assertion option: " + option);
+            }
             command.add("-t");
             command.add(option);
         }

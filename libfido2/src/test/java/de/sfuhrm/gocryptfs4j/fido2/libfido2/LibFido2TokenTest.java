@@ -51,11 +51,11 @@ class LibFido2TokenTest {
                 "cdh", Fido2Token.RELYING_PARTY_ID, "auth-data", "sig", base64(secret)));
         LibFido2Token token = new LibFido2Token(DEVICE, "fido2-cred", "fido2-assert", runner);
 
-        byte[] result = token.hmacSecret(CREDENTIAL_ID, HMAC_SALT, Arrays.asList("uv=false", "pin=true"));
+        byte[] result = token.hmacSecret(CREDENTIAL_ID, HMAC_SALT, Arrays.asList("uv=true", "pin=true"));
 
         assertArrayEquals(secret, result);
         assertEquals(Arrays.asList("fido2-assert", "-G", "-h",
-                "-t", "uv=false", "-t", "pin=true", DEVICE), runner.lastCommand);
+                "-t", "uv=true", "-t", "pin=true", DEVICE), runner.lastCommand);
         assertEquals(4, runner.lastStdin.size());
         assertEquals(Fido2Token.RELYING_PARTY_ID, runner.lastStdin.get(1));
         assertEquals(base64(CREDENTIAL_ID), runner.lastStdin.get(2));
@@ -71,6 +71,31 @@ class LibFido2TokenTest {
         token.hmacSecret(CREDENTIAL_ID, HMAC_SALT, Collections.<String>emptyList());
 
         assertEquals(Arrays.asList("fido2-assert", "-G", "-h", DEVICE), runner.lastCommand);
+    }
+
+    @Test
+    void hmacSecretRejectsOptionsThatCouldDowngradeProtection() {
+        RecordingRunner runner = new RecordingRunner(Arrays.asList(
+                "cdh", Fido2Token.RELYING_PARTY_ID, "auth-data", "sig", base64(CREDENTIAL_ID)));
+        LibFido2Token token = new LibFido2Token(DEVICE, "fido2-cred", "fido2-assert", runner);
+
+        for (String option : Arrays.asList("up=false", "uv=false", "pin=false", "anything=else")) {
+            IOException e = assertThrows(IOException.class,
+                    () -> token.hmacSecret(CREDENTIAL_ID, HMAC_SALT,
+                            Collections.singletonList(option)));
+            assertTrue(e.getMessage().contains("unsupported"), e.getMessage());
+        }
+    }
+
+    @Test
+    void hmacSecretRejectsNullOption() {
+        RecordingRunner runner = new RecordingRunner(Arrays.asList(
+                "cdh", Fido2Token.RELYING_PARTY_ID, "auth-data", "sig", base64(CREDENTIAL_ID)));
+        LibFido2Token token = new LibFido2Token(DEVICE, "fido2-cred", "fido2-assert", runner);
+
+        assertThrows(IOException.class,
+                () -> token.hmacSecret(CREDENTIAL_ID, HMAC_SALT,
+                        Collections.singletonList(null)));
     }
 
     @Test

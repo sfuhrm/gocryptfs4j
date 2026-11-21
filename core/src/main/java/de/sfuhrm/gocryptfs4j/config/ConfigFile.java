@@ -13,6 +13,7 @@ import de.sfuhrm.gocryptfs4j.crypto.Hkdf;
 import de.sfuhrm.gocryptfs4j.crypto.Keys;
 import de.sfuhrm.gocryptfs4j.crypto.XChaCha20Poly1305;
 import de.sfuhrm.gocryptfs4j.core.ContentCipherType;
+import de.sfuhrm.gocryptfs4j.fido2.Fido2Token;
 import de.sfuhrm.gocryptfs4j.store.CipherStore;
 import org.jspecify.annotations.Nullable;
 
@@ -201,8 +202,9 @@ public final class ConfigFile {
      *
      * @throws IOException if the format version is unsupported, a feature flag
      *                     is unknown or required but missing, the scrypt
-     *                     parameters are out of range or the FIDO2 data is
-     *                     incomplete
+     *                     parameters are out of range, the FIDO2 data is
+     *                     incomplete or a FIDO2 assertion option would weaken
+     *                     the token requirement
      */
     private void validate() throws IOException {
         if (version != Constants.CURRENT_VERSION) {
@@ -251,6 +253,10 @@ public final class ConfigFile {
                     }
                     if (option.length() > Constants.FIDO2_MAX_ASSERT_OPTION_LEN) {
                         throw new IOException("FIDO2 assertion option too long");
+                    }
+                    if (!Fido2Token.isAllowedAssertOption(option)) {
+                        throw new IOException(
+                                "unsupported FIDO2 assertion option: " + option);
                     }
                 }
             }

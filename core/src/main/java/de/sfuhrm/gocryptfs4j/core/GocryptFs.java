@@ -1770,9 +1770,12 @@ public final class GocryptFs implements AutoCloseable {
      *                       {@code null} to use the base name of the store root
      * @param plaintextNames whether to store file names unencrypted
      * @param cipherType     the content-encryption cipher
-     * @param assertOptions  options to pass to the token assertion, or {@code null}
+     * @param assertOptions  options to pass to the token assertion, or
+     *                       {@code null}; only {@code pin=true}, {@code uv=true}
+     *                       and {@code up=true} are accepted
      * @return the opened filesystem
-     * @throws IOException on storage errors or if the token interaction fails
+     * @throws IOException on storage errors, if an assertion option is not
+     *                     whitelisted, or if the token interaction fails
      * @throws NullPointerException if {@code store}, {@code token} or {@code cipherType} is {@code null}
      */
     public static GocryptFs create(CipherStore store, Fido2Token token, @Nullable String userName,
@@ -1790,6 +1793,12 @@ public final class GocryptFs implements AutoCloseable {
             List<String> options = assertOptions == null
                     ? Collections.<String>emptyList()
                     : new ArrayList<>(assertOptions);
+            for (String option : options) {
+                if (!Fido2Token.isAllowedAssertOption(option)) {
+                    throw new IOException(
+                            "unsupported FIDO2 assertion option: " + option);
+                }
+            }
             String name = userName != null ? userName : PathResolver.baseName(store.root());
 
             byte[] credentialId = token.registerCredential(name);

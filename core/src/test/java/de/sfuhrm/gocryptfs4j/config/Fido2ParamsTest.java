@@ -41,11 +41,11 @@ class Fido2ParamsTest {
     @Test
     void assertOptionsAreCopiedAndUnmodifiable() {
         List<String> options = new ArrayList<>();
-        options.add("uv=false");
+        options.add("uv=true");
         Fido2Params params = new Fido2Params(new byte[]{1}, new byte[]{2}, options);
 
         options.add("pin=true");
-        assertEquals(Collections.singletonList("uv=false"), params.assertOptions());
+        assertEquals(Collections.singletonList("uv=true"), params.assertOptions());
         assertThrows(UnsupportedOperationException.class, () -> params.assertOptions().add("x"));
         assertNull(new Fido2Params(new byte[]{1}, new byte[]{2}, null).assertOptions());
     }

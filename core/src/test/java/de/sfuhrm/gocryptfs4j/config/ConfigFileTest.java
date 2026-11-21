@@ -424,6 +424,35 @@ class ConfigFileTest {
     }
 
     @Test
+    void loadRejectsAssertOptionsThatCouldDowngradeProtection() throws Exception {
+        Path dir = Files.createTempDirectory("gocryptfs4j-");
+        String salt32 = Base64.getEncoder().encodeToString(new byte[32]);
+        String flags = "[\"HKDF\",\"GCMIV128\",\"EMENames\",\"FIDO2\"]";
+        String shortId = Base64.getEncoder().encodeToString(new byte[16]);
+        String goodSalt = Base64.getEncoder().encodeToString(new byte[32]);
+        String fido2Format = "{\"CredentialID\":\"" + shortId + "\",\"HMACSalt\":\""
+                + goodSalt + "\",\"AssertOptions\":[\"%s\"]}";
+        try {
+            for (String option : new String[]{"up=false", "uv=false", "pin=false", ""}) {
+                IOException thrown = assertThrows(IOException.class, () -> ConfigFile.load(
+                        writeConf(dir, salt32, 1 << 16, 8, 1, 32, flags,
+                                String.format(fido2Format, option))));
+                assertTrue(thrown.getMessage().contains("assertion option"),
+                        thrown.getMessage());
+            }
+
+            for (String option : new String[]{"pin=true", "uv=true", "up=true"}) {
+                assertNotNull(ConfigFile.load(
+                        writeConf(dir, salt32, 1 << 16, 8, 1, 32, flags,
+                                String.format(fido2Format, option))));
+            }
+        } finally {
+            Files.deleteIfExists(dir.resolve("gocryptfs.conf"));
+            Files.deleteIfExists(dir);
+        }
+    }
+
+    @Test
     void loadRejectsNullAssertOption() throws Exception {
         Path dir = Files.createTempDirectory("gocryptfs4j-");
         String salt32 = Base64.getEncoder().encodeToString(new byte[32]);

@@ -84,9 +84,13 @@
  * }</pre>
  *
  * <p>The options are stored in the config and passed to every later assertion, so
- * opening needs no extra arguments. If the process has a controlling terminal,
- * the libfido2 tools read the PIN from it; otherwise they read it from standard
- * input, which this adapter does not provide interactively.</p>
+ * opening needs no extra arguments. Only the whitelisted options {@code pin=true},
+ * {@code uv=true} and {@code up=true} are accepted. Anything else, including an
+ * option that would relax the touch or PIN requirement such as {@code up=false}
+ * or {@code uv=false}, is rejected because the config file is not authenticated.
+ * If the process has a controlling terminal, the libfido2 tools read the PIN
+ * from it; otherwise they read it from standard input, which this adapter does
+ * not provide interactively.</p>
  *
  * <p>As in gocryptfs, changing the password of a FIDO2-protected filesystem is
  * not supported: the master key is bound to the token, not to a password.</p>
