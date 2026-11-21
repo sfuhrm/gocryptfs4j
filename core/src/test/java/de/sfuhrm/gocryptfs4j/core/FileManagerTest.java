@@ -113,6 +113,28 @@ class FileManagerTest {
     }
 
     @Test
+    void writeAndTruncateBeyondMaximumPlainSizeFail() throws IOException {
+        ManagerHarness h = ManagerHarness.encrypted();
+        h.fileManager.createFile("/f.txt");
+        byte[] data = new byte[]{1, 2, 3};
+        h.fileManager.write("/f.txt", 0, data);
+
+        assertThrows(IOException.class,
+                () -> h.fileManager.write("/f.txt", Long.MAX_VALUE, new byte[]{0x42}));
+        assertThrows(IOException.class,
+                () -> h.fileManager.truncate("/f.txt", Long.MAX_VALUE));
+
+        try (SharedCipherFile cf = h.fileManager.openCipherFile("/f.txt", true);
+             BlockBufferedChannel ch = cf.newChannel(0, true)) {
+            ch.position(Long.MAX_VALUE);
+            assertEquals(-1, ch.read(ByteBuffer.wrap(new byte[1])));
+            assertThrows(IOException.class, () -> ch.write(ByteBuffer.wrap(new byte[]{0x42})));
+            assertThrows(IOException.class, () -> ch.truncate(Long.MAX_VALUE));
+        }
+        assertArrayEquals(data, h.fileManager.readAll("/f.txt"));
+    }
+
+    @Test
     void truncateGrowKeepsHandleUsable() throws IOException {
         ManagerHarness h = ManagerHarness.encrypted();
         h.fileManager.createFile("/f.txt");

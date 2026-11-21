@@ -11,6 +11,13 @@ package de.sfuhrm.gocryptfs4j.crypto;
  */
 public final class ContentGeometry {
 
+    /**
+     * Maximum ciphertext size used to derive the plaintext limit. Keeping this
+     * at {@code 2^62} leaves ample room for header and per-block overhead in a
+     * signed {@code long} while still allowing very large files.
+     */
+    private static final long MAX_CIPHER_SIZE = 1L << 62;
+
     /** Plaintext block size. */
     private final long plainBS;
     /** Ciphertext block size (plainBS + ivLen + tag). */
@@ -71,6 +78,21 @@ public final class ContentGeometry {
      */
     public long blockOverhead() {
         return cipherBS - plainBS;
+    }
+
+    /**
+     * Returns the maximum plaintext size in bytes. Writes and truncations
+     * beyond this limit are rejected so that plaintext-to-ciphertext offset
+     * arithmetic cannot overflow.
+     *
+     * @return the maximum plaintext size in bytes
+     */
+    public long maxPlainSize() {
+        long blocks = MAX_CIPHER_SIZE / cipherBS;
+        if (blocks > Long.MAX_VALUE / plainBS) {
+            return Long.MAX_VALUE;
+        }
+        return blocks * plainBS;
     }
 
     /**

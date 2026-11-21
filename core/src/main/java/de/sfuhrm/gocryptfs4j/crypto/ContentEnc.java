@@ -116,6 +116,16 @@ public final class ContentEnc {
     }
 
     /**
+     * Returns the maximum plaintext size in bytes. Writes and truncations
+     * beyond this limit are rejected so that offset arithmetic cannot overflow.
+     *
+     * @return the maximum plaintext size in bytes
+     */
+    public long maxPlainSize() {
+        return geometry.maxPlainSize();
+    }
+
+    /**
      * Returns the nonce length in bytes.
      *
      * @return the nonce length

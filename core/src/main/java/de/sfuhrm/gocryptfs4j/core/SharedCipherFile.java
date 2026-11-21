@@ -221,6 +221,16 @@ public final class SharedCipherFile implements AutoCloseable {
     }
 
     /**
+     * Returns the maximum plaintext size supported by the shared file.
+     *
+     * @return the maximum plaintext size in bytes
+     * @throws IOException on filesystem errors
+     */
+    long maxPlainSize() throws IOException {
+        return file().maxPlainSize();
+    }
+
+    /**
      * Truncates the shared file to the given plaintext size, growing (with
      * zero-fill) or shrinking as needed.
      *
@@ -238,11 +248,15 @@ public final class SharedCipherFile implements AutoCloseable {
             // per-entry monitor: a block dirtied by another channel in between
             // would otherwise be written back later and regrow the file.
             synchronized (entry.lock) {
+                CipherFile file = file();
+                if (newPlainSize > file.maxPlainSize()) {
+                    throw new IOException("truncate size exceeds maximum plaintext size: "
+                            + newPlainSize);
+                }
                 // A dirty block in the shared cache would otherwise survive a
                 // shrink or truncate-to-empty performed by another handle and
                 // be written back later, resurrecting the truncated data.
                 flushEntry(entry);
-                CipherFile file = file();
                 if (newPlainSize == 0) {
                     file.truncate(0);
                     notifyWrite();
@@ -285,8 +299,12 @@ public final class SharedCipherFile implements AutoCloseable {
         Lock ioLock = acquireChannelIo();
         try {
             synchronized (entry.lock) {
-                flushEntry(entry);
                 CipherFile file = file();
+                if (newPlainSize > file.maxPlainSize()) {
+                    throw new IOException("truncate size exceeds maximum plaintext size: "
+                            + newPlainSize);
+                }
+                flushEntry(entry);
                 if (newPlainSize < file.plainSize()) {
                     file.truncate(newPlainSize);
                     notifyWrite();
@@ -311,6 +329,9 @@ public final class SharedCipherFile implements AutoCloseable {
      * @throws IOException on filesystem or encryption errors
      */
     private void grow(CipherFile file, long oldSize, long newPlainSize) throws IOException {
+        if (newPlainSize > file.maxPlainSize()) {
+            throw new IOException("grow size exceeds maximum plaintext size: " + newPlainSize);
+        }
         long blockSize = file.blockSize();
         long oldBlock = oldSize / blockSize;
         int oldOffset = (int) (oldSize % blockSize);

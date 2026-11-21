@@ -107,6 +107,9 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
         if (dst.remaining() == 0) {
             return 0;
         }
+        if (position >= file.maxPlainSize()) {
+            return -1;
+        }
         Lock ioLock = file.acquireChannelIo();
         try {
             long wanted = position / blockSize;
@@ -147,6 +150,11 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
             long wanted = position / blockSize;
             int off = (int) (position % blockSize);
             int len = Math.min(src.remaining(), blockSize - off);
+            long max = file.maxPlainSize();
+            if (position > max - len) {
+                throw new IOException("write exceeds maximum plaintext size: "
+                        + "position " + position + ", length " + len);
+            }
             int w = cache.write(wanted, off, len, src);
             if (w > 0) {
                 file.notifyWrite();
@@ -267,6 +275,9 @@ public final class BlockBufferedChannel implements SeekableByteChannel {
         }
         if (size < 0) {
             throw new IllegalArgumentException("negative size");
+        }
+        if (size > file.maxPlainSize()) {
+            throw new IOException("truncate size exceeds maximum plaintext size: " + size);
         }
         if (file.truncateIfSmaller(size)) {
             file.notifyWrite();

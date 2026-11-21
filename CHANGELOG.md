@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Plaintext writes and truncations beyond a new maximum file size (about
+  `2^62 * 4096/4132` bytes, derived from the content geometry) are now rejected
+  with an `IOException`. Previously an offset near `Long.MAX_VALUE` could
+  overflow the block-to-offset arithmetic and surface as an unchecked
+  `IllegalArgumentException`.
 - FIDO2 assertion options from the unauthenticated `gocryptfs.conf` are now
   checked against a whitelist (`pin=true`, `uv=true`, `up=true`). This prevents
   an attacker who can edit the config from injecting `up=false` or `uv=false`

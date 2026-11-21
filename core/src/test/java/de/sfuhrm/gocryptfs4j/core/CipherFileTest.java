@@ -69,6 +69,17 @@ class CipherFileTest {
     }
 
     @Test
+    void writeAndTruncateBeyondMaximumPlainSizeFail() throws IOException {
+        ContentEnc enc = enc();
+        try (CipherFile cf = open(newFile(), enc, true)) {
+            assertThrows(IOException.class,
+                    () -> cf.writeBlock(Long.MAX_VALUE, new byte[1], 0, 1));
+            assertThrows(IOException.class, () -> cf.truncate(Long.MAX_VALUE));
+            assertEquals(0, cf.plainSize());
+        }
+    }
+
+    @Test
     void closingFileWipesItsContentKey() throws IOException {
         ContentEnc enc = enc();
         try (CipherFile cf = open(newFile(), enc, true)) {

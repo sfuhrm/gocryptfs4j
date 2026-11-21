@@ -220,6 +220,40 @@ public final class CipherFile implements AutoCloseable {
     }
 
     /**
+     * Returns the maximum plaintext size supported by the content cipher.
+     *
+     * @return the maximum plaintext size in bytes
+     */
+    long maxPlainSize() {
+        return enc.maxPlainSize();
+    }
+
+    /**
+     * Checks that writing {@code len} plaintext bytes at {@code off} in
+     * {@code blockNo} stays within the maximum plaintext size.
+     *
+     * @param blockNo the block number
+     * @param off     the plaintext offset within the block
+     * @param len     the number of plaintext bytes
+     * @throws IOException if the range is invalid or exceeds the maximum
+     *                     plaintext size
+     */
+    private void checkPlainRange(long blockNo, int off, int len) throws IOException {
+        if (blockNo < 0 || off < 0 || len < 0) {
+            throw new IOException("invalid plaintext block range: block " + blockNo
+                    + ", offset " + off + ", length " + len);
+        }
+        long max = maxPlainSize();
+        if (blockNo > max / enc.plainBS()) {
+            throw new IOException("plaintext block exceeds maximum size: " + blockNo);
+        }
+        long end = blockNo * enc.plainBS() + off + len;
+        if (end > max) {
+            throw new IOException("plaintext write exceeds maximum size: " + end + " > " + max);
+        }
+    }
+
+    /**
      * Returns the file id from the header, or {@code null} if the file is empty.
      *
      * @return a copy of the 16-byte file id, or {@code null} for an empty file
@@ -551,6 +585,9 @@ public final class CipherFile implements AutoCloseable {
      */
     public synchronized int readBlock(long blockNo, byte[] out, int off) throws IOException {
         Objects.requireNonNull(out, "out");
+        if (blockNo < 0 || blockNo > maxPlainSize() / enc.plainBS()) {
+            return 0;
+        }
         byte[] id = fileId();
         if (id == null) {
             return 0;
@@ -648,6 +685,7 @@ public final class CipherFile implements AutoCloseable {
         if (!writable) {
             throw new NonWritableChannelException();
         }
+        checkPlainRange(blockNo, off, len);
         if (journal == null) {
             writeThrough(blockNo, plain, off, len);
             return;
@@ -670,6 +708,9 @@ public final class CipherFile implements AutoCloseable {
         synchronized (this) {
             if (!writable) {
                 throw new NonWritableChannelException();
+            }
+            for (BlockUpdate update : updates) {
+                checkPlainRange(update.blockNo, update.offset, update.length);
             }
             if (journal == null) {
                 for (BlockUpdate update : updates) {
@@ -830,6 +871,9 @@ public final class CipherFile implements AutoCloseable {
         }
         if (newPlainSize < 0) {
             throw new IllegalArgumentException("negative size: " + newPlainSize);
+        }
+        if (newPlainSize > maxPlainSize()) {
+            throw new IOException("truncate size exceeds maximum plaintext size: " + newPlainSize);
         }
         // Any buffered blocks must be durable before the size changes; otherwise
         // a later commit could resurrect data that this truncation removed.
