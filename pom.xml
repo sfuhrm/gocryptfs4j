@@ -183,14 +183,18 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
-                    <argLine>${jacoco.argLine}</argLine>
+                    <!-- Late evaluation: prepare-agent sets this property at
+                         execution time, after model interpolation. -->
+                    <argLine>@{jacoco.argLine}</argLine>
                 </configuration>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>
                 <configuration>
-                    <argLine>${jacoco.argLine}</argLine>
+                    <!-- Late evaluation: prepare-agent-integration sets this
+                         property at execution time, after model interpolation. -->
+                    <argLine>@{jacoco.argLine}</argLine>
                     <groups>${burnin.groups}</groups>
                     <excludedGroups>${burnin.excludedGroups}</excludedGroups>
                     <systemPropertyVariables>
